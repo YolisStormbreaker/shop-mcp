@@ -20,6 +20,7 @@ from mcp.server.fastmcp import FastMCP
 
 import ali
 import avito
+import orders
 import ozon
 from shoplog import log
 
@@ -150,6 +151,34 @@ def ali_cart() -> str:
 def ali_remove_from_cart(cart_id_or_item_id: str) -> str:
     """Убрать строку из корзины AliExpress по cart_id или id товара. Выбор остальных строк сохраняется."""
     return ali.remove_from_cart(cart_id_or_item_id)
+
+
+@mcp.tool()
+@logged
+def ozon_orders(query: str | None = None, year: int | None = None, limit: int = 30, max_new: int = 60) -> str:
+    """История заказов Ozon с названиями товаров; query — слова, которые все должны быть в названии
+    или варианте товара (без учёта регистра), например «вентилятор 5015».
+
+    Идёт от новых к старым: текущие заказы, потом архив по годам (year — только этот год).
+    Названий в списке заказов нет, поэтому каждый заказ — отдельный запрос (~1.5 с); завершённые
+    кэшируются, повторный поиск быстрый. max_new — предел новых загрузок за вызов: если он
+    достигнут, в шапке будет сказано, и тот же вызов ещё раз продолжит поиск.
+    Возвращает TSV: заказ, дата/статус, сумма заказа, товар, вариант, цена, ссылка.
+    """
+    return orders.ozon_orders(query, year, limit, max_new)
+
+
+@mcp.tool()
+@logged
+def ali_orders(query: str | None = None, limit: int = 30, max_new: int = 60) -> str:
+    """История заказов AliExpress (aliexpress.ru) с названиями товаров; query — слова, которые все
+    должны быть в названии или варианте (без учёта регистра), например «улитка» или «blower 5015».
+
+    Текущие заказы, потом архив. Каждый заказ — отдельный запрос (~2 с); завершённые кэшируются.
+    max_new — предел новых загрузок за вызов, повторный вызов продолжит.
+    Возвращает TSV: заказ, «дата · статус», сумма заказа, товар, вариант, цена, ссылка.
+    """
+    return orders.ali_orders(query, limit, max_new)
 
 
 if __name__ == "__main__":
