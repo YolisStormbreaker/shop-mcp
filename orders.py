@@ -67,15 +67,18 @@ def _format(site, rows, scanned, capped, query):
 # ------------------------------------------------------------------------------ Ozon
 def _ozon_list_pages(tab, url):
     """Yield order tiles from one tab of the order list, following its paginator."""
-    for _ in range(40):
+    for _ in range(200):
         page = ozon._page(tab, url)
         for w in ozon._widgets(page, "orderList"):
             yield from w.get("ordersV2", [])
+        # page 1 names its next page in a paginator widget (next to one for recommendations);
+        # every later page names it at the top level of the response
         nxt = [w.get("nextPage") for w in ozon._widgets(page, "paginator")
-               if w.get("layoutContainer", "").startswith("order-list") and w.get("nextPage")]
-        if not nxt:
+               if (w.get("layoutContainer") or "").startswith("order-list") and w.get("nextPage")]
+        nxt = nxt[0] if nxt else page.get("nextPage")
+        if not nxt or "order" not in nxt:
             return
-        url = nxt[0]
+        url = nxt
 
 
 def _ozon_years(tab):
