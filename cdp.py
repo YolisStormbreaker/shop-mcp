@@ -48,8 +48,16 @@ class Tab:
             raise RuntimeError(d.get("exception", {}).get("description") or d.get("text"))
         return r["result"].get("value")
 
+    def visible(self) -> bool:
+        """Only the active tab of a shown window takes clicks; in a background tab or a hidden Chrome they do nothing."""
+        return self.js("document.visibilityState") == "visible"
+
     def click(self, selector: str) -> bool:
-        """Real mouse click (isTrusted) on the element; some sites ignore el.click()."""
+        """Real mouse click (isTrusted) on the element; some sites ignore el.click().
+
+        False if the element is missing or the tab is not on screen (see visible)."""
+        if not self.visible():
+            return False
         pos = self.js(f"""(() => {{
           const e = document.querySelector({json.dumps(selector)});
           if (!e) return null;
@@ -88,8 +96,8 @@ def tab_for(domain: str) -> Tab:
     try:
         tabs = _http("/json/list")
     except OSError as e:
-        raise RuntimeError("Chrome на макмини не отвечает на 127.0.0.1:9222 "
-                           "(launchctl kickstart -k gui/501/local.shop-chrome)") from e
+        raise RuntimeError("Chrome магазинов не отвечает на 127.0.0.1:9222: выполни shop-chrome restart "
+                           "(LaunchAgent local.shop-chrome)") from e
     pages = [t for t in tabs if t.get("type") == "page"]
     for t in pages:
         if domain in t.get("url", ""):

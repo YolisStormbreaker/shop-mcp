@@ -39,7 +39,7 @@ def _fetch(tab, path, body=None, method="POST", retried=False):
     if retried:
         log.error("ali %s %s: %s again after reload, body %s", method, path, r["s"], saved)
         raise RuntimeError(f"AliExpress ответил {r['s']} не-JSON и после перезагрузки вкладки "
-                           f"(вероятно, проверка на бота). Ответ целиком: макмини {saved}")
+                           f"(вероятно, проверка на бота: shop-chrome show). Ответ целиком: {saved}")
     # Same idea as Ozon: a real page load renews anti-bot cookies that fetch() cannot.
     log.warning("ali %s %s: %s non-JSON, body %s; reloading tab and retrying", method, path, r["s"], saved)
     tab.goto("https://aliexpress.ru/", "ali", wait_js="document.readyState === 'complete'")
@@ -131,7 +131,6 @@ def search(query, price_min=None, price_max=None, sort="default", limit=30):
 
 MONTHS = "января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря"
 PROP = '[class*="SkuPropertyItem__skuProp"]'
-OPT = '[class*="SkuPropertyItem__option__"]'
 CART_BTN = "[...document.querySelectorAll('button')].filter(b => b.innerText.trim() === 'В корзину' && b.getBoundingClientRect().height > 0).pop()"
 
 
@@ -142,7 +141,14 @@ def _item_id(id_or_url):
     return m.group(1)
 
 
+NOT_ON_SCREEN = ("не добавлено: вкладка AliExpress не на экране, а клик по «В корзину» работает только в видимой вкладке. "
+                 "Попроси пользователя выполнить shop-chrome show и открыть вкладку aliexpress.ru, потом повтори.")
+
+
 def _click_js(tab, js_elem):
+    """Real mouse click on the element; False if it is missing or the tab is not on screen (clicks then do nothing)."""
+    if not tab.visible():
+        return False
     pos = tab.js(f"(() => {{ const e = {js_elem}; if (!e) return null; e.scrollIntoView({{block: 'center'}}); return 1; }})()")
     if not pos:
         return False
@@ -175,36 +181,35 @@ def _pdp_state(tab):
             "in_stock": bool(tab.js(f"!!({CART_BTN})"))}
 
 
-def _variants(tab, max_per_prop=25):
-    """Click through every option of every property; returns [(prop, [(name, sku, price), ...])]."""
+def _skus(tab, item_id):
+    """Every variant from the product API: [{label, sku, price, stock, props}], no clicking.
+
+    Clicking through options (the old way) does nothing in a background tab and returned the
+    default variant for every option (seen 2026-09-30).
+    """
+    d = _fetch(tab, f"/aer-jsonapi/v1/bx/pdp/web/productData?productId={item_id}&sourceId=0&sku_id=0", method="GET")
+    info = (d.get("data") or {}).get("skuInfo") or {}
+    values = {v["id"]: (p["name"], v) for p in info.get("propertyList") or [] for v in p.get("values") or []}
     out = []
-    n = tab.js(f"[...document.querySelectorAll('{PROP}')].map(p => p.querySelectorAll('{OPT}').length)")
-    for pi, cnt in enumerate(n):
-        opts = []
-        for oi in range(min(cnt, max_per_prop)):
-            _click_js(tab, f"document.querySelectorAll('{PROP}')[{pi}].querySelectorAll('{OPT}')[{oi}]")
-            time.sleep(0.6)
-            label = tab.js(f"document.querySelectorAll('{PROP}')[{pi}].querySelector('[class*=\"propNameWrap\"]').innerText.replace(/\\s+/g, ' ').trim()")
-            name, _, value = label.partition(":")
-            st = _pdp_state(tab)
-            opts.append((value.strip(), st["sku"], st["price"]))
-        out.append((name.strip() if n else "", opts))
+    for s in info.get("priceList") or []:
+        props = [values[i] for i in str(s.get("skuPropIds") or "").split(",") if i in values]
+        out.append({
+            "label": "; ".join(f"{n}: {(v.get('displayName') or v['name']).strip()}" for n, v in props),
+            "props": {n.lower(): {v["name"].strip().lower(), (v.get("displayName") or "").strip().lower()} for n, v in props},
+            "sku": str(s.get("skuId")),
+            "price": (s.get("activityAmount") or {}).get("formatted") or (s.get("amount") or {}).get("formatted") or "",
+            "stock": s.get("availQuantity") or 0,
+        })
     return out
 
 
-def _select(tab, prop_name, value):
-    n = tab.js(f"[...document.querySelectorAll('{PROP}')].map(p => [p.querySelector('[class*=\"propNameWrap\"]').innerText.split(':')[0].trim(), p.querySelectorAll('{OPT}').length])")
-    for pi, (name, cnt) in enumerate(n):
-        if name.lower() != prop_name.lower():
-            continue
-        for oi in range(cnt):
-            _click_js(tab, f"document.querySelectorAll('{PROP}')[{pi}].querySelectorAll('{OPT}')[{oi}]")
-            time.sleep(0.6)
-            label = tab.js(f"document.querySelectorAll('{PROP}')[{pi}].querySelector('[class*=\"propNameWrap\"]').innerText")
-            if label.partition(":")[2].strip().lower() == str(value).strip().lower():
-                return True
-        raise ValueError(f"у свойства «{name}» нет варианта «{value}»")
-    raise ValueError(f"нет свойства «{prop_name}»; есть: {[x[0] for x in n]}")
+def _sku_for(variants, options):
+    """The one variant whose properties have all the given values (name or display name, any case)."""
+    hits = [v for v in variants if all(str(val).strip().lower() in v["props"].get(k.lower(), ()) for k, val in options.items())]
+    if len(hits) != 1:
+        found = "подходит несколько" if hits else "нет такого варианта"
+        raise ValueError(f"{found} для {options}; варианты: " + " | ".join(v["label"] for v in (hits or variants)))
+    return hits[0]["sku"]
 
 
 def item(id_or_url, sku=None, list_variants=True):
@@ -212,18 +217,16 @@ def item(id_or_url, sku=None, list_variants=True):
     tab = _tab()
     try:
         _open_item(tab, item_id, sku)
-        variants = _variants(tab) if list_variants else []
-        if variants:
-            _open_item(tab, item_id, sku)  # back to the requested / default variant
         st = _pdp_state(tab)
+        variants = _skus(tab, item_id) if list_variants else []
     finally:
         tab.close()
     lines = [st["title"], f"id {item_id} · sku {st['sku']} · {st['price']}" + ("" if st["in_stock"] else " · НЕТ В НАЛИЧИИ"),
              "выбрано: " + "; ".join(p for p in st["props"] if p)]
     lines += ["доставка:"] + [f"  {d}" for d in st["delivery"]] if st["delivery"] else ["доставка: не нашёл на странице"]
-    for name, opts in variants:
-        lines.append(f"варианты «{name}» (название\tsku\tцена):")
-        lines += [f"  {v}\t{s}\t{p}" for v, s, p in opts]
+    if variants:
+        lines.append("варианты (свойства\tsku\tцена\tостаток):")
+        lines += [f"  {v['label']}\t{v['sku']}\t{v['price']}\t{v['stock'] or 'нет'}" for v in variants]
     return "\n".join(lines)
 
 
@@ -236,14 +239,15 @@ def add_to_cart(id_or_url, sku=None, options=None):
     item_id = _item_id(id_or_url)
     tab = _tab()
     try:
+        if options:
+            sku = _sku_for(_skus(tab, item_id), options)
         _open_item(tab, item_id, sku)
-        for k, v in (options or {}).items():
-            _select(tab, k, v)
         st = _pdp_state(tab)
         if not st["in_stock"]:
             return f"не добавлено: «{st['title'][:80]}» нет в наличии для {st['props']}"
         before = _count(tab)
-        _click_js(tab, CART_BTN)
+        if not _click_js(tab, CART_BTN):
+            return NOT_ON_SCREEN
         after = before
         for _ in range(10):
             time.sleep(0.7)

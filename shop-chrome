@@ -1,0 +1,13 @@
+#!/bin/zsh
+# Show / hide / restart the hidden Chrome that shop-mcp drives (LaunchAgent local.shop-chrome, port 9222).
+# ponytail: finds the instance by the debugging port, the only thing that tells it apart from the main Chrome.
+pid=$(lsof -tiTCP:9222 -sTCP:LISTEN)
+case $1 in
+  show|hide)
+    [[ -n $pid ]] || { echo "shop Chrome не запущен: shop-chrome restart" >&2; exit 1; }
+    js="ObjC.import('AppKit'); const a = \$.NSRunningApplication.runningApplicationWithProcessIdentifier($pid);"
+    [[ $1 == show ]] && js+=" a.unhide; a.activateWithOptions(\$.NSApplicationActivateAllWindows)" || js+=" a.hide"
+    osascript -l JavaScript -e "$js" >/dev/null ;;
+  restart) launchctl kickstart -k gui/$(id -u)/local.shop-chrome ;;
+  *) echo "usage: shop-chrome show|hide|restart" >&2; exit 1 ;;
+esac

@@ -43,7 +43,7 @@ def _fetch(tab, path, method="GET", body=None, retried=False):
     if retried:
         log.error("ozon %s %s: %s again after reload, body %s", method, path[:150], r["s"], saved)
         raise RuntimeError(f"Ozon ответил {r['s']} не-JSON и после перезагрузки вкладки "
-                           f"(вероятно, проверка на бота). Ответ целиком: макмини {saved}")
+                           f"(вероятно, проверка на бота: shop-chrome show). Ответ целиком: {saved}")
     # A tab left idle for hours loses its anti-bot cookie; fetch() cannot pass the JS check,
     # a real page load can. Seen 2026-09-25 after ~20 h idle.
     log.warning("ozon %s %s: %s non-JSON, body %s; reloading tab and retrying", method, path[:150], r["s"], saved)
@@ -244,7 +244,8 @@ def _cart_text(page):
     total = next(iter(_widgets(page, "total")), {}).get("summary", {})
     foot = total.get("footer", {})
     head = total.get("header", {}).get("info", "")
-    return (f"корзина Ozon: {head}, итого {foot.get('price', '?')}\nsku\tшт\tцена\tназвание\tгруппа\n" + "\n".join(rows))
+    total_text = foot.get("price") or "не посчитан: ни один товар не отмечен к оформлению"
+    return (f"корзина Ozon: {head}, итого {total_text}\nsku\tшт\tцена\tназвание\tгруппа\n" + "\n".join(rows))
 
 
 def cart():

@@ -149,7 +149,7 @@ def search(query, region="sankt-peterburg", price_min=None, price_max=None,
     finally:
         tab.close()
     if r["blocked"]:
-        return f"Авито показал блокировку или капчу: {r['url']}. Нужно пройти её через Screen Sharing на макмини."
+        return f"Авито показал блокировку или капчу: {r['url']}. Попроси пользователя: shop-chrome show, пройти проверку во вкладке Авито, затем shop-chrome hide."
     # Reserved items can't be bought; only those whose page we fetched for shipping are checked.
     reserved = [x for x, s in zip(items, ship) if s and s.get("reserved")]
     rows = []
@@ -193,7 +193,10 @@ def item(url):
             log.warning("avito item %s: no title, page %s", url, saved)
         r["ship"] = (tab.js(f"{SHIP_JS}([location.pathname])") or [None])[0]
         if not r["address"]:
-            r["address"], r["metro"] = _reveal_address(tab)
+            if tab.visible():
+                r["address"], r["metro"] = _reveal_address(tab)
+            else:  # the address opens on a click, and clicks do nothing in a tab that is not on screen
+                r["address"] = "не раскрыт: вкладка Авито не на экране (нужно shop-chrome show и открыть вкладку avito.ru)"
     finally:
         tab.close()
     price = str(r["price"]).replace("₽", "").strip()
