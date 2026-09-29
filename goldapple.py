@@ -1,9 +1,10 @@
-"""Gold Apple (goldapple.ru): search and product card, read-only.
+"""Gold Apple (goldapple.ru): search, product card and cart (view, add, remove). Never checks out.
 
 The site posts the user's city and delivery zones with every catalog call, so its own page makes
 the request and we take the JSON it got (capture.py). Prices and stock are for the user's city.
 """
 import html
+import json
 import re
 import urllib.parse
 
@@ -87,10 +88,107 @@ def item(url):
         label = " ".join(s for s in (f"{av['units']} {unit}".strip() if av.get("units") else "", colors.get(av.get("colors"), "")) if s)
         actual, old = _rub(v.get("price"), "actual"), _rub(v.get("price"), "old")
         variants.append(f"{label or v.get('itemId')} — {actual} ₽" + (f" (было {old})" if old and old != actual else "")
-                        + ("" if v.get("inStock") else ", нет в наличии"))
+                        + ("" if v.get("inStock") else ", нет в наличии") + f", артикул {v.get('itemId')}")
     lines = [f"{x.get('brand', '')} {x.get('name', '')} ({x.get('productType', '')})", url.split("?")[0],
              f"артикул: {x.get('itemId')}", "варианты: " + "; ".join(variants)]
     text = "\n".join(f"{s.get('text')}: {_text(s.get('content'))}" for s in x.get("productDescription") or []
                      if s.get("type") != "Brand" and s.get("content"))
     lines.append("\n" + text[:2500])
     return "\n".join(lines)
+
+
+# The cart is a plain same-origin API with the session cookie (names from the site's own code:
+# getState, addItemsBySku, deleteItems), so it works from a background tab.
+STATE = "/front/api/cart/v3/state?locale=ru&includeDeliveryThreshold=false"
+
+
+def _ga_tab():
+    tab = tab_for("goldapple.ru")
+    if "goldapple.ru" not in (tab.js("location.hostname") or ""):
+        tab.goto("https://goldapple.ru/", "goldapple", wait_js="document.readyState === 'complete'")
+    return tab
+
+
+def _api(tab, method, path, body=None, retried=False):
+    opts = {"method": method, "credentials": "include"}
+    if body is not None:
+        opts["headers"] = {"Content-Type": "application/json"}
+        opts["body"] = json.dumps(body)
+    r = tab.js(f"fetch({json.dumps(path)}, {json.dumps(opts)}).then(async r => ({{s: r.status, b: await r.text()}}))")
+    try:
+        return json.loads(r["b"])
+    except ValueError:
+        pass
+    log.warning("goldapple %s %s: %s non-JSON%s", method, path, r["s"], " again after reload" if retried else "")
+    if retried:
+        return None
+    # As on Ozon: after a while fetch() gets 403 from the anti-bot; a real page load renews its cookies.
+    tab.goto("https://goldapple.ru/", "goldapple", wait_js="document.readyState === 'complete'")
+    return _api(tab, method, path, body, retried=True)
+
+
+def _items(d):
+    return (((d or {}).get("data") or {}).get("rawCart") or {}).get("items") or []
+
+
+def _cart_text(d):
+    items = _items(d)
+    if not items:
+        return "корзина Золотого яблока пуста"
+    rows = []
+    for i in items:
+        price, old = i.get("specialPriceAmountClean"), i.get("oldPriceAmountClean")
+        rows.append(f"{i.get('productSku')}\t{i.get('qty')}\t{price or old}\t{old if old and old != price else ''}\t"
+                    f"{'✓' if i.get('isSelected') else ''}\t{i.get('brand', '')}\t{i.get('productName') or i.get('prodname', '')}\t{i.get('variant') or ''}")
+    return ("корзина Золотого яблока (✓ — выбрано к оформлению; цена — за все штуки строки)\n"
+            "артикул\tшт\tцена ₽\tбез скидки\t✓\tбренд\tназвание\tвариант\n" + "\n".join(rows))
+
+
+def _sku(id_or_url):
+    m = re.search(r"goldapple\.ru/(\d+)", str(id_or_url)) or re.fullmatch(r"\s*/?(\d+)(?:-.*)?\s*", str(id_or_url))
+    return m.group(1) if m else None
+
+
+def cart():
+    tab = _ga_tab()
+    try:
+        d = _api(tab, "GET", STATE)
+    finally:
+        tab.close()
+    return BLOCKED if d is None else _cart_text(d)
+
+
+def add_to_cart(id_or_url, quantity=1):
+    sku = _sku(id_or_url)
+    if not sku:
+        return "нужен артикул варианта (из goldapple_item) или ссылка на товар"
+    tab = _ga_tab()
+    try:
+        _api(tab, "POST", "/front/api/cart/v3/items-by-sku?locale=ru",
+             {"products": [{"sku": sku, "quantity": int(quantity), "analyticsDetailParams": {"itemId": sku}}],
+              "meta": {"source": "pdp/product"}, "includeDeliveryThreshold": False})
+        d = _api(tab, "GET", STATE)
+    finally:
+        tab.close()
+    if d is None:
+        return BLOCKED
+    ok = any(str(i.get("productSku")) == sku for i in _items(d))
+    return f"{'добавлено' if ok else '⚠️ Золотое яблоко не подтвердило добавление'}: артикул {sku}\n" + _cart_text(d)
+
+
+def remove_from_cart(id_or_url):
+    sku = _sku(id_or_url)
+    if not sku:
+        return "нужен артикул из goldapple_cart"
+    tab = _ga_tab()
+    try:
+        if not any(str(i.get("productSku")) == sku for i in _items(_api(tab, "GET", STATE))):
+            return "такого артикула в корзине нет\n" + cart()
+        _api(tab, "DELETE", f"/front/api/cart/v3/items?locale=ru&includeDeliveryThreshold=false&itemSkus={sku}")
+        d = _api(tab, "GET", STATE)
+    finally:
+        tab.close()
+    if d is None:
+        return BLOCKED
+    gone = not any(str(i.get("productSku")) == sku for i in _items(d))
+    return f"{'удалено' if gone else '⚠️ Золотое яблоко не подтвердило удаление'}: артикул {sku}\n" + _cart_text(d)

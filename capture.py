@@ -4,6 +4,7 @@ For sites that sign API calls with tokens and device headers (Wildberries) or se
 city and delivery zones in the request body (Gold Apple): the page builds the request, we read
 the response through CDP Network.getResponseBody.
 """
+import base64
 import json
 import time
 
@@ -14,9 +15,10 @@ def capture(tab, site, url, patterns, timeout=20, rewrite=None):
     """Navigate to url; return {name: JSON} of the first response whose URL contains every part of patterns[name].
 
     rewrite=(glob, fn): the page's own requests matching glob are sent to fn(url) instead, with the
-    browser's own headers (CDP Fetch). Wildberries loads page N only on scroll, which a background
-    tab never does, so its page-1 request is sent as page N. Only requestId and url are read from
-    the paused request: its headers carry the user's token.
+    browser's own headers (CDP Fetch); fn may return (url, body) to replace the body too. Wildberries
+    loads page N only on scroll, which a background tab never does, so its page-1 request is sent as
+    page N; its cart sync, sent on every page load, carries our cart change. Only requestId and url
+    are read from the paused request: its headers carry the user's token.
     Names whose response did not arrive within timeout are missing from the result.
     """
     gap = cdp.MIN_GAP - (time.time() - cdp._last_nav.get(site, 0))
@@ -32,9 +34,17 @@ def capture(tab, site, url, patterns, timeout=20, rewrite=None):
 
     def resume(p):
         """Every paused request must be continued, or the page hangs."""
+        if not rewrite:  # paused by an earlier call just before its Fetch.disable took effect
+            send("Fetch.continueRequest", requestId=p["requestId"])
+            return
         old = p["request"]["url"]
-        new = rewrite[1](old)
-        send("Fetch.continueRequest", requestId=p["requestId"], **({"url": new} if new != old else {}))
+        new, body = rewrite[1](old), None
+        if isinstance(new, tuple):
+            new, body = new
+        change = {"url": new} if new != old else {}
+        if body is not None:
+            change["postData"] = base64.b64encode(body.encode()).decode()
+        send("Fetch.continueRequest", requestId=p["requestId"], **change)
 
     send("Network.enable")
     if rewrite:

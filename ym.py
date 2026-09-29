@@ -1,8 +1,10 @@
-"""Yandex Market: search and product card, read-only.
+"""Yandex Market: search, product card and cart (view; add and remove need the tab on screen). Never checks out.
 
 Search results are server-rendered; every snippet carries its data as JSON in data-zone-data,
 so the page is parsed rather than an API called. Prices and delivery are for the user's region.
 """
+import json
+import time
 import urllib.parse
 
 from cdp import tab_for
@@ -142,3 +144,120 @@ def item(url):
         lines.append("характеристики: " + "; ".join(r["specs"]))
     lines.append("\n" + r["description"])
     return "\n".join(lines)
+
+
+# Cart. Reading works from a background tab; adding and removing are clicks (the site's cart calls
+# are gRPC with a page secret), so they need the Market tab on screen. Rows are found by their
+# checkbox and sku, never by button text: the cart header has a bulk «Удалить» for all selected items.
+CART_URL = "https://market.yandex.ru/my/cart"
+# Each cart line: the widest block around one sku's zones that holds no other sku and at most one
+# quantity field; blocks without a quantity field (recommendations) are not cart lines.
+# Rows are kept in window.__ymRows so a click can target one row's own «−».
+ROWS_JS = r"""
+(() => {
+  const own = e => { try { const d = JSON.parse(e.getAttribute('data-zone-data')); return String(d.marketSku || d.skuId || '') } catch (x) { return '' } };
+  const QTY = 'input[type=number]';
+  const zones = [...document.querySelectorAll('[data-zone-data]')].filter(e => own(e));
+  const rows = [];
+  for (const sku of new Set(zones.map(own))) {
+    let best = null;
+    for (const z of zones.filter(e => own(e) === sku)) {
+      let p = z;
+      while (p.parentElement && !zones.some(e => own(e) !== sku && p.parentElement.contains(e)) && p.parentElement.querySelectorAll(QTY).length <= 1) p = p.parentElement;
+      if (!best || p.contains(best)) best = p;
+    }
+    const qty = best && best.querySelector(QTY);
+    if (!qty) continue;
+    const cb = best.querySelector('input[type=checkbox]'), text = (best.innerText || '').replace(/\s+/g, ' ').trim();
+    rows.push({el: best, sku, qty: qty.value, checked: cb ? cb.checked : null, text: text.slice(0, 150),
+               price: ((text.match(/\d[\d\s\u2009\u00a0]*₽/) || [''])[0]).replace(/[\s\u2009\u00a0]/g, '')});
+  }
+  window.__ymRows = rows;
+  return rows.map(({el, ...r}) => r);
+})()
+"""
+NOT_ON_SCREEN = ("вкладка Яндекс Маркета не на экране, а корзина меняется только кликами в видимой вкладке. "
+                 "Попроси пользователя выполнить shop-chrome show и открыть вкладку market.yandex.ru, потом повтори.")
+
+
+def _open_cart(tab):
+    tab.goto(CART_URL, "ym", wait_js=f"{_new_page(tab)} && (!!document.querySelector('input[type=checkbox]') || /пуст/i.test(document.body.innerText) || {CAPTCHA_JS})")
+    return None if _captcha(tab, "cart") else tab.js(ROWS_JS)
+
+
+def _cart_text(rows):
+    if not rows:
+        return "корзина Яндекс Маркета пуста"
+    return ("корзина Яндекс Маркета (✓ — выбрано к оформлению; цена — первая цена в строке, обычно с картой Я Банка)\n"
+            "sku\tшт\tцена\t✓\tтовар\n" + "\n".join(f"{r['sku']}\t{r['qty']}\t{r['price']}\t{'✓' if r['checked'] else ''}\t{r['text']}" for r in rows))
+
+
+def cart():
+    tab = tab_for("market.yandex.ru")
+    try:
+        rows = _open_cart(tab)
+    finally:
+        tab.close()
+    return BLOCKED if rows is None else _cart_text(rows)
+
+
+def add_to_cart(url):
+    if url.startswith("/"):
+        url = "https://market.yandex.ru" + url
+    tab = tab_for("market.yandex.ru")
+    try:
+        before = _open_cart(tab)
+        if before is None:
+            return BLOCKED
+        tab.goto(url, "ym", wait_js=f"{_new_page(tab)} && (!!document.querySelector('h1') || {CAPTCHA_JS})")
+        if _captcha(tab, f"add {url}"):
+            return BLOCKED
+        # the offer's own button: the page also has «В корзину» on every similar product
+        if not tab.click('[data-auto="main"] [data-auto="cartButton"]'):
+            return "не добавлено: " + (NOT_ON_SCREEN if not tab.visible() else "не нашёл кнопку «В корзину» у основного предложения")
+        time.sleep(2)
+        rows = _open_cart(tab)
+    finally:
+        tab.close()
+    if rows is None:
+        return BLOCKED
+    old = {r["sku"]: r["qty"] for r in before}
+    new = [r for r in rows if old.get(r["sku"]) != r["qty"]]  # the page does not name its sku reliably: diff the cart
+    if not new:
+        return "⚠️ Маркет не подтвердил добавление (или товар уже был в корзине)\n" + _cart_text(rows)
+    return f"добавлено: sku {', '.join(r['sku'] for r in new)}\n" + _cart_text(rows)
+
+
+def remove_from_cart(sku):
+    sku = str(sku).strip()
+    tab = tab_for("market.yandex.ru")
+    try:
+        rows = _open_cart(tab)
+        if rows is None:
+            return BLOCKED
+        row = next((r for r in rows if r["sku"] == sku), None)
+        if not row:
+            return "такого sku в корзине нет\n" + _cart_text(rows)
+        if not tab.visible():
+            return "не удалено: " + NOT_ON_SCREEN
+        # «−» at the row's own quantity field: each click takes one off, the last one removes the line
+        minus = f"""(() => {{ const r = (window.__ymRows || []).find(r => r.sku === {json.dumps(sku)}); if (!r) return null;
+            const q = r.el.querySelector('input[type=number]'); if (!q) return null;
+            const b = [...r.el.querySelectorAll('button')].filter(b => b.compareDocumentPosition(q) & Node.DOCUMENT_POSITION_FOLLOWING).pop();  // «−» sits right before the field
+            if (!b) return null; b.scrollIntoView({{block: 'center'}}); window.__ymMinus = b; return true; }})()"""
+        for _ in range(int(row["qty"] or 1)):
+            if not tab.js(minus):
+                break
+            time.sleep(0.6)
+            x, y = tab.js("(() => { const r = window.__ymMinus.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()")
+            for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
+                tab.call("Input.dispatchMouseEvent", type=typ, x=x, y=y, button="left", clickCount=1)
+            time.sleep(1.5)
+            tab.js(ROWS_JS)  # the line re-renders after each change
+        rows = _open_cart(tab)
+    finally:
+        tab.close()
+    if rows is None:
+        return BLOCKED
+    gone = not any(r["sku"] == sku for r in rows)
+    return f"{'удалено' if gone else '⚠️ Маркет не подтвердил удаление'}: sku {sku}\n" + _cart_text(rows)
