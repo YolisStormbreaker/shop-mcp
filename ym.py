@@ -3,13 +3,13 @@
 Search results are server-rendered; every snippet carries its data as JSON in data-zone-data,
 so the page is parsed rather than an API called. Prices and delivery are for the user's region.
 """
-import time
 import urllib.parse
 
 from cdp import tab_for
 from shoplog import dump, log
 
-SORTS = {"default": None, "price": "aprice", "price_desc": "dprice", "rating": "rorp", "reviews": "opinions"}
+# names as the site labels them: rating = «Высокий рейтинг», with_reviews = «С отзывами» (a filter, not an order)
+SORTS = {"default": None, "price": "aprice", "price_desc": "dprice", "rating": "rating", "with_reviews": "opinions", "new": "ddate"}
 CAPTCHA_JS = "/showcaptcha/.test(location.href) || /^Ой/.test(document.title)"
 BLOCKED = "⚠️ Яндекс Маркет показал капчу: shop-chrome show, пройти её в браузере, повторить."
 
@@ -76,7 +76,7 @@ def _captcha(tab, what):
     return False
 
 
-def search(query, price_min=None, price_max=None, sort="default", limit=30):
+def search(query, price_min=None, price_max=None, sort="default", page=1, limit=30):
     if sort not in SORTS:
         return f"sort: одно из {', '.join(SORTS)}"
     qs = {"text": query}
@@ -86,17 +86,16 @@ def search(query, price_min=None, price_max=None, sort="default", limit=30):
         qs["priceto"] = int(price_max)
     if SORTS[sort]:
         qs["how"] = SORTS[sort]
+    if page > 1:
+        qs["page"] = page
     url = "https://market.yandex.ru/search?" + urllib.parse.urlencode(qs)
     tab = tab_for("market.yandex.ru")
     try:
         tab.goto(url, "ym", wait_js=f"{_new_page(tab)} && (!!document.querySelector('[data-zone-name=\"productSnippet\"]') || {CAPTCHA_JS})")
         if _captcha(tab, f"search {url}"):
             return BLOCKED
+        # only the server-rendered part of the grid: the rest loads on scroll, which a background tab never does
         items = tab.js(SEARCH_JS)
-        if len(items) < limit:  # the rest of the grid loads on scroll
-            tab.js("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(1.5)
-            items = tab.js(SEARCH_JS)
     finally:
         tab.close()
     seen, rows = set(), []
@@ -107,15 +106,14 @@ def search(query, price_min=None, price_max=None, sort="default", limit=30):
         seen.add(key)
         nocard = x["nocard"] or x["price"]
         before = x["price"] if x["nocard"] else ""
-        marks = ", ".join(m for m, on in (("реклама", x["ad"]), ("из-за рубежа", x["cross"])) if on)
+        marks = ", ".join(m for m, on in (("продвижение", x["ad"]), ("из-за рубежа", x["cross"])) if on)
         rows.append(f"{len(rows)+1}\t{x['sku']}\t{x['card']}\t{nocard}\t{before}\t{x['title']}\t{x['shop']}\t"
                     f"{x['reviews']}\t{x['delivery']}\t{marks}\t{x['url']}")
-        if len(rows) >= limit:
-            break
-    head = (f"Яндекс Маркет · {url}\n"
+    promoted = sum(1 for r in rows if "продвижение" in r)
+    head = (f"Яндекс Маркет · страница {page} · карточек: {len(rows)}, продвигаемых: {promoted}; дальше — page={page + 1} · {url}\n"
             "ссылки относительно https://market.yandex.ru; цены и доставка — для региона из профиля\n"
             "#\tsku\tс картой Я Банка ₽\tбез карты ₽\tдо скидок ₽\tназвание\tмагазин\tрейтинг · купили\tдоставка\tпометки\tссылка")
-    return head + "\n" + ("\n".join(rows) if rows else "(пусто)")
+    return head + "\n" + ("\n".join(rows[:limit]) if rows else "(пусто)")
 
 
 def item(url):

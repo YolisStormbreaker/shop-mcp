@@ -39,12 +39,17 @@ def search(query, price_min=None, price_max=None, sort="popular", page=1, limit=
     qs = {"search": query, "sort": sort}
     if price_min or price_max:
         qs["priceU"] = f"{int(price_min or 0) * 100};{int(price_max or 10_000_000) * 100}"
-    if page > 1:
-        qs["page"] = page
     url = "https://www.wildberries.ru/catalog/0/search.aspx?" + urllib.parse.urlencode(qs)
+    # The site loads page N (100 items each) only while the list is scrolled, which a background tab
+    # never does; a page=N link still asks for page 1. So its own page-1 request is sent as page N.
+    rewrite = None
+    if page > 1:
+        def rewrite_url(u):
+            return re.sub(r"([?&])page=\d+", rf"\g<1>page={page}", u) if re.search(r"[?&]page=", u) else f"{u}&page={page}"
+        rewrite = ("*__internal/search/exactmatch*resultset=catalog*", rewrite_url)
     tab = tab_for("wildberries.ru")
     try:
-        d = capture(tab, "wb", url, {"s": ["/exactmatch/", "resultset=catalog"]}).get("s")
+        d = capture(tab, "wb", url, {"s": ["/exactmatch/", "resultset=catalog"]}, rewrite=rewrite).get("s")
     finally:
         tab.close()
     if d is None:
@@ -60,7 +65,8 @@ def search(query, price_min=None, price_max=None, sort="popular", page=1, limit=
         stock = "" if p.get("totalQuantity") else "нет в наличии"
         rows.append(f"{i+1}\t{p['id']}\t{price}\t{basic}\t{p.get('name', '')}\t{p.get('brand', '')}\t"
                     f"{p.get('reviewRating') or ''}\t{p.get('feedbacks') or ''}\t{p.get('supplier', '')}\t{stock or _eta(p)}")
-    head = (f"Wildberries · {d.get('total', len(rows))} найдено · {url}\n"
+    total = d.get("total") or len(rows)
+    head = (f"Wildberries · {total} найдено · страница {page} из {max(1, -(-total // 100))} (по 100) · {url}\n"
             "товар: https://www.wildberries.ru/catalog/<id>/detail.aspx; «привезут» — оценка по сроку доставки на адрес из профиля\n"
             "цена без скидки WB Кошелька: сайт показывает цену с ней, она на несколько процентов ниже\n"
             "#\tid\tцена ₽\tбез скидки\tназвание\tбренд\tрейтинг\tотзывов\tпродавец\tпривезут")

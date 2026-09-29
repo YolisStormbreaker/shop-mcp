@@ -228,8 +228,9 @@ def wb_search(query: str, price_min: int | None = None, price_max: int | None = 
               sort: str = "popular", page: int = 1, limit: int = 30) -> str:
     """Поиск на Wildberries под аккаунтом пользователя (регион и доставка — из его профиля).
 
-    sort — popular | rate | priceup | pricedown | newly | benefit. При сортировке по цене строки
-    упорядочены по цене заново: WB поднимает продвигаемые товары наверх в любой сортировке.
+    sort — popular | rate | priceup | pricedown | newly | benefit. page — страница по 100 товаров
+    (в шапке «страница N из M»). При сортировке по цене строки страницы упорядочены по цене заново:
+    WB поднимает продвигаемые товары наверх в любой сортировке.
     Цена — без скидки WB Кошелька (на сайте она на несколько процентов ниже).
     Если совпадений нет, WB молча показывает посторонние товары — сверяй названия с запросом.
     Возвращает TSV: id, цена, без скидки, название, бренд, рейтинг, отзывы, продавец, «привезут ≈» (оценка).
@@ -248,15 +249,19 @@ def wb_item(id_or_url: str) -> str:
 @mcp.tool()
 @logged
 def ym_search(query: str, price_min: int | None = None, price_max: int | None = None,
-              sort: str = "default", limit: int = 30) -> str:
+              sort: str = "default", page: int = 1, limit: int = 30) -> str:
     """Поиск на Яндекс Маркете под аккаунтом пользователя (регион и доставка — из его профиля).
 
-    sort — default | price | price_desc | rating | reviews.
+    sort — default | price | price_desc | rating («Высокий рейтинг») | with_reviews («С отзывами» —
+    только товары с отзывами, не по их числу) | new. На странице видна лишь часть выдачи (обычно 8–40
+    карточек, остальное сайт догружает прокруткой) — за следующими товарами иди на page=2, 3…
+    «продвижение» — платное размещение по данным Маркета, на сайте не подписано; при сортировке
+    по умолчанию таких бывает большинство.
     Возвращает TSV: sku, цена с картой Я Банка, без карты, до скидок, название, магазин, рейтинг · купили,
-    доставка, пометки («реклама», «из-за рубежа»), ссылка. Если совпадений нет, Маркет молча
+    доставка, пометки («продвижение», «из-за рубежа»), ссылка. Если совпадений нет, Маркет молча
     показывает посторонние популярные товары — сверяй названия с запросом.
     """
-    return ym.search(query, price_min, price_max, sort, limit)
+    return ym.search(query, price_min, price_max, sort, page, limit)
 
 
 @mcp.tool()
@@ -273,8 +278,8 @@ def lamoda_search(query: str, price_min: int | None = None, price_max: int | Non
                   sort: str = "default", page: int = 1, limit: int = 30) -> str:
     """Поиск на Lamoda под аккаунтом пользователя.
 
-    sort — default | new | price_asc | price_desc | new_sale | discount.
-    Цена — итоговая, со всеми скидками, включая персональную скидку лояльности; фильтр price_min/max
+    sort — default | new | price_asc | price_desc | new_sale | discount. page — страница по 60 товаров
+    (в шапке «страница N из M»). Цена — итоговая, со всеми скидками, включая персональную скидку лояльности; фильтр price_min/max
     Lamoda применяет к своей цене, итоговая может оказаться ниже price_min.
     Возвращает TSV: sku, цена, без скидок, акция до, бренд, название, рейтинг, отзывы,
     размеры в наличии (в системе бренда), пометка «реклама», ссылка.
@@ -292,14 +297,16 @@ def lamoda_item(sku_or_url: str) -> str:
 
 @mcp.tool()
 @logged
-def goldapple_search(query: str, limit: int = 24) -> str:
+def goldapple_search(query: str, price_min: int | None = None, price_max: int | None = None,
+                     sort: str = "relevance", page: int = 1, limit: int = 24) -> str:
     """Поиск в Золотом яблоке (goldapple.ru) под аккаунтом пользователя, цены и наличие — для его города.
 
-    Только первая страница выдачи по релевантности (до 24 товаров), без сортировки и фильтра цены.
+    sort — relevance | priceAsc | priceDesc | discountAmount | byRating | byNewest.
+    page — страница по 24 товара; число найденных сайт ограничивает 2000 («2000+»).
     Возвращает TSV: артикул, цена, без скидки, бренд, название, тип, объём (и число вариантов),
     рейтинг, отзывы, наличие, ссылка.
     """
-    return goldapple.search(query, limit)
+    return goldapple.search(query, price_min, price_max, sort, page, limit)
 
 
 @mcp.tool()

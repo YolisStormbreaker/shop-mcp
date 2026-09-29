@@ -11,6 +11,8 @@ from capture import capture
 from cdp import tab_for
 from shoplog import log
 
+SORTS = ("relevance", "priceAsc", "priceDesc", "discountAmount", "byRating", "byNewest")  # the site's own ids
+PAGE = 24
 BLOCKED = "⚠️ Золотое яблоко не отдало данные (проверка на бота?): shop-chrome show, открыть сайт, повторить."
 
 
@@ -22,8 +24,17 @@ def _text(s):
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", s or ""))).strip()
 
 
-def search(query, limit=24):
-    url = "https://goldapple.ru/catalogsearch/result?" + urllib.parse.urlencode({"q": query})
+def search(query, price_min=None, price_max=None, sort="relevance", page=1, limit=PAGE):
+    if sort not in SORTS:
+        return f"sort: одно из {', '.join(SORTS)}"
+    qs = {"q": query}
+    if sort != "relevance":
+        qs["sort"] = sort
+    if price_min or price_max:
+        qs["calculatedprices"] = f"{int(price_min or 0)}-{int(price_max or 10_000_000)}"  # only this form applies
+    if page > 1:
+        qs["p"] = page
+    url = "https://goldapple.ru/catalogsearch/result?" + urllib.parse.urlencode(qs)
     tab = tab_for("goldapple.ru")
     try:
         d = capture(tab, "goldapple", url, {"s": ["/front/api/catalog/search-products"]}).get("s")
@@ -44,9 +55,10 @@ def search(query, limit=24):
         rows.append(f"{i+1}\t{p.get('itemId')}\t{actual}\t{old if old and old != actual else ''}\t{p.get('brand', '')}\t"
                     f"{p.get('name', '')}\t{p.get('productType', '')}\t{volume}\t{rv.get('rating') or ''}\t"
                     f"{rv.get('reviewsCount') or ''}\t{'' if p.get('inStock') else 'нет в наличии'}\t{p.get('url', '')}")
-    head = (f"Золотое яблоко · {data.get('count', len(rows))} найдено · {url}\n"
-            "ссылки относительно https://goldapple.ru; первая страница выдачи по релевантности (до 24 товаров), "
-            "цены и наличие — для города из профиля\n"
+    count = data.get("count") or len(rows)
+    found = f"{count}+" if count >= 2000 else str(count)  # the site caps the count at 2000
+    head = (f"Золотое яблоко · {found} найдено · страница {page} (по {PAGE}) · {url}\n"
+            "ссылки относительно https://goldapple.ru; цены и наличие — для города из профиля\n"
             "#\tартикул\tцена ₽\tбез скидки\tбренд\tназвание\tтип\tобъём\tрейтинг\tотзывов\tналичие\tссылка")
     return head + "\n" + ("\n".join(rows) if rows else "(пусто)")
 

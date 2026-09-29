@@ -75,7 +75,8 @@ class Tab:
         while time.time() < deadline:
             try:
                 ready = self.js("document.readyState", timeout=5)
-                if ready in ("interactive", "complete") and (not wait_js or self.js(wait_js, timeout=5)):
+                # !!: a DOM node can't be returned by value on React pages ("Object reference chain is too long")
+                if ready in ("interactive", "complete") and (not wait_js or self.js(f"!!({wait_js})", timeout=5)):
                     return
             except Exception:
                 pass  # page is swapping documents mid-navigation

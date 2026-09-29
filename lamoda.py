@@ -18,7 +18,7 @@ SEARCH_JS = f"""
 (() => {{
   const P = {STATE};
   if (!P?.products) return null;
-  return {{found: P.pagination?.found ?? P.products.length, items: P.products.map(p => {{
+  return {{found: P.pagination?.found ?? P.products.length, pages: P.pagination?.pages || 1, page: P.pagination?.page || 1, items: P.products.map(p => {{
     const pr = p.prices || [];
     const last = pr[pr.length - 1] || {{}};
     return {{
@@ -79,7 +79,7 @@ def search(query, price_min=None, price_max=None, sort="default", page=1, limit=
         marks = "реклама" if x["ad"] else ""
         rows.append(f"{i+1}\t{x['sku']}\t{x['price']}\t{x['base'] if x['base'] > x['price'] else ''}\t{x['until']}\t"
                     f"{x['brand']}\t{x['name']}\t{x['rating']}\t{x['reviews']}\t{x['sizes']}\t{marks}\t{x['url']}")
-    head = (f"Lamoda · {r['found']} найдено · {url}\n"
+    head = (f"Lamoda · {r['found']} найдено · страница {r['page']} из {r['pages']} · {url}\n"
             "ссылки относительно https://www.lamoda.ru; цена — со всеми скидками, включая вашу скидку лояльности; "
             "«до» — когда кончается акционная цена; размеры в наличии — в системе бренда\n"
             "#\tsku\tцена ₽\tбез скидок\tакция до\tбренд\tназвание\tрейтинг\tотзывов\tразмеры в наличии\tпометки\tссылка")
