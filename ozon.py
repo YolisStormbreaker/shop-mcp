@@ -138,7 +138,7 @@ def _html_text(s):
 def _seller(tab, page):
     """Shop name and legal info from the 'О магазине' modal. A foreign seller shows a non-Russian
     company there, e.g. 'Shenzhen … Co., Ltd.', and Ozon brings the item from abroad in 2–4 weeks."""
-    w = next(iter(_widgets(page, "webCurrentSeller")), {})
+    w = next(iter(_widgets(page, "webCurrentSeller-")), {})
     name = w.get("sellerCell", {}).get("centerBlock", {}).get("title", {}).get("text", "?")
     m = re.search(r'"sellerId":\s*"(\d+)"', json.dumps(w))
     if not m:
@@ -166,10 +166,10 @@ def item(sku_or_url):
     finally:
         tab.close()
 
-    title = next(iter(_widgets(page, "webProductHeading")), {}).get("title", "?")
-    price = next(iter(_widgets(page, "webPrice")), {})
-    sale = next(iter(_widgets(page, "webSale")), {})
-    score = next(iter(_widgets(page, "webReviewProductScore")), {})
+    title = next(iter(_widgets(page, "webProductHeading-")), {}).get("title", "?")
+    price = next(iter(_widgets(page, "webPrice-")), {})
+    sale = next(iter(_widgets(page, "webSale-")), {})
+    score = next(iter(_widgets(page, "webReviewProductScore-")), {})
     delivery = next((t for t in _texts(dates) if DATE_RE.search(t)), "?")
     out = [f"{title}\nhttps://www.ozon.ru/product/{sku}/",
            f"цена: {price.get('cardPrice') or price.get('price', '?')} с картой Ozon, {price.get('price', '?')} без неё"
@@ -184,14 +184,14 @@ def item(sku_or_url):
     else:
         out.append(f"продавец: {shop} (юрлицо не нашёл)")
     chars = []
-    for w in _widgets(page2, "webCharacteristics"):
+    for w in _widgets(page2, "webCharacteristics-"):
         for group in w.get("characteristics", []):
             for lst in group.values():
                 for c in lst if isinstance(lst, list) else []:
                     if c.get("key") != "Sku":
                         chars.append(f"  {c.get('name')}: {', '.join(v.get('text', '') for v in c.get('values', []))}")
     out.append("характеристики:\n" + ("\n".join(chars) if chars else "  (нет)"))
-    desc = _html_text(next(iter(_widgets(page2, "webDescription")), {}).get("richAnnotation", ""))
+    desc = _html_text(next(iter(_widgets(page2, "webDescription-")), {}).get("richAnnotation", ""))
     if desc:
         out.append("описание:\n" + desc[:2500])
     return "\n".join(out)
