@@ -10,7 +10,9 @@ Output is compact TSV to keep token use low.
 No tool places orders or pays: Ozon and AliExpress stop at the cart.
 """
 import functools
+import importlib
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -26,6 +28,29 @@ from shoplog import log
 
 mcp = FastMCP("shop")
 
+# A stdio server lives as long as the Claude session that started it, often for days, and kept
+# running old code after a fix was committed (2026-09-27: ozon_orders saw 157 of 944 orders).
+# So before every call, reload the modules whose files changed, dependencies first.
+# Modules after a changed one are reloaded too: `from cdp import tab_for` in ozon.py keeps the
+# old function until ozon itself is reloaded.
+# shoplog is left alone: reloading it would add a second log handler.
+# A new tool still needs a restart: tools are registered from server.py once, at start.
+_RELOADABLE = ("cdp", "ali", "ozon", "avito", "orders")
+_mtimes = {m: Path(sys.modules[m].__file__).stat().st_mtime for m in _RELOADABLE}
+_reload_lock = threading.Lock()
+
+
+def _reload_changed():
+    with _reload_lock:
+        changed = False
+        for m in _RELOADABLE:
+            mt = Path(sys.modules[m].__file__).stat().st_mtime
+            if changed or mt != _mtimes[m]:
+                importlib.reload(sys.modules[m])
+                _mtimes[m] = mt
+                changed = True
+                log.info("reloaded %s.py", m)
+
 
 def logged(fn):
     """Log every tool call to logs/shop.log: arguments, time, first line of the answer or the error."""
@@ -34,6 +59,7 @@ def logged(fn):
         t = time.time()
         call = f"{fn.__name__} {args or ''}{kwargs}"
         try:
+            _reload_changed()
             out = fn(*args, **kwargs)
         except Exception:
             log.exception("%s failed in %.1f s", call, time.time() - t)
