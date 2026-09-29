@@ -22,8 +22,12 @@ from mcp.server.fastmcp import FastMCP
 
 import ali
 import avito
+import goldapple
+import lamoda
 import orders
 import ozon
+import wb
+import ym
 from shoplog import log
 
 mcp = FastMCP("shop")
@@ -35,7 +39,7 @@ mcp = FastMCP("shop")
 # old function until ozon itself is reloaded.
 # shoplog is left alone: reloading it would add a second log handler.
 # A new tool still needs a restart: tools are registered from server.py once, at start.
-_RELOADABLE = ("cdp", "ali", "ozon", "avito", "orders")
+_RELOADABLE = ("cdp", "capture", "ali", "ozon", "avito", "orders", "wb", "ym", "lamoda", "goldapple")
 _mtimes = {m: Path(sys.modules[m].__file__).stat().st_mtime for m in _RELOADABLE}
 _reload_lock = threading.Lock()
 
@@ -216,6 +220,94 @@ def ali_orders(query: str | None = None, limit: int = 30, max_new: int = 60) -> 
     Возвращает TSV: заказ, «дата · статус», сумма заказа, товар, вариант, цена, ссылка.
     """
     return orders.ali_orders(query, limit, max_new)
+
+
+@mcp.tool()
+@logged
+def wb_search(query: str, price_min: int | None = None, price_max: int | None = None,
+              sort: str = "popular", page: int = 1, limit: int = 30) -> str:
+    """Поиск на Wildberries под аккаунтом пользователя (регион и доставка — из его профиля).
+
+    sort — popular | rate | priceup | pricedown | newly | benefit. При сортировке по цене строки
+    упорядочены по цене заново: WB поднимает продвигаемые товары наверх в любой сортировке.
+    Цена — без скидки WB Кошелька (на сайте она на несколько процентов ниже).
+    Если совпадений нет, WB молча показывает посторонние товары — сверяй названия с запросом.
+    Возвращает TSV: id, цена, без скидки, название, бренд, рейтинг, отзывы, продавец, «привезут ≈» (оценка).
+    """
+    return wb.search(query, price_min, price_max, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def wb_item(id_or_url: str) -> str:
+    """Карточка товара Wildberries по артикулу или ссылке: цена, наличие, оценка срока доставки,
+    продавец (рейтинг, число продаж, год регистрации), характеристики, описание (до 2500 символов)."""
+    return wb.item(id_or_url)
+
+
+@mcp.tool()
+@logged
+def ym_search(query: str, price_min: int | None = None, price_max: int | None = None,
+              sort: str = "default", limit: int = 30) -> str:
+    """Поиск на Яндекс Маркете под аккаунтом пользователя (регион и доставка — из его профиля).
+
+    sort — default | price | price_desc | rating | reviews.
+    Возвращает TSV: sku, цена с картой Я Банка, без карты, до скидок, название, магазин, рейтинг · купили,
+    доставка, пометки («реклама», «из-за рубежа»), ссылка. Если совпадений нет, Маркет молча
+    показывает посторонние популярные товары — сверяй названия с запросом.
+    """
+    return ym.search(query, price_min, price_max, sort, limit)
+
+
+@mcp.tool()
+@logged
+def ym_item(url: str) -> str:
+    """Карточка товара Яндекс Маркета по ссылке: цена, бренд, рейтинг, магазин и его статистика,
+    варианты доставки, основные характеристики, описание (до 2500 символов), пометка «из-за рубежа»."""
+    return ym.item(url)
+
+
+@mcp.tool()
+@logged
+def lamoda_search(query: str, price_min: int | None = None, price_max: int | None = None,
+                  sort: str = "default", page: int = 1, limit: int = 30) -> str:
+    """Поиск на Lamoda под аккаунтом пользователя.
+
+    sort — default | new | price_asc | price_desc | new_sale | discount.
+    Цена — итоговая, со всеми скидками, включая персональную скидку лояльности; фильтр price_min/max
+    Lamoda применяет к своей цене, итоговая может оказаться ниже price_min.
+    Возвращает TSV: sku, цена, без скидок, акция до, бренд, название, рейтинг, отзывы,
+    размеры в наличии (в системе бренда), пометка «реклама», ссылка.
+    """
+    return lamoda.search(query, price_min, price_max, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def lamoda_item(sku_or_url: str) -> str:
+    """Карточка товара Lamoda по sku или ссылке: цена, продавец, можно ли вернуть,
+    размеры с остатками, характеристики, описание (до 2500 символов)."""
+    return lamoda.item(sku_or_url)
+
+
+@mcp.tool()
+@logged
+def goldapple_search(query: str, limit: int = 24) -> str:
+    """Поиск в Золотом яблоке (goldapple.ru) под аккаунтом пользователя, цены и наличие — для его города.
+
+    Только первая страница выдачи по релевантности (до 24 товаров), без сортировки и фильтра цены.
+    Возвращает TSV: артикул, цена, без скидки, бренд, название, тип, объём (и число вариантов),
+    рейтинг, отзывы, наличие, ссылка.
+    """
+    return goldapple.search(query, limit)
+
+
+@mcp.tool()
+@logged
+def goldapple_item(url: str) -> str:
+    """Карточка товара Золотого яблока по ссылке из goldapple_search: цена и наличие каждого
+    варианта (объём, цвет), описание, применение, состав (всего до 2500 символов)."""
+    return goldapple.item(url)
 
 
 if __name__ == "__main__":
