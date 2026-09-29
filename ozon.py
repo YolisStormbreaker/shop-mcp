@@ -1,4 +1,4 @@
-"""Ozon: search and cart via the site's own JSON API, called from the logged-in tab.
+"""Ozon: search, product card and cart via the site's own JSON API, called from the logged-in tab.
 
 No navigation per request: fetch() runs inside an ozon.ru page, so cookies and
 anti-bot tokens are the browser's own. Stops at the cart, never checks out.
@@ -127,6 +127,74 @@ def search(query, price_min=None, price_max=None, sort="score", limit=30):
     head = ("Ozon · https://www.ozon.ru/search/?" + urllib.parse.urlencode(qs) +
             "\nтовар: https://www.ozon.ru/product/<sku>\n#\tsku\tцена ₽\tбез скидки\tназвание\tрейтинг\tотзывов\tпривезут")
     return head + "\n" + ("\n".join(rows) if rows else "(пусто)")
+
+
+def _html_text(s):
+    s = re.sub(r"<br\s*/?>|</p>|</li>", "\n", s or "")
+    s = re.sub(r"<[^>]+>", "", s).replace("&nbsp;", " ").replace("&quot;", '"').replace("&amp;", "&")
+    return re.sub(r"\n\s*\n+", "\n", s).strip()
+
+
+def _seller(tab, page):
+    """Shop name and legal info from the 'О магазине' modal. A foreign seller shows a non-Russian
+    company there, e.g. 'Shenzhen … Co., Ltd.', and Ozon brings the item from abroad in 2–4 weeks."""
+    w = next(iter(_widgets(page, "webCurrentSeller")), {})
+    name = w.get("sellerCell", {}).get("centerBlock", {}).get("title", {}).get("text", "?")
+    m = re.search(r'"sellerId":\s*"(\d+)"', json.dumps(w))
+    if not m:
+        return name, ""
+    legal = ""
+    info = _page(tab, f"/modal/shop-in-shop-info?seller_id={m.group(1)}")
+    for v in info.get("widgetStates", {}).values():
+        legal = next((t for t in _texts(json.loads(v)) if "<br>" in t), "")
+        if legal:
+            break
+    return name, legal
+
+
+def item(sku_or_url):
+    sku = _sku(sku_or_url)
+    tab = _tab()
+    try:
+        page = _page(tab, f"/product/{sku}/")
+        # characteristics and description sit on the second screen of the product page
+        nxt = next((w.get("nextPage") for w in _widgets(page, "paginator") if w.get("nextPage")),
+                   f"/product/{sku}/?layout_container=pdpPage2column&layout_page_index=2")
+        page2 = _page(tab, nxt)
+        dates = _fetch(tab, f"/api/composer-api.bx/_action/pdpGetButtonTexts?product_id={sku}", "POST", {"pageType": "pdp"})
+        shop, legal = _seller(tab, page)
+    finally:
+        tab.close()
+
+    title = next(iter(_widgets(page, "webProductHeading")), {}).get("title", "?")
+    price = next(iter(_widgets(page, "webPrice")), {})
+    sale = next(iter(_widgets(page, "webSale")), {})
+    score = next(iter(_widgets(page, "webReviewProductScore")), {})
+    delivery = next((t for t in _texts(dates) if DATE_RE.search(t)), "?")
+    out = [f"{title}\nhttps://www.ozon.ru/product/{sku}/",
+           f"цена: {price.get('cardPrice') or price.get('price', '?')} с картой Ozon, {price.get('price', '?')} без неё"
+           + (f", без скидки {price['originalPrice']}" if price.get("originalPrice") else ""),
+           "в наличии: " + ("да" if sale.get("offer", {}).get("isAvailable", price.get("isAvailable")) else "⛔ нет"),
+           f"привезут: {delivery}",
+           f"рейтинг: {score.get('totalScore', '?')}, отзывов {score.get('reviewsCount', '?')}"]
+    if legal:
+        company = _html_text(legal).replace("\n", " · ")
+        foreign = not re.search(r"[а-яА-ЯёЁ]", legal.split("<br>")[0])
+        out.append(f"продавец: {shop} · {company}" + (" · ⚠️ из-за рубежа" if foreign else ""))
+    else:
+        out.append(f"продавец: {shop} (юрлицо не нашёл)")
+    chars = []
+    for w in _widgets(page2, "webCharacteristics"):
+        for group in w.get("characteristics", []):
+            for lst in group.values():
+                for c in lst if isinstance(lst, list) else []:
+                    if c.get("key") != "Sku":
+                        chars.append(f"  {c.get('name')}: {', '.join(v.get('text', '') for v in c.get('values', []))}")
+    out.append("характеристики:\n" + ("\n".join(chars) if chars else "  (нет)"))
+    desc = _html_text(next(iter(_widgets(page2, "webDescription")), {}).get("richAnnotation", ""))
+    if desc:
+        out.append("описание:\n" + desc[:2500])
+    return "\n".join(out)
 
 
 def _sku(sku_or_url):

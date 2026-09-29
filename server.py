@@ -86,6 +86,15 @@ def ozon_search(query: str, price_min: int | None = None, price_max: int | None 
 
 @mcp.tool()
 @logged
+def ozon_item(sku_or_url: str) -> str:
+    """Карточка товара Ozon по sku или ссылке: цена, наличие, когда привезут, рейтинг, продавец
+    с юрлицом и адресом (строка «⚠️ из-за рубежа», если продавец иностранный), все характеристики,
+    описание (до 2500 символов). Проверяй товар через неё, прежде чем советовать или класть в корзину."""
+    return ozon.item(sku_or_url)
+
+
+@mcp.tool()
+@logged
 def ozon_add_to_cart(sku_or_url: str, quantity: int = 1) -> str:
     """Положить товар Ozon в корзину по sku или ссылке. Заказ не оформляет."""
     return ozon.add_to_cart(sku_or_url, quantity)
