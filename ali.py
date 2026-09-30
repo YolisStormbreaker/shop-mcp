@@ -148,14 +148,10 @@ def _item_id(id_or_url):
 
 
 def _click_js(tab, js_elem):
-    pos = tab.js(f"(() => {{ const e = {js_elem}; if (!e) return null; e.scrollIntoView({{block: 'center'}}); return 1; }})()")
-    if not pos:
-        return False
-    time.sleep(0.4)
-    pos = tab.js(f"(() => {{ const r = ({js_elem}).getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }})()")
-    for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
-        tab.call("Input.dispatchMouseEvent", type=typ, x=pos[0], y=pos[1], button="left", clickCount=1)
-    return True
+    """element.click() in the page.  Not a CDP mouse event: once the mini's display sleeps
+    Chrome counts every tab as hidden, and there Input.dispatchMouseEvent waits 5 s for a
+    frame and the click is lost (2026-09-30: every variant came back as the first one)."""
+    return bool(tab.js(f"(e => {{ if (!e) return false; e.scrollIntoView({{block: 'center'}}); e.click(); return true; }})({js_elem})"))
 
 
 def _open_item(tab, item_id, sku=None):
