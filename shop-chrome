@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Show / hide / restart the hidden Chrome that shop-mcp drives (LaunchAgent local.shop-chrome, port 9222).
+# Show / hide / restart / re-icon the hidden Chrome that shop-mcp drives (LaunchAgent local.shop-chrome, port 9222).
 # ponytail: finds the instance by the debugging port, the only thing that tells it apart from the main Chrome.
 pid=$(lsof -tiTCP:9222 -sTCP:LISTEN)
 case $1 in
@@ -9,5 +9,7 @@ case $1 in
     [[ $1 == show ]] && js+=" a.unhide; a.activateWithOptions(\$.NSApplicationActivateAllWindows)" || js+=" a.hide"
     osascript -l JavaScript -e "$js" >/dev/null ;;
   restart) launchctl kickstart -k gui/$(id -u)/local.shop-chrome ;;
-  *) echo "usage: shop-chrome show|hide|restart" >&2; exit 1 ;;
+  icon)  # its own Dock/⌘Tab icon, for this process only (dock_icon.py); the LaunchAgent runs it at every start
+    PATH=/opt/homebrew/bin:$PATH exec uv run --quiet --script "${0:A:h}/dock_icon.py" ;;
+  *) echo "usage: shop-chrome show|hide|restart|icon" >&2; exit 1 ;;
 esac
