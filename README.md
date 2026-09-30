@@ -22,26 +22,86 @@ Chrome запущен с отдельным профилем и `--remote-debugg
 
 ## установка
 
-1. Запустить Chrome с отдельным профилем и отладочным портом: LaunchAgent `launchd/local.shop-chrome.plist` (заменить `YOU` на имя пользователя) запускает его при входе в систему и прячет окно, чтобы он не мешал на рабочем Mac:
+1. Положить репозиторий в `~/shop-mcp` и поставить [uv](https://docs.astral.sh/uv/) (зависимости описаны в заголовке `server.py`):
 
    ```sh
-   sed "s/YOU/$USER/" launchd/local.shop-chrome.plist > ~/Library/LaunchAgents/local.shop-chrome.plist
+   git clone https://github.com/YolisStormbreaker/shop-mcp.git ~/shop-mcp
+   brew install uv
+   ```
+
+2. Запустить Chrome с отдельным профилем и отладочным портом. LaunchAgent `launchd/local.shop-chrome.plist` запускает его при входе в систему, прячет окно, чтобы он не мешал на рабочем Mac, и даёт ему свою иконку в Dock:
+
+   ```sh
+   sed "s/YOU/$USER/" ~/shop-mcp/launchd/local.shop-chrome.plist > ~/Library/LaunchAgents/local.shop-chrome.plist
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.shop-chrome.plist
-   ln -s ~/shop-mcp/shop-chrome ~/.local/bin/shop-chrome   # show | hide | restart
+   mkdir -p ~/.local/bin && ln -s ~/shop-mcp/shop-chrome ~/.local/bin/shop-chrome   # show | hide | restart | icon
+   curl -s http://127.0.0.1:9222/json/version   # ответ JSON — Chrome на месте
    ```
 
-2. `shop-chrome show`, войти в этом Chrome на все сайты и указать адрес доставки, `shop-chrome hide`. Вкладки сайтов не закрывать.
-3. Положить репозиторий в `~/shop-mcp`. Нужен [uv](https://docs.astral.sh/uv/): зависимости описаны в заголовке `server.py`.
-4. Подключить к Claude Code:
-
-   ```sh
-   # на той же машине
-   claude mcp add shop -s user -- ~/shop-mcp/run.sh
-   # на другой машине по ssh
-   claude mcp add shop -s user -- ssh HOST ~/shop-mcp/run.sh
-   ```
+3. `shop-chrome show`, войти в этом Chrome на все сайты и указать адрес доставки, `shop-chrome hide`. Вкладки сайтов не закрывать.
+4. Подключить MCP-клиент на этом же Mac:
+   - Claude Code: `claude mcp add shop -s user -- ~/shop-mcp/run.sh`
+   - Claude Desktop: в `~/Library/Application Support/Claude/claude_desktop_config.json`, раздел `mcpServers`, добавить `"shop": {"command": "/Users/YOU/shop-mcp/run.sh"}` и перезапустить приложение (⌘Q).
+   - Другой компьютер — см. следующий раздел.
 
 Лог вызовов пишется в `logs/shop.log`, тела неудачных ответов — в `logs/bodies/`. В них бывают ваши данные со страниц сайтов, поэтому `logs/` в `.gitignore`.
+
+## подключение с другого компьютера
+
+Chrome со входами и сервер остаются на Mac, где всё установлено (дальше — хост). Агент на другом компьютере запускает сервер по SSH: MCP идёт через stdin/stdout этого соединения, наружу не открывается ни один порт. Всё выполняется под аккаунтами владельца хоста: его адрес доставки, его корзины.
+
+**На хосте, один раз (делает владелец):**
+
+1. Включить вход по SSH: Системные настройки → Основные → Общий доступ → Удалённый вход, доступ только своему пользователю.
+2. Взять у агента публичный ключ и дописать его одной строкой в `~/.ssh/authorized_keys` с ограничением: этот ключ сможет только запустить сервер, без шелла и проброса портов.
+
+   ```
+   command="/Users/YOU/shop-mcp/run.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAA… shop-mcp-agent
+   ```
+
+3. Хост должен быть доступен по сети: в одной локальной сети — по имени `ИМЯ.local` (Системные настройки → Основные → Общий доступ → Локальное имя хоста), из другой сети — через VPN вроде Tailscale. Порт 22 в интернет не пробрасывать.
+
+**На компьютере агента:**
+
+1. Создать ключ и отдать владельцу хоста публичную часть (`~/.ssh/shop_mcp.pub`):
+
+   ```sh
+   ssh-keygen -t ed25519 -f ~/.ssh/shop_mcp -N "" -C shop-mcp-agent
+   ```
+
+2. Один раз подключиться вручную, чтобы принять ключ хоста. Сервер запустится и будет ждать ввода — выйти через Ctrl-C:
+
+   ```sh
+   ssh -i ~/.ssh/shop_mcp YOU@HOST
+   ```
+
+3. Подключить MCP-клиент (команду на хосте задаёт ключ, указывать путь не нужно):
+   - Claude Code:
+
+     ```sh
+     claude mcp add shop -s user -- ssh -i ~/.ssh/shop_mcp -o BatchMode=yes -o ServerAliveInterval=30 YOU@HOST
+     claude mcp list   # shop … ✔ Connected
+     ```
+
+   - Claude Desktop — в `claude_desktop_config.json`, раздел `mcpServers`, затем перезапуск приложения:
+
+     ```json
+     "shop": {
+       "command": "ssh",
+       "args": ["-i", "/Users/АГЕНТ/.ssh/shop_mcp", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", "YOU@HOST"]
+     }
+     ```
+
+   - Cursor, VS Code, Codex и другие клиенты — та же команда `ssh` с теми же аргументами.
+
+**Что нужно знать агенту:**
+
+- Как пользоваться инструментами и что работает, а что нет, сервер сообщает сам: в инструкциях при подключении и в описаниях инструментов.
+- Капчу и вход на сайт проходит только владелец на хосте (`shop-chrome show`, пройти, `shop-chrome hide`). Ответ с «⚠️ … shop-chrome show» — передать владельцу: с ограниченным ключом агент эту команду не выполнит.
+- Клики — адрес в `avito_item`, добавление в корзину AliExpress, корзина Яндекс Маркета — работают, только когда на хосте окно Chrome показано и открыта вкладка этого сайта.
+- `*_add_to_cart` и `*_remove_from_cart` меняют корзины владельца — только по его явной просьбе. Заказы сервер не оформляет.
+- Браузер на хосте один на всех: не делать параллельных вызовов к одному сайту, и не одновременно с агентом на самом хосте — вкладка сайта общая.
+- Есть и HTTP-режим (`server.py --http`, 127.0.0.1:8765, порт задан в коде), но без авторизации: только через SSH-туннель. SSH-вариант выше проще.
 
 ## мониторинг Авито в Telegram
 
