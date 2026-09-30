@@ -10,6 +10,6 @@ case $1 in
     osascript -l JavaScript -e "$js" >/dev/null ;;
   restart) launchctl kickstart -k gui/$(id -u)/local.shop-chrome ;;
   icon)  # its own Dock/⌘Tab icon, for this process only (dock_icon.py); the LaunchAgent runs it at every start
-    PATH=/opt/homebrew/bin:$PATH exec uv run --quiet --script "${0:A:h}/dock_icon.py" ;;
+    PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH exec uv run --quiet --script "${0:A:h}/dock_icon.py" ;;
   *) echo "usage: shop-chrome show|hide|restart|icon" >&2; exit 1 ;;
 esac

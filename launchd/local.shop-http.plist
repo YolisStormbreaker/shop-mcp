@@ -6,7 +6,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string><string>-c</string>
-    <string>export PATH=/opt/homebrew/bin:$PATH; exec uv run --quiet --script "$HOME/shop-mcp/server.py" --http</string>
+    <string>export PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH; exec uv run --quiet --script "$HOME/shop-mcp/server.py" --http</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

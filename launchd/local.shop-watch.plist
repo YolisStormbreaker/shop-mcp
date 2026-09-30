@@ -6,7 +6,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string><string>-c</string>
-    <string>export PATH=/opt/homebrew/bin:$PATH; exec uv run --quiet --script "$HOME/shop-mcp/watch.py"</string>
+    <string>export PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH; exec uv run --quiet --script "$HOME/shop-mcp/watch.py"</string>
   </array>
   <key>StartCalendarInterval</key>
   <array>
