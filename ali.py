@@ -132,7 +132,12 @@ def search(query, price_min=None, price_max=None, sort="default", limit=30):
 MONTHS = "января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря"
 PROP = '[class*="SkuPropertyItem__skuProp"]'
 OPT = '[class*="SkuPropertyItem__option__"]'
-CART_BTN = "[...document.querySelectorAll('button')].filter(b => b.innerText.trim() === 'В корзину' && b.getBoundingClientRect().height > 0).pop()"
+_BTN = "[...document.querySelectorAll('button')].filter(b => %s && b.getBoundingClientRect().height > 0).pop()"
+CART_BTN = _BTN % "b.innerText.trim() === 'В корзину'"
+# Some items sell only through the separate combo cart, which needs 1+1 items to check out;
+# their page has «В комбо-корзину\n<price>» instead of «В корзину».
+COMBO_BTN = _BTN % "b.innerText.trim().startsWith('В комбо-корзину')"
+PAGE_READY = _BTN % "/^(В корзину|В комбо-корзину|Купить сейчас)/.test(b.innerText.trim())"
 
 
 def _item_id(id_or_url):
@@ -155,7 +160,7 @@ def _click_js(tab, js_elem):
 
 def _open_item(tab, item_id, sku=None):
     url = f"https://aliexpress.ru/item/{item_id}.html" + (f"?sku_id={sku}" if sku else "")
-    tab.goto(url, "ali", wait_js=f"!!({CART_BTN}) || document.body.innerText.includes('Нет в наличии')")
+    tab.goto(url, "ali", wait_js=f"!!({PAGE_READY}) || document.body.innerText.includes('Нет в наличии')")
     time.sleep(1.2)
 
 
@@ -172,7 +177,7 @@ def _pdp_state(tab):
     return {"title": tab.js("document.querySelector('h1')?.innerText.trim() || ''"), "price": price,
             "delivery": list(dict.fromkeys(deliv)), "props": props,
             "sku": (re.search(r"sku_id=(\d+)", tab.js("location.search")) or [None, ""])[1],
-            "in_stock": bool(tab.js(f"!!({CART_BTN})"))}
+            "in_stock": bool(tab.js(f"!!({CART_BTN})")), "combo": bool(tab.js(f"!!({COMBO_BTN})"))}
 
 
 def _variants(tab, max_per_prop=25):
@@ -212,13 +217,13 @@ def item(id_or_url, sku=None, list_variants=True):
     tab = _tab()
     try:
         _open_item(tab, item_id, sku)
+        st = _pdp_state(tab)            # before the variant clicks change it
         variants = _variants(tab) if list_variants else []
-        if variants:
-            _open_item(tab, item_id, sku)  # back to the requested / default variant
-        st = _pdp_state(tab)
     finally:
         tab.close()
-    lines = [st["title"], f"id {item_id} · sku {st['sku']} · {st['price']}" + ("" if st["in_stock"] else " · НЕТ В НАЛИЧИИ"),
+    stock = ("" if st["in_stock"] else " · только комбо-корзина (купить можно от 2 товаров из комбо)"
+             if st["combo"] else " · НЕТ В НАЛИЧИИ")
+    lines = [st["title"], f"id {item_id} · sku {st['sku']} · {st['price']}" + stock,
              "выбрано: " + "; ".join(p for p in st["props"] if p)]
     lines += ["доставка:"] + [f"  {d}" for d in st["delivery"]] if st["delivery"] else ["доставка: не нашёл на странице"]
     for name, opts in variants:
@@ -240,6 +245,9 @@ def add_to_cart(id_or_url, sku=None, options=None):
         for k, v in (options or {}).items():
             _select(tab, k, v)
         st = _pdp_state(tab)
+        if not st["in_stock"] and st["combo"]:
+            return (f"не добавлено: «{st['title'][:80]}» продаётся только через комбо-корзину "
+                    "(отдельная корзина, оформить можно от 2 товаров) — положи вручную")
         if not st["in_stock"]:
             return f"не добавлено: «{st['title'][:80]}» нет в наличии для {st['props']}"
         before = _count(tab)
