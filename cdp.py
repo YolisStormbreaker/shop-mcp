@@ -11,6 +11,8 @@ from pathlib import Path
 
 from websockets.sync.client import connect
 
+from shoplog import log
+
 CDP = "http://127.0.0.1:9222"
 _ids = itertools.count(1)
 _last_nav: dict[str, float] = {}
@@ -82,6 +84,28 @@ class Tab:
             raise RuntimeError(d.get("exception", {}).get("description") or d.get("text"))
         return r["result"].get("value")
 
+    def heal(self, timeout: float = 30):
+        """Reload the page if a debugging probe is left in it.  Such a probe records requests
+        into window.__req and rejects POSTs, so a review is not sent while its form is studied.
+        On 2026-10-02 one stayed in the Ozon tab and every POST failed with «blocked by probe».
+        Not a check for native fetch(): AliExpress and Avito wrap fetch() themselves."""
+        try:
+            if not self.js("'__req' in window || String(window.fetch).includes('blocked by probe')", timeout=5):
+                return
+        except Exception:
+            return                      # blank or mid-navigation page: nothing to heal
+        log.warning("debugging probe left in %s, reloading the tab", self.js("location.href", timeout=5))
+        self.call("Page.reload")
+        deadline = time.time() + timeout
+        time.sleep(1.5)
+        while time.time() < deadline:
+            try:
+                if self.js("document.readyState", timeout=5) == "complete":
+                    return
+            except Exception:
+                pass
+            time.sleep(0.7)
+
     def click(self, selector: str) -> bool:
         """Real mouse click (isTrusted) on the element; some sites ignore el.click()."""
         pos = self.js(f"""(() => {{
@@ -121,10 +145,12 @@ def tab_for(domain: str) -> Tab:
     """The site's tab, held for this caller until tab.close()."""
     lock = _lock_site(domain)
     try:
-        return _find_tab(domain, lock)
+        tab = _find_tab(domain, lock)
     except BaseException:
         lock.close()
         raise
+    tab.heal()
+    return tab
 
 
 def _find_tab(domain: str, lock) -> Tab:
