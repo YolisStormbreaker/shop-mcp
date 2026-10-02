@@ -8,6 +8,7 @@ Run over ssh as a stdio MCP server, or with --http as a streamable HTTP server o
 127.0.0.1:8765 (published through a tunnel, see launchd/local.shop-http.plist).
 Output is compact TSV to keep token use low.
 No tool places orders or pays: Ozon and AliExpress stop at the cart.
+Reviews: the *_leave_review tools post a review under the user's name.
 """
 import functools
 import importlib
@@ -24,6 +25,7 @@ import ali
 import avito
 import orders
 import ozon
+import reviews
 from shoplog import log
 
 mcp = FastMCP("shop")
@@ -35,7 +37,7 @@ mcp = FastMCP("shop")
 # old function until ozon itself is reloaded.
 # shoplog is left alone: reloading it would add a second log handler.
 # A new tool still needs a restart: tools are registered from server.py once, at start.
-_RELOADABLE = ("cdp", "ali", "ozon", "avito", "orders")
+_RELOADABLE = ("cdp", "ali", "ozon", "avito", "orders", "reviews")
 _mtimes = {m: Path(sys.modules[m].__file__).stat().st_mtime for m in _RELOADABLE}
 _reload_lock = threading.Lock()
 
@@ -216,6 +218,49 @@ def ali_orders(query: str | None = None, limit: int = 30, max_new: int = 60) -> 
     Возвращает TSV: заказ, «дата · статус», сумма заказа, товар, вариант, цена, ссылка.
     """
     return orders.ali_orders(query, limit, max_new)
+
+
+@mcp.tool()
+@logged
+def ozon_reviews_waiting(limit: int = 30) -> str:
+    """Купленные на Ozon товары, которые ждут отзыва: sku, название, вариант."""
+    return reviews.ozon_waiting(limit)
+
+
+@mcp.tool()
+@logged
+def ozon_leave_review(sku_or_url: str, rating: int, text: str, anonymous: bool = False,
+                      accept_conditions: bool = False) -> str:
+    """Оставить отзыв на купленный товар Ozon: rating 1–5, text до 3000 символов.
+    Отзыв публикуется от имени пользователя. Оценку и смысл текста бери только у него:
+    не придумывай впечатления и не ставь оценку сам. Перед вызовом покажи ему итоговый текст
+    и оценку и дождись согласия. Фото не прикладываются.
+
+    Если за отзыв на товар дают баллы, Ozon сначала показывает условия; тогда отзыв не уходит,
+    а вернутся условия. Отправить всё равно — повторить с accept_conditions=True.
+    Уже оставленный отзыв не редактирует.
+    """
+    return reviews.ozon_review(sku_or_url, rating, text, anonymous, accept_conditions)
+
+
+@mcp.tool()
+@logged
+def ali_reviews_waiting(limit: int = 30) -> str:
+    """Купленные на AliExpress товары, которые ждут отзыва: строка заказа (для ali_leave_review),
+    id товара, название, вариант."""
+    return reviews.ali_waiting(limit)
+
+
+@mcp.tool()
+@logged
+def ali_leave_review(order_line_id: str, rating: int, text: str, anonymous: bool = False) -> str:
+    """Оставить отзыв на купленный товар AliExpress по строке заказа из ali_reviews_waiting:
+    rating 1–5, text до 10000 символов. Отзыв уходит на модерацию, её проходят за 48 часов.
+    Отзыв публикуется от имени пользователя. Оценку и смысл текста бери только у него:
+    не придумывай впечатления и не ставь оценку сам. Перед вызовом покажи ему итоговый текст
+    и оценку и дождись согласия. Фото не прикладываются.
+    """
+    return reviews.ali_review(order_line_id, rating, text, anonymous)
 
 
 if __name__ == "__main__":
