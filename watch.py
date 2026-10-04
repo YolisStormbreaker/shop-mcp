@@ -1,4 +1,4 @@
-"""Avito watch: new single-board computers under a total price, reserved ones skipped.
+"""Avito watch: new Raspberry Pi 4 and 5 boards under a total price, reserved ones skipped.
 
 Run by launchd on the Mac mini (local.shop-watch, 10:00 and 20:00): `uv run --script watch.py`.
 Sends new listings (price + cheapest delivery <= MAX_TOTAL) to Telegram (see tg.py) and remembers
@@ -22,21 +22,19 @@ import html  # noqa: E402
 import tg  # noqa: E402
 
 MAX_TOTAL = 6000
-QUERIES = ["raspberry pi 4", "raspberry pi 5", "orange pi"]
+QUERIES = ["raspberry pi 4", "raspberry pi 5"]
 SEEN = Path(__file__).parent / "logs" / "watch_seen.json"
 
-BOARD = re.compile(r"(raspberry|распберри|малин|rpi|\bpi)\s*(4|5|400|500)(b|\b)"
-                   r"|orange\s*pi\s*(3|4|5|6|800|zero\s*(2w|3))", re.I)
+BOARD = re.compile(r"(raspberry|распберри|малин|rpi|\bpi)\s*(4|5|400|500)(b|\b)", re.I)
+# Other boards whose titles also say "pi 4" or "pi 5".
+NOT_RPI = re.compile(r"orange|banana|wukong|rock\s*pi|nano\s*pi|zero", re.I)
 # Accessories and boards with too little RAM for a desktop (OpenBuilds Control, LinuxCNC).
 SKIP = re.compile(r"\bдля\b|корпус|кейс|case|блок питания|бп\b|кулер|радиатор|вентилятор|hat\b|ups|модуль|аксессуар|"
                   r"камер|дисплей|экран|монитор|кабель|адаптер|переходник|плата расширения|ssd|nvme|"
                   r"512\s*mb|1([.,]5)?\s*(gb|гб)\b|без платы", re.I)
 
-# How well a board suits LinuxCNC: (pattern, score, why). First match wins, so Orange Pi goes before "pi 5".
+# How well a board suits LinuxCNC: (pattern, score, why). First match wins.
 CNC = [
-    (r"zero\s*(2w|3)", 1, "слабый вариант: нет Ethernet для платы Mesa, официального образа нет"),
-    (r"orange\s*pi\s*5", 3, "мощный (RK3588S), но официального образа LinuxCNC нет, RT-ядро собирать самому"),
-    (r"orange\s*pi\s*(3|4)", 2, "официального образа нет, RT-ядро собирать самому; для OpenBuilds Control по USB хватит"),
     (r"\bpi\s*5|pi5", 5, "лучший выбор: есть официальный образ LinuxCNC с RT-ядром, самый быстрый"),
     (r"\bpi\s*4|pi4", 4, "хороший выбор: официальный образ LinuxCNC с RT-ядром, проверен сообществом"),
 ]
@@ -50,7 +48,7 @@ def cnc(title):
 
 
 def wanted(title):
-    return bool(BOARD.search(title)) and not SKIP.search(title)
+    return bool(BOARD.search(title)) and not SKIP.search(title) and not NOT_RPI.search(title)
 
 
 def scan(tab, query):

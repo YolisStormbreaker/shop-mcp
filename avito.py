@@ -19,7 +19,11 @@ LIST_JS = r"""
     return {
       id: el.getAttribute('data-item-id'),
       title: t(el.querySelector('[itemprop="name"]')?.textContent || a?.textContent),
-      price: price?.getAttribute('content') || t(el.querySelector('[data-marker="item-price"]')?.textContent),
+      // Redesigned cards (since ~2026-09-28) have no itemprop price: take the first "N ₽" of the price block,
+      // the crossed-out old price and the bonus line come after it.
+      price: price?.getAttribute('content')
+        || (t(el.querySelector('[class*="priceStep"]')?.textContent).match(/\d[\d ]*(?= ?₽)/) || [''])[0].replace(/\D/g, '')
+        || t(el.querySelector('[data-marker="item-price"]')?.textContent),
       date: t(el.querySelector('[data-marker="item-date"]')?.textContent),
       city: a ? new URL(a.href).pathname.split('/')[1] : '',
       delivery: [...el.querySelectorAll('p, span')].map(e => t(e.textContent)).find(s => /^Доставка/.test(s)) || '',
