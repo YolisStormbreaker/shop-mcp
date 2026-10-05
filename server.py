@@ -9,6 +9,7 @@ Run over ssh as a stdio MCP server, or with --http as a streamable HTTP server o
 Output is compact TSV to keep token use low.
 No tool places orders or pays: Ozon and AliExpress stop at the cart.
 Reviews: the *_leave_review tools post a review under the user's name.
+Avito messenger: avito_send sends a message under the user's name.
 """
 import functools
 import importlib
@@ -23,6 +24,7 @@ from mcp.server.fastmcp import FastMCP
 
 import ali
 import avito
+import messenger
 import orders
 import ozon
 import reviews
@@ -37,7 +39,7 @@ mcp = FastMCP("shop")
 # old function until ozon itself is reloaded.
 # shoplog is left alone: reloading it would add a second log handler.
 # A new tool still needs a restart: tools are registered from server.py once, at start.
-_RELOADABLE = ("cdp", "ali", "ozon", "avito", "orders", "reviews")
+_RELOADABLE = ("cdp", "ali", "ozon", "avito", "messenger", "orders", "reviews")
 _mtimes = {m: Path(sys.modules[m].__file__).stat().st_mtime for m in _RELOADABLE}
 _reload_lock = threading.Lock()
 
@@ -98,6 +100,43 @@ def avito_search(query: str, region: str = "sankt-peterburg", price_min: int | N
 def avito_item(url: str) -> str:
     """Детали объявления Авито: резерв (строка «⛔ ЗАРЕЗЕРВИРОВАН» — не советовать), цена, доставка в город из профиля и итог, адрес, продавец, параметры, описание (до 2500 символов)."""
     return avito.item(url)
+
+
+@mcp.tool()
+@logged
+def avito_chats(limit: int = 20, unread_only: bool = False, before: int | None = None) -> str:
+    """Чаты в мессенджере Авито, новые сверху. Чаты не отмечаются прочитанными.
+
+    unread_only=True — только непрочитанные. before — значение из строки «следующая страница».
+    Возвращает TSV: id чата (для avito_chat и avito_send), ● если не прочитан, когда, собеседник,
+    объявление, цена, последнее сообщение («я:» — моё), путь объявления.
+    """
+    return messenger.chats(limit, unread_only, before)
+
+
+@mcp.tool()
+@logged
+def avito_chat(chat_id: str, limit: int = 30, offset: int = 0) -> str:
+    """Переписка в чате Авито по id из avito_chats или ссылке на чат: собеседник, объявление,
+    сообщения от старых к новым («я» — мои, «Авито» — системные). Чат не отмечается прочитанным.
+    offset — сколько последних сообщений пропустить, чтобы листать назад.
+    """
+    return messenger.chat(chat_id, limit, offset)
+
+
+@mcp.tool()
+@logged
+def avito_send(text: str, chat_id: str | None = None, item_url: str | None = None) -> str:
+    """Отправить сообщение на Авито от имени пользователя: в существующий чат (chat_id из avito_chats)
+    или продавцу объявления (item_url — ссылка на объявление; чат откроется кнопкой «Написать сообщение»).
+    Только текст, без фото и файлов.
+
+    Перед вызовом покажи пользователю получателя и итоговый текст и дождись согласия.
+    Не пиши от его имени того, чего он не просил: цены, обещания, договорённости — только с его слов.
+    Ответ «отправлено» значит, что сообщение видно в истории чата. При «⚠️» сначала проверь
+    чат через avito_chat и не отправляй повторно вслепую.
+    """
+    return messenger.send(text, chat_id, item_url)
 
 
 @mcp.tool()
