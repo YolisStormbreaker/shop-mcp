@@ -166,6 +166,24 @@ def _wait(tab, js, seconds):
     return False
 
 
+def _click_biggest(tab, selector):
+    """Real mouse click on the largest visible element matching selector."""
+    pos = tab.js(f"""(() => {{
+      const area = e => {{ const r = e.getBoundingClientRect(); return r.width * r.height; }};
+      const b = [...document.querySelectorAll({json.dumps(selector)})].filter(e => e.offsetParent !== null).sort((x, y) => area(y) - area(x))[0];
+      if (!b) return null;
+      b.scrollIntoView({{block: 'center'}});
+      const r = b.getBoundingClientRect();
+      return [r.x + r.width / 2, r.y + r.height / 2];
+    }})()""")
+    if not pos:
+        return False
+    time.sleep(0.4)
+    for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
+        tab.call("Input.dispatchMouseEvent", type=typ, x=pos[0], y=pos[1], button="left", clickCount=1)
+    return True
+
+
 def _type_and_send(tab, text):
     """Focus the reply box, insert the text as real input, press Enter. False if there is no reply box."""
     if not _wait(tab, f"!!document.querySelector({json.dumps(INPUT)})", 10):
@@ -194,13 +212,19 @@ def send(text, chat_id=None, item_url=None):
     cid = _channel_id(chat_id) if chat_id else None
     tab = tab_for("avito.ru")
     try:
+        # In a background tab the listing's button does nothing (2026-10-06): bring the tab forward
+        # and make the page believe it has focus.
+        tab.call("Page.bringToFront")
+        tab.call("Emulation.setFocusEmulationEnabled", enabled=True)
         if cid:
             tab.goto(f"https://www.avito.ru/profile/messenger/channel/{cid}", "avito",
                      wait_js=f"document.querySelector({json.dumps(INPUT)})")
         else:
             tab.goto(item_url, "avito", wait_js="document.querySelector('[data-marker=\"messenger-button/button\"]')")
-            if not tab.click('[data-marker="messenger-button/button"]'):
-                return "на странице объявления нет кнопки «Написать сообщение» — ничего не отправлено"
+            # The page has two such buttons; the first sits in a sticky header off screen. Click the biggest.
+            if not _click_biggest(tab, '[data-marker="messenger-button/button"]'):
+                h1 = " ".join((tab.js("document.querySelector('h1')?.textContent") or "").split())
+                return f"на странице объявления нет кнопки «Написать сообщение» (заголовок: «{h1}») — ничего не отправлено"
         if not _type_and_send(tab, text):
             return "не нашёл поле ввода сообщения — ничего не отправлено. Чат закрыт или страница не загрузилась."
         # The message shows up in history within a second or two. A chat opened from a listing
@@ -221,6 +245,10 @@ def send(text, chat_id=None, item_url=None):
             if any(_mine(m) and _text(m) == flat for m in h.get("items") or []):
                 return f"отправлено в чат {cid}"
     finally:
+        try:
+            tab.call("Emulation.setFocusEmulationEnabled", enabled=False)
+        except Exception:
+            pass
         tab.close()
     log.warning("avito send: message not seen in history, chat %s", cid)
     return (f"⚠️ Enter нажат, но в истории чата {cid or '(не определён)'} сообщения не видно. "
