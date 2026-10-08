@@ -390,10 +390,24 @@ def lamoda_search(query: str, price_min: int | None = None, price_max: int | Non
 
 @mcp.tool()
 @logged
-def lamoda_item(sku_or_url: str) -> str:
-    """Карточка товара Lamoda по sku или ссылке: цена, продавец, можно ли вернуть,
-    размеры с остатками, характеристики, описание (до 2500 символов)."""
-    return lamoda.item(sku_or_url)
+def lamoda_item(sku_or_url: str, full: bool = False) -> str:
+    """Карточка товара Lamoda по sku или ссылке: цена, все цены со скидками (исходная, по программе лояльности,
+    акция, промокод), продавец, можно ли вернуть, размеры с остатками, доставка в город пользователя
+    (срок, способ, цена, примерка), рейтинг, ссылки на фото (смотреть — shop_images), характеристики,
+    описание (до 2500 символов; full=True — целиком). Отзывы — lamoda_reviews."""
+    return lamoda.item(sku_or_url, full)
+
+
+@mcp.tool()
+@logged
+def lamoda_reviews(sku_or_url: str, sort: str = "useful", with_media: bool = False, page: int = 1,
+                   this_color: bool = False, limit: int = 20) -> str:
+    """Отзывы Lamoda о товаре (sku или ссылка): рейтинг, число отзывов и фото, сводка посадки (размер, полнота,
+    температура); по каждому дата, звёзды, «полезно» +/−, купленный размер и цвет, автор, текст с оценками посадки,
+    ссылки на фото (смотреть — shop_images). По умолчанию отзывы на все цвета модели, this_color=True — только этот.
+    sort: useful (по умолчанию), new, high, low. with_media=True — только с фото. page=2, 3… по limit отзывов.
+    У отзывов в ответе API только фото, видео нет."""
+    return lamoda.reviews(sku_or_url, sort, with_media, page, this_color, limit)
 
 
 @mcp.tool()

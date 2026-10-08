@@ -1,4 +1,4 @@
-"""Lamoda: search, product card and cart (view, add, remove). Never checks out.
+"""Lamoda: search, product card, reviews and cart (view, add, remove). Never checks out.
 
 Pages are server-rendered with the data in window.__NUXT__ (products, prices with every discount
 applied, sizes in stock), so we read that state instead of the markup.
@@ -44,7 +44,12 @@ ITEM_JS = f"""
     seller: p.seller?.title || '', returnable: !!p.is_returnable, in_stock: !!p.is_in_stock,
     sizes: (p.sizes || []).map(s => `${{s.title}}${{s.brand_title && s.brand_title !== s.title ? ` (${{s.brand_size_system}} ${{s.brand_title}})` : ''}}: ${{s.stock_quantity ? s.stock_quantity + ' шт' : 'нет'}}`),
     attrs: (p.attributes || []).map(a => `${{a.title}}: ${{a.value}}`),
-    description: (p.description || '').slice(0, 2500),
+    description: p.description || '',
+    // every price the site knows: original, and each discount with its kind (loyalty, action, promocode)
+    prices: Object.entries(p.prices || {{}}).map(([k, x]) => `${{k}} ${{x.price}} ₽` + (x.discount ? ` (−${{x.discount.percent}}%${{x.discount.promocode ? ', промокод ' + x.discount.promocode : ''}})` : '')),
+    delivery: [p.delivery?.best_delivery_info?.description || '', ...(p.delivery?.best_delivery_info?.delivery_data || []).map(d => d[d.type]?.info?.title || '')].filter(Boolean),
+    photos: (p.gallery || []).map(x => 'https://a.lmcdn.ru/product' + x),
+    rating: p.average_rating || '', reviews: p.counters?.reviews || 0,
   }};
 }})()
 """
@@ -86,7 +91,7 @@ def search(query, price_min=None, price_max=None, sort="default", page=1, limit=
     return head + "\n" + ("\n".join(rows) if rows else "(пусто)")
 
 
-def item(sku_or_url):
+def item(sku_or_url, full=False):
     s = sku_or_url.strip()
     if s.startswith("/"):
         s = "https://www.lamoda.ru" + s
@@ -107,10 +112,62 @@ def item(sku_or_url):
     lines = [f"{r['title']} ({r['kind']}) — {r['price']} ₽" + (f", без скидок {r['base']} ₽" if r["base"] and r["base"] > r["price"] else ""),
              url.split("?")[0], f"sku: {r['sku']} · продавец: {r['seller']} · " + ("можно вернуть" if r["returnable"] else "⚠️ без возврата")]
     lines.append("размеры: " + "; ".join(r["sizes"]) if r["sizes"] else ("в наличии" if r["in_stock"] else "нет в наличии"))
+    if r["prices"]:
+        lines.append("цены: " + "; ".join(r["prices"]))
+    if r["delivery"]:
+        lines.append("доставка: " + "; ".join(r["delivery"]))
+    lines.append(f"рейтинг {r['rating'] or '—'}, отзывов на этот цвет {r['reviews']} (все цвета — lamoda_reviews)")
+    if r["photos"]:
+        lines.append("фото (shop_images): " + " ".join(r["photos"][:10]))
     if r["attrs"]:
         lines.append("характеристики: " + "; ".join(r["attrs"]))
-    lines.append("\n" + r["description"])
+    lines.append("\n" + (r["description"] if full else r["description"][:2500]))
     return "\n".join(lines)
+
+
+# The product page's own review client (productReviewsV2 in its code). only_with_photos was found by trying
+# names: with_photos and filters=["photo"] are ignored. with_related adds the other colors of the model.
+REVIEW_SORTS = {"useful": ("ranking_score", "desc"), "new": ("date", "desc"), "high": ("rating", "desc"), "low": ("rating", "asc")}
+
+
+def reviews(sku_or_url, sort="useful", with_media=False, page=1, this_color=False, limit=20):
+    if sort not in REVIEW_SORTS:
+        return f"sort: одно из {', '.join(REVIEW_SORTS)}"
+    m = re.search(r"/p/([a-z0-9]+)", sku_or_url, re.I) or re.fullmatch(r"\s*([a-z0-9]{10,})\s*", sku_or_url, re.I)
+    if not m:
+        return "нужен sku Lamoda или ссылка https://www.lamoda.ru/p/<sku>/..."
+    sku = m.group(1).upper()
+    by, direction = REVIEW_SORTS[sort]
+    body = {"limit": limit, "offset": (page - 1) * limit, "sku": sku, "with_related": not this_color,
+            "sort": by, "sort_direction": direction}
+    if with_media:
+        body["only_with_photos"] = True
+    tab = _lm_tab()
+    try:
+        d = _api(tab, "POST", "/api/v1/product/reviews_v2", body)
+        info = _api(tab, "GET", f"/api/v1/product/reviews_info?sku={sku}&with_related={'false' if this_color else 'true'}") or {}
+    finally:
+        tab.close()
+    if d is None:
+        return BLOCKED
+    total = d.get("total") or 0
+    fit = "; ".join(v.get("title", "") for v in (info.get("average_fittings") or {}).values() if isinstance(v, dict) and v.get("title"))
+    head = (f"Lamoda · {sku}: рейтинг {info.get('average_rating') or '—'}, отзывов {info.get('total_review_count', total)}, "
+            f"фото в отзывах {info.get('total_photos_count', d.get('total_photos', 0))}" + (f" · по отзывам: {fit}" if fit else "") + "\n"
+            f"{'только этот цвет' if this_color else 'все цвета модели'}: {total}{' с фото' if with_media else ''}, "
+            f"страница {page} из {max(1, -(-total // limit))} по {limit}, сортировка {sort}\n"
+            "дата\t★\tполезно +/−\tкуплено (размер, цвет)\tавтор\tтекст\tфото (shop_images)")
+    rows = []
+    for x in d.get("reviews") or []:
+        sn = x.get("snippet") or {}
+        pur = sn.get("purchase") or {}
+        bought = ", ".join(v for v in [pur.get("value", ""), *((pur.get("combines") or {}).values())] if v)
+        params = "; ".join(p.get("title", "") for p in sn.get("item_params") or [] if p.get("title"))
+        text = " ".join(((x.get("text") or "") + (f" | {params}" if params else "")).split())
+        photos = [p["url"] for p in x.get("photos") or [] if p.get("url")]
+        rows.append(f"{(x.get('created_time') or '')[:10]}\t{x.get('rating', '')}\t+{x.get('like_count', 0)}/−{x.get('dislike_count', 0)}\t"
+                    f"{bought}\t{(sn.get('header') or {}).get('author', '')}\t{text}\t{' '.join(photos)}")
+    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
 
 
 # Cart: the site's own API client (cartGet / cartAdd / cartRemove in its code) — same-origin JSON with
