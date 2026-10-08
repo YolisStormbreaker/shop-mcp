@@ -282,10 +282,26 @@ def wb_search(query: str, price_min: int | None = None, price_max: int | None = 
 
 @mcp.tool()
 @logged
-def wb_item(id_or_url: str) -> str:
-    """Карточка товара Wildberries по артикулу или ссылке: цена, наличие, оценка срока доставки,
-    продавец (рейтинг, число продаж, год регистрации), характеристики, описание (до 2500 символов)."""
-    return wb.item(id_or_url)
+def wb_item(id_or_url: str, full: bool = False) -> str:
+    """Карточка товара Wildberries по артикулу или ссылке: цена, цена до скидок и скидка в %, наличие,
+    оценка срока доставки на адрес пользователя, продавец (рейтинг, число продаж, год регистрации),
+    история цены по неделям (мин, макс, последние), ссылки на фото (смотреть — shop_images),
+    характеристики, описание (до 2500 символов; full=True — целиком). Отзывы — wb_reviews."""
+    return wb.item(id_or_url, full)
+
+
+@mcp.tool()
+@logged
+def wb_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False,
+               page: int = 1, limit: int = 20) -> str:
+    """Отзывы Wildberries о товаре (артикул или ссылка): рейтинг, число отзывов (с текстом, фото, видео),
+    распределение звёзд; по каждому дата, звёзды, голоса «полезно» +/−, цвет и размер, имя, текст
+    (+ достоинства | − недостатки | текст | ответ продавца), ссылки на фото (смотреть — shop_images)
+    и видео (HLS index.m3u8 и картинка-превью для shop_images).
+    WB отдаёт до ~1000 отзывов с текстом на карточку (все цвета и размеры), сортировка и страницы — по ним.
+    sort: useful (по голосам, по умолчанию), new, high, low. with_media=True — только с фото или видео.
+    page=2, 3… — следующие limit отзывов."""
+    return wb.reviews(id_or_url, sort, with_media, page, limit)
 
 
 @mcp.tool()

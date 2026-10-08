@@ -1,14 +1,16 @@
-"""Wildberries: search, product card and cart (view, add, remove). Never checks out.
+"""Wildberries: search, product card, reviews and cart (view, add, remove). Never checks out.
 
 WB signs its API calls with a bearer token and device headers, so the site's own page makes
 the request and we take the JSON it got (capture.py).
 Region (dest) and prices are the user's, as the page sees them.
 """
 import datetime
+import gzip
 import json
 import re
 import time
 import urllib.parse
+import urllib.request
 
 from capture import capture
 from cdp import tab_for
@@ -80,41 +82,156 @@ def _nm(id_or_url):
     return m.group(1) if m else None
 
 
-def item(id_or_url):
+def _get(url):
+    """Public WB JSON (CDN, feedbacks): no token needed. Feedbacks come gzipped even unasked."""
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 Chrome/154", "Accept-Encoding": "gzip"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        b = r.read()
+    return json.loads(gzip.decompress(b) if b[:2] == b"\x1f\x8b" else b)
+
+
+_imt: dict[str, int] = {}   # nm → imt (the card that groups colors; reviews are per imt)
+
+
+def _open(nm, patterns):
+    """(captured JSON, product from detail, CDN folder of the product) from its page.
+    The CDN host comes from a route map the page fetches at runtime (basket-NN from the bundle's
+    table gave 404 on 2026-10-08), so it is taken from a photo or card.json the page loaded."""
+    tab = tab_for("wildberries.ru")
+    try:
+        d = capture(tab, "wb", f"https://www.wildberries.ru/catalog/{nm}/detail.aspx",
+                    {"detail": ["/cards/v4/detail", f"nm={nm}"], **patterns})
+        base = tab.js("(performance.getEntriesByType('resource').map(e => e.name)"
+                      f".find(n => /\\/vol\\d+\\/part\\d+\\/{nm}\\//.test(n)) || '').split('/{nm}/')[0]")
+    finally:
+        tab.close()
+    p = next((x for x in (d.get("detail") or {}).get("products", []) if str(x.get("id")) == nm), None)
+    if p and p.get("root"):
+        _imt[nm] = p["root"]
+    return d, p, f"{base}/{nm}" if base else ""
+
+
+def _day(ts):
+    d = datetime.date.fromtimestamp(ts)
+    return f"{d.day} {MONTHS[d.month - 1]} {d.year % 100:02d}"
+
+
+def _history(base):
+    """Weekly price, kopecks; 404 for some products."""
+    try:
+        h = [(x["dt"], x["price"]["RUB"] // 100) for x in _get(f"{base}/info/price-history.json")]
+    except Exception:
+        return ""
+    if not h:
+        return ""
+    lo, hi = min(h, key=lambda x: x[1]), max(h, key=lambda x: x[1])
+    return (f"история цены, ₽ по неделям: мин {lo[1]} ({_day(lo[0])}), макс {hi[1]} ({_day(hi[0])}); последние: "
+            + ", ".join(f"{_day(t)} {v}" for t, v in h[-8:]))
+
+
+def item(id_or_url, full=False):
     nm = _nm(id_or_url)
     if not nm:
         return "нужен артикул WB или ссылка вида https://www.wildberries.ru/catalog/<id>/detail.aspx"
     url = f"https://www.wildberries.ru/catalog/{nm}/detail.aspx"
-    tab = tab_for("wildberries.ru")
-    try:
-        d = capture(tab, "wb", url, {"detail": ["/cards/v4/detail", f"nm={nm}"],
-                                "card": [f"/{nm}/info/ru/card.json"],
-                                "seller": ["/api/v1/suppliers/"]})
-    finally:
-        tab.close()
-    p = next((x for x in (d.get("detail") or {}).get("products", []) if str(x.get("id")) == nm), None)
+    d, p, base = _open(nm, {"seller": ["/api/v1/suppliers/"]})
     if not p:
         log.warning("wb item %s: no detail response, got %s", nm, list(d))
         return BLOCKED
-    card, seller = d.get("card") or {}, d.get("seller") or {}
+    card, seller = {}, d.get("seller") or {}
+    if base:
+        try:
+            card = _get(f"{base}/info/ru/card.json")   # the page loads it not for every product
+        except Exception as e:
+            log.warning("wb item %s: card.json: %s", nm, e)
     price, basic = _price(p)
-    lines = [f"{p.get('name', '')} — {price} ₽ без WB Кошелька (с ним на сайте на несколько % ниже)"
-             + (f", до скидок {basic} ₽" if basic > price else ""), url]
+    if price:
+        head = (f"{p.get('name', '')} — {price} ₽ без WB Кошелька (с ним на сайте на несколько % ниже)"
+                + (f", до скидок {basic} ₽ (−{round(100 - price * 100 / basic)}%)" if basic > price else ""))
+    else:
+        head = f"{p.get('name', '')} — цены нет: товара нет в наличии (последние цены — в истории ниже)"
+    lines = [head, url]
     stock = f"в наличии: {p['totalQuantity']} шт" if p.get("totalQuantity") else "нет в наличии"
     lines.append(f"бренд: {p.get('brand') or '—'} · рейтинг {p.get('reviewRating') or '—'} ({p.get('feedbacks', 0)} отзывов) · {stock}")
     if p.get("totalQuantity") and _eta(p):
-        lines.append(f"привезут {_eta(p)} (оценка по сроку доставки)")
+        lines.append(f"привезут {_eta(p)} (оценка по сроку доставки на адрес из профиля)")
     s = f"продавец: {p.get('supplier', '')}, рейтинг {seller.get('valuation') or p.get('supplierRating') or '—'}"
     if seller.get("saleItemQuantity"):
         s += f", продаж {seller['saleItemQuantity']}"
     if seller.get("registrationDate"):
         s += f", на WB с {seller['registrationDate'][:4]}"
     lines.append(s)
+    if base:
+        if hist := _history(base):
+            lines.append(hist)
+        lines.append("фото (shop_images): " + " ".join(f"{base}/images/big/{i}.webp" for i in range(1, min(p.get("pics") or 0, 10) + 1)))
+    lines.append("отзывы: wb_reviews")
     specs = [f"{o['name']}: {o['value']}" for g in card.get("grouped_options") or [] for o in g.get("options", [])]
     if specs:
         lines.append("характеристики: " + "; ".join(specs))
-    lines.append("\n" + (card.get("description") or "")[:2500])
+    desc = card.get("description") or ""
+    lines.append("\n" + (desc if full else desc[:2500]))
     return "\n".join(lines)
+
+
+REVIEW_SORTS = ("useful", "new", "high", "low")
+
+
+def _media(f):
+    """Photo and video URLs of a review, as the site builds them (volFeedbackPhotoUuidHost and
+    volFeedbackVideoHost in its bundle): key "5/<uuid>" → feedback-05.wbbasket.ru/<uuid>/fs.webp.
+    Video: preview.webp and an HLS index.m3u8 (there is no .mp4 for these)."""
+    out = []
+    for ph in f.get("photos") or []:
+        if "/" in str(ph.get("key") or ""):
+            n, u = ph["key"].split("/", 1)
+            out.append(f"https://feedback-{int(n):02d}.wbbasket.ru/{u}/fs.webp")
+    v = f.get("video") or {}
+    if "/" in str(v.get("id") or ""):
+        n, u = v["id"].split("/", 1)
+        host = f"https://videofeedback{int(n):02d}.wbbasket.ru/{u}"
+        out.append(f"видео {v.get('durationSec', '?')} с: {host}/index.m3u8 превью {host}/preview.webp")
+    return out
+
+
+def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=20):
+    nm = _nm(id_or_url)
+    if not nm:
+        return "нужен артикул WB или ссылка вида https://www.wildberries.ru/catalog/<id>/detail.aspx"
+    if sort not in REVIEW_SORTS:
+        return f"sort: одно из {', '.join(REVIEW_SORTS)}"
+    if nm not in _imt:
+        _open(nm, {})      # imt (root) is only in the token-signed detail the page itself requests
+    if not _imt.get(nm):
+        return BLOCKED
+    imt = _imt[nm]
+    host = _get(f"https://feedback-bt.wildberries.ru/feedback/api/v2/host?imt={imt}")[0]
+    d = _get(f"{host}/feedbacks/v2/{imt}")
+    fb = d.get("feedbacks") or []
+    if with_media:
+        fb = [f for f in fb if f.get("photos") or f.get("video")]
+    key = {"useful": lambda f: ((f.get("votes") or {}).get("pluses", 0) - (f.get("votes") or {}).get("minuses", 0), f.get("createdDate", "")),
+           "new": lambda f: f.get("createdDate", ""),
+           "high": lambda f: (f.get("productValuation", 0), f.get("createdDate", "")),
+           "low": lambda f: (-f.get("productValuation", 0), f.get("createdDate", ""))}[sort]
+    fb.sort(key=key, reverse=True)
+    pages = max(1, -(-len(fb) // limit))
+    dist = d.get("valuationDistributionPercent") or {}
+    head = (f"Wildberries · артикул {nm} (карточка {imt}): рейтинг {d.get('valuation') or '—'}, отзывов {d.get('feedbackCount', 0)} "
+            f"(с текстом {d.get('feedbackCountWithText', 0)}, с фото {d.get('feedbackCountWithPhoto', 0)}, с видео {d.get('feedbackCountWithVideo', 0)}) · "
+            + " ".join(f"{k}★ {dist[k]}%" for k in sorted(dist, reverse=True)) + "\n"
+            f"WB отдаёт до ~1000 отзывов с текстом, сортировка и страницы — по ним: {len(fb)}{' с фото или видео' if with_media else ''}, "
+            f"страница {page} из {pages} по {limit}, сортировка {sort}. Отзывы на все цвета и размеры карточки.\n"
+            "дата\t★\tполезно +/−\tцвет, размер\tавтор\tтекст\tфото (shop_images), видео")
+    rows = []
+    for f in fb[(page - 1) * limit: page * limit]:
+        votes = f.get("votes") or {}
+        variant = ", ".join(x for x in (f.get("color"), f.get("size")) if x and x != "0")
+        text = " | ".join(x for x in (f"+ {f['pros']}" if f.get("pros") else "", f"− {f['cons']}" if f.get("cons") else "",
+                                      f.get("text") or "", f"ответ продавца: {f['answer'].get('text', '')[:300]}" if f.get("answer") else "") if x)
+        rows.append(f"{(f.get('createdDate') or '')[:10]}\t{f.get('productValuation')}\t+{votes.get('pluses', 0)}/−{votes.get('minuses', 0)}\t"
+                    f"{variant}\t{(f.get('wbUserDetails') or {}).get('name', '')}\t{' '.join(text.split())}\t{' '.join(_media(f))}")
+    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
 
 
 CART = "https://www.wildberries.ru/lk/basket"
