@@ -175,13 +175,17 @@ def _pdp_state(tab):
             "in_stock": bool(tab.js(f"!!({CART_BTN})")), "combo": bool(tab.js(f"!!({COMBO_BTN})"))}
 
 
-def _skus(tab, item_id):
+def _product_data(tab, item_id):
+    return _fetch(tab, f"/aer-jsonapi/v1/bx/pdp/web/productData?productId={item_id}&sourceId=0&sku_id=0", method="GET")
+
+
+def _skus(tab, item_id, d=None):
     """Every variant from the product API: [{label, sku, price, stock, props}], no clicking.
 
     Clicking through options (the old way) does nothing in a background tab and returned the
     default variant for every option (seen 2026-09-30).
     """
-    d = _fetch(tab, f"/aer-jsonapi/v1/bx/pdp/web/productData?productId={item_id}&sourceId=0&sku_id=0", method="GET")
+    d = d or _product_data(tab, item_id)
     info = (d.get("data") or {}).get("skuInfo") or {}
     values = {v["id"]: (p["name"], v) for p in info.get("propertyList") or [] for v in p.get("values") or []}
     out = []
@@ -206,24 +210,93 @@ def _sku_for(variants, options):
     return hits[0]["sku"]
 
 
-def item(id_or_url, sku=None, list_variants=True):
+# Characteristics and the seller's description are rendered into the page, not fetched by an API.
+CONTENT_JS = """({chars: document.querySelector('#characteristics_anchor')?.innerText || '',
+  desc: document.querySelector('#content_anchor')?.innerText || '',
+  imgs: [...(document.querySelector('#content_anchor')?.querySelectorAll('img') || [])].map(i => i.src || i.dataset.src).filter(Boolean)})"""
+
+
+def item(id_or_url, sku=None, list_variants=True, full=False):
     item_id = _item_id(id_or_url)
     tab = _tab()
     try:
         _open_item(tab, item_id, sku)
         st = _pdp_state(tab)
-        variants = _skus(tab, item_id) if list_variants else []
+        content = tab.js(CONTENT_JS)
+        d = _product_data(tab, item_id)
+        variants = _skus(tab, item_id, d) if list_variants else []
     finally:
         tab.close()
+    data = d.get("data") or {}
     stock = ("" if st["in_stock"] else " · только комбо-корзина (купить можно от 2 товаров из комбо)"
              if st["combo"] else " · НЕТ В НАЛИЧИИ")
     lines = [st["title"], f"id {item_id} · sku {st['sku']} · {st['price']}" + stock,
              "выбрано: " + "; ".join(p for p in st["props"] if p)]
     lines += ["доставка:"] + [f"  {d}" for d in st["delivery"]] if st["delivery"] else ["доставка: не нашёл на странице"]
+    pr, rating = data.get("price") or {}, data.get("rating") or {}
+    if pr.get("discount"):
+        lines.append(f"скидка {pr['discount']}%: {pr.get('formattedActivityPrice')} вместо {pr.get('formattedPrice')} (диапазон — по всем вариантам)")
+    lines.append(f"рейтинг {rating.get('middle') or '—'}, отзывов {data.get('reviews') or 0}, "
+                 f"{(data.get('tradeInfo') or {}).get('formatTradeCount') or 'покупок —'}"
+                 + (f" · бренд {(data.get('productInfo') or {}).get('brand')}" if (data.get("productInfo") or {}).get("brand") else ""))
     if variants:
         lines.append("варианты (свойства\tsku\tцена\tостаток):")
         lines += [f"  {v['label']}\t{v['sku']}\t{v['price']}\t{v['stock'] or 'нет'}" for v in variants]
+    gallery = data.get("gallery") or []
+    photos = [g["imageUrl"] for g in gallery if g.get("imageUrl")]
+    if photos:
+        lines.append("фото (shop_images): " + " ".join(photos[:10]))
+    videos = [g["videoUrl"] for g in gallery if g.get("videoUrl")]
+    if videos:
+        lines.append("видео: " + " ".join(videos))
+    if content.get("imgs"):
+        lines.append("картинки в описании (shop_images): " + " ".join(content["imgs"][:8]))
+    lines.append("отзывы: ali_reviews")
+    chars = content.get("chars", "").split("\n")[1:]          # first line is the heading
+    if chars:
+        lines.append("характеристики: " + "; ".join(f"{a}: {b}" for a, b in zip(chars[::2], chars[1::2])))
+    desc = re.sub(r"\n\s*\n+", "\n", content.get("desc", "")).strip()
+    if desc:
+        lines.append("описание продавца:\n" + (desc if full else desc[:2500]))
     return "\n".join(lines)
+
+
+REVIEW_SORTS = {"useful": 1, "new": 2, "high": 3, "low": 4}   # values of the site's own sort chips
+
+
+def reviews(id_or_url, sort="useful", with_media=False, page=1):
+    """The site's review list API (RedReviewsProductFeedbackList widget). pageSize other than 10 → «Неверный запрос»."""
+    if sort not in REVIEW_SORTS:
+        return f"sort: одно из {', '.join(REVIEW_SORTS)}"
+    item_id = _item_id(id_or_url)
+    tab = _tab()
+    try:
+        r = _fetch(tab, "/aer-jsonapi/review/v5/desktop/product-reviews",
+                   {"productKey": {"id": item_id, "sourceId": 0}, "pagination": {"pageNum": page, "pageSize": 10},
+                    "sort": REVIEW_SORTS[sort], "filters": [1] if with_media else [], "skuFilter": []})
+        data = _product_data(tab, item_id).get("data") or {}
+    finally:
+        tab.close()
+    if r.get("error"):
+        return f"AliExpress не отдал отзывы: {r['error'].get('message')}"
+    total = int(data.get("reviews") or 0)
+    head = (f"AliExpress · товар {item_id}: рейтинг {(data.get('rating') or {}).get('middle') or '—'}, отзывов {total}\n"
+            f"страница {page} из {max(1, -(-total // 10))} (по 10; с фильтром страниц меньше), сортировка {sort}"
+            f"{', только с фото' if with_media else ''}. У отзывов в ответе API только фото, видео нет.\n"
+            "дата\t★\tполезно\tвариант\tавтор\tтекст\tфото (shop_images)")
+    rows = []
+    for x in (r.get("data") or {}).get("reviews") or []:
+        root = x.get("root") or {}
+        text = root.get("text") or ""
+        add = x.get("additional") or {}
+        if add.get("text"):
+            text += f" | дополнение: {add['text']}"
+        text += "".join(f" | ответ: {c.get('text', '')}" for c in root.get("comments") or [] if c.get("text"))
+        photos = [i["url"] for i in (root.get("images") or []) + (add.get("images") or []) if i.get("url")]
+        rows.append(f"{root.get('date', '')}\t{root.get('grade', '')}\t{(x.get('interaction') or {}).get('likesAmount', 0)}\t"
+                    f"{(x.get('product') or {}).get('skuProperties') or ''}\t{(x.get('reviewer') or {}).get('name', '')}\t"
+                    f"{' '.join(text.split())}\t{' '.join(photos)}")
+    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
 
 
 def _count(tab):

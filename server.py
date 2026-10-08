@@ -214,12 +214,24 @@ def ali_search(query: str, price_min: int | None = None, price_max: int | None =
 
 @mcp.tool()
 @logged
-def ali_item(id_or_url: str, sku: str | None = None, list_variants: bool = True) -> str:
-    """Товар AliExpress: цена, точные даты и цена доставки по способам, варианты — все комбинации
-    свойств с sku, ценой и остатком (из API сайта). sku — открыть конкретный вариант.
-    list_variants=False — без списка вариантов.
+def ali_item(id_or_url: str, sku: str | None = None, list_variants: bool = True, full: bool = False) -> str:
+    """Товар AliExpress: цена, скидка в %, точные даты и цена доставки по способам, рейтинг, число отзывов
+    и покупок, бренд, варианты — все комбинации свойств с sku, ценой и остатком (из API сайта),
+    ссылки на фото и видео товара и на картинки из описания (смотреть — shop_images), характеристики,
+    описание продавца (до 2500 символов; full=True — целиком). Отзывы — ali_reviews.
+    sku — открыть конкретный вариант. list_variants=False — без списка вариантов.
     """
-    return ali.item(id_or_url, sku, list_variants)
+    return ali.item(id_or_url, sku, list_variants, full)
+
+
+@mcp.tool()
+@logged
+def ali_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False, page: int = 1) -> str:
+    """Отзывы AliExpress о товаре (id или ссылка): рейтинг и число отзывов; по каждому дата, звёзды,
+    лайки, вариант, автор, текст (с дополнением покупателя и ответами), ссылки на фото (смотреть — shop_images).
+    sort: useful (по умолчанию), new, high, low. with_media=True — только с фото (фильтр сайта).
+    По 10 на страницу (другой размер сайт не принимает), page=2, 3… Видео у отзывов API не отдаёт."""
+    return ali.reviews(id_or_url, sort, with_media, page)
 
 
 @mcp.tool()
