@@ -1,4 +1,4 @@
-"""Yandex Market: search, product card and cart (view; add and remove need the tab on screen). Never checks out.
+"""Yandex Market: search, product card, reviews and cart (view; add and remove need the tab on screen). Never checks out.
 
 Search results are server-rendered; every snippet carries its data as JSON in data-zone-data,
 so the page is parsed rather than an API called. Prices and delivery are for the user's region.
@@ -58,7 +58,10 @@ ITEM_JS = r"""
       return (k >= 0 ? v.slice(0, k + 1) : v.slice(0, 1)).join(' ');
     }),
     specs, sku: z.marketSku || '', cross: z.isCrossBorder === 'true',
-    description: t(document.querySelector('[data-zone-name="description"]')?.innerText).replace(/Всё описание$/, '').slice(0, 2500),
+    description: t(document.querySelector('[data-zone-name="description"]')?.innerText).replace(/Всё описание$/, ''),
+    // gallery thumbnails come in several sizes of one picture; /orig is the full one
+    photos: [...new Set([...document.querySelectorAll('[data-zone-name="pictureGallery"] img')].map(i => i.src)
+      .filter(s => /get-mpic/.test(s)).map(s => s.replace(/\/[^/]+$/, '/orig')))],
   };
 })()
 """
@@ -118,7 +121,7 @@ def search(query, price_min=None, price_max=None, sort="default", page=1, limit=
     return head + "\n" + ("\n".join(rows[:limit]) if rows else "(пусто)")
 
 
-def item(url):
+def item(url, full=False):
     if url.startswith("/"):
         url = "https://market.yandex.ru" + url
     if "market.yandex.ru" not in url:
@@ -140,10 +143,82 @@ def item(url):
               ("магазин", f"{r['shop']} · {r['trust']}".strip(" ·"))) if v]
     if r["delivery"]:
         lines.append("доставка: " + "; ".join(r["delivery"]))
+    if r["photos"]:
+        lines.append("фото (shop_images): " + " ".join(r["photos"][:10]))
+    lines.append("отзывы: ym_reviews")
     if r["specs"]:
         lines.append("характеристики: " + "; ".join(r["specs"]))
-    lines.append("\n" + r["description"])
+    lines.append("\n" + (r["description"] if full else r["description"][:2500]))
     return "\n".join(lines)
+
+
+# The reviews page ignores sort and page parameters in the URL. Sorting is a chip with options
+# (element.click() works in a hidden tab); more reviews load on scroll, which a hidden tab never
+# does, so each sort gives its first 10.
+REVIEW_SORTS = {"useful": "relevance-1", "new": "date-1", "high": "grade-1", "low": "grade-0"}
+REVIEWS_JS = r"""
+(() => {
+  const t = s => (s || '').replace(/\s+/g, ' ').trim();
+  return {
+    summary: t(document.querySelector('[data-auto="rating-distribution-block"]')?.innerText),
+    dist: t(document.querySelector('[data-auto="rating-distribution"]')?.innerText),
+    reviews: [...document.querySelectorAll('[data-auto="review-item"]')].map(e => {
+      let z = {};
+      try { z = JSON.parse(e.closest('[data-zone-data]')?.getAttribute('data-zone-data') || '{}'); } catch (x) {}
+      return {
+        grade: z.grade, date: z.date || t(e.querySelector('[data-auto="created-date"]')?.innerText),
+        up: z.votesAgree || 0, down: z.votesDisagree || 0,
+        author: t(e.querySelector('[data-auto="nickname"]')?.innerText),
+        text: (e.querySelector('[data-auto="review-description"]')?.innerText || '').split('\n').map(t).filter(Boolean).join(' | '),
+        variant: (e.querySelector('[data-auto="ugc-element-offer-info"]')?.innerText || '').split('\n').map(t).filter(Boolean).join(', '),
+        photos: [...new Set([...e.querySelectorAll('img')].map(i => i.src).filter(s => /get-market-ugc/.test(s))
+          .map(s => s.replace(/(get-market-ugc\/\d+\/[^/]+).*$/, '$1/orig')))],
+      };
+    }),
+  };
+})()
+"""
+
+
+def reviews(url, sort="useful", with_media=False, this_variant=False):
+    if sort not in REVIEW_SORTS:
+        return f"sort: одно из {', '.join(REVIEW_SORTS)}"
+    if url.startswith("/"):
+        url = "https://market.yandex.ru" + url
+    if "market.yandex.ru/card/" not in url:
+        return "нужна ссылка на товар Яндекс Маркета (https://market.yandex.ru/card/...)"
+    url = url.split("?")[0].rstrip("/").removesuffix("/reviews") + "/reviews"
+    items = "document.querySelectorAll('[data-auto=\"review-item\"]')"
+    tab = tab_for("market.yandex.ru")
+    try:
+        tab.goto(url, "ym", wait_js=f"{_new_page(tab)} && ({items}.length > 0 || /нет отзывов|Отзывов пока нет/i.test(document.body.innerText) || {CAPTCHA_JS})")
+        if _captcha(tab, f"reviews {url}"):
+            return BLOCKED
+        def redraw(js):
+            first = tab.js(f"{items}[0]?.innerText || ''")
+            tab.js(js)
+            for _ in range(20):
+                time.sleep(0.4)
+                if tab.js(f"({items}[0]?.innerText || '') !== {json.dumps(first)}"):
+                    break
+        if this_variant:
+            redraw("document.querySelector('[data-zone-name=thisOptionTab]')?.querySelector('button,a,input,label')?.click()"
+                   " || document.querySelector('[data-zone-name=thisOptionTab]')?.click()")
+        if sort != "useful":
+            tab.js("document.querySelector('[data-auto=\"product-reviews-sort\"]')?.click()")
+            time.sleep(0.8)
+            redraw(f"document.querySelector('[data-auto=\"more-actions-{REVIEW_SORTS[sort]}\"]')?.click()")
+        r = tab.js(REVIEWS_JS)
+    finally:
+        tab.close()
+    rows = [x for x in r["reviews"] if x["photos"] or not with_media]
+    head = (f"Яндекс Маркет · {url}\n{r['summary']}" + (f" · {r['dist']}" if r["dist"] else "") + "\n"
+            f"{'только этот вариант' if this_variant else 'все варианты'}, сортировка {sort}"
+            f"{', только с фото' if with_media else ''}. Видны первые 10 отзывов на сортировку: "
+            "следующие сайт подгружает прокруткой видимой страницы, а браузер скрыт. Год у дат текущего года сайт не пишет.\n"
+            "дата\t★\tполезно +/−\tвариант\tавтор\tтекст\tфото (shop_images)")
+    return head + "\n" + ("\n".join(f"{x['date']}\t{x['grade']}\t+{x['up']}/−{x['down']}\t{x['variant']}\t{x['author']}\t{x['text']}\t{' '.join(x['photos'])}"
+                                    for x in rows) if rows else "(отзывов нет)")
 
 
 # Cart. Reading works from a background tab; adding and removing are clicks (the site's cart calls
