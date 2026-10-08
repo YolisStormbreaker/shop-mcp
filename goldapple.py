@@ -64,17 +64,36 @@ def search(query, price_min=None, price_max=None, sort="relevance", page=1, limi
     return head + "\n" + ("\n".join(rows) if rows else "(пусто)")
 
 
-def item(url):
+def _img(o, screen="fullhd"):
+    """A picture URL from the site's template: {url with ${screen}.${format}, format: [...], screen: [...]}."""
+    fmt = "jpg" if "jpg" in (o.get("format") or []) else (o.get("format") or ["webp"])[0]
+    return (o.get("url") or "").replace("${screen}", screen).replace("${format}", fmt)
+
+
+def _delivery(d):
+    rows = []
+    for o in (d or {}).get("options") or []:
+        cost = ((o.get("cost") or {}).get("value") or {}).get("amount")
+        rows.append(f"{o.get('name')} — {o.get('dateInfo') or (o.get('date') or '')[:10]}"
+                    + (f", {cost} ₽" if cost else ", бесплатно" if cost == 0 else "")
+                    + (f" ({o['costSpecial']})" if o.get("costSpecial") else ""))
+    return rows
+
+
+def item(url, full=False):
     if url.startswith("/"):
         url = "https://goldapple.ru" + url
-    m = re.search(r"goldapple\.ru/(\d+)-", url)
+    m = re.search(r"goldapple\.ru/(\d+)-", url)  # without the name part the site shows «страница не найдена»
     if not m:
         return "нужна ссылка на товар из goldapple_search: https://goldapple.ru/<артикул>-<название>"
+    sku = m.group(1)
     tab = tab_for("goldapple.ru")
     try:
-        d = capture(tab, "goldapple", url, {"c": ["/front/api/catalog/product-card/base/v3", m.group(1)]}).get("c")
+        got = capture(tab, "goldapple", url, {"c": ["/front/api/catalog/product-card/base/v3", sku],
+                                              "deliv": ["/web/api/v1/delivery/calculate/item"]})
     finally:
         tab.close()
+    d = got.get("c")
     if d is None:
         log.warning("goldapple item %s: no product-card response", url)
         return BLOCKED
@@ -82,19 +101,67 @@ def item(url):
     attrs = x.get("attributes") or {}
     unit = (attrs.get("units") or {}).get("unit", "")
     colors = {o["value"]: o["text"] for o in (attrs.get("colors") or {}).get("options") or []}
-    variants = []
+    variants, photos = [], []
     for v in x.get("variants") or []:
         av = v.get("attributesValue") or {}
         label = " ".join(s for s in (f"{av['units']} {unit}".strip() if av.get("units") else "", colors.get(av.get("colors"), "")) if s)
-        actual, old = _rub(v.get("price"), "actual"), _rub(v.get("price"), "old")
-        variants.append(f"{label or v.get('itemId')} — {actual} ₽" + (f" (было {old})" if old and old != actual else "")
+        price = v.get("price") or {}
+        actual, old = _rub(price, "actual"), _rub(price, "old")
+        pct = (price.get("viewOptions") or {}).get("discountPercent")
+        variants.append(f"{label or v.get('itemId')} — {actual} ₽" + (f" (было {old}, −{pct}%)" if old and old != actual else "")
                         + ("" if v.get("inStock") else ", нет в наличии") + f", артикул {v.get('itemId')}")
+        if str(v.get("itemId")) == sku or not photos:
+            photos = [_img(i) for i in v.get("imageUrls") or []]
     lines = [f"{x.get('brand', '')} {x.get('name', '')} ({x.get('productType', '')})", url.split("?")[0],
              f"артикул: {x.get('itemId')}", "варианты: " + "; ".join(variants)]
+    deliv = _delivery(got.get("deliv"))
+    if deliv:
+        lines.append("доставка: " + "; ".join(deliv))
+    if photos:
+        lines.append("фото (shop_images): " + " ".join(photos[:10]))
+    lines.append("отзывы: goldapple_reviews")
     text = "\n".join(f"{s.get('text')}: {_text(s.get('content'))}" for s in x.get("productDescription") or []
                      if s.get("type") != "Brand" and s.get("content"))
-    lines.append("\n" + text[:2500])
+    lines.append("\n" + (text if full else text[:2500]))
     return "\n".join(lines)
+
+
+REVIEW_SORTS = {"useful": "ByUsefulness", "new": "ByNewest", "high": "ByHighestStars", "low": "ByLowestStars"}
+
+
+def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=20):
+    sku = _sku(id_or_url)
+    if not sku:
+        return "нужен артикул или ссылка на товар Золотого яблока"
+    if sort not in REVIEW_SORTS:
+        return f"sort: одно из {', '.join(REVIEW_SORTS)}"
+    qs = {"locale": "ru", "itemId": sku, "pageNumber": page, "sortType": REVIEW_SORTS[sort]}
+    if with_media:
+        qs["hasMedia"] = "true"
+    tab = _ga_tab()
+    try:
+        d = _api(tab, "GET", "/front/api/review/listing/v3?" + urllib.parse.urlencode(qs))
+    finally:
+        tab.close()
+    if d is None:
+        return BLOCKED
+    data = d.get("data") or {}
+    st, listing = data.get("statistic") or {}, data.get("listing") or {}
+    stars = " ".join(f"{x['star']}★ {x['percent']}%" for x in st.get("starStatistic") or [])
+    head = (f"Золотое яблоко · артикул {sku}: рейтинг {st.get('rating')}, отзывов {st.get('allReviewsCount')}, "
+            f"рекомендуют {st.get('recommended')}% · {stars}\n"
+            f"страница {page} (по 20), сортировка {sort}{', только с фото' if with_media else ''}; "
+            f"фото с отзывов всего: {(data.get('gallery') or {}).get('mediaCount', 0)}\n"
+            "дата\t★\tполезно\tвариант\tавтор\tтекст\tфото (shop_images)")
+    rows = []
+    for r in (listing.get("reviews") or [])[:limit]:
+        variant = " ".join(f"{a.get('value')} {a.get('name', '')}".strip() for a in (r.get("attributes") or {}).values())
+        text = " | ".join(p for p in (f"+ {r['pros']}" if r.get("pros") else "", f"− {r['cons']}" if r.get("cons") else "",
+                                       r.get("comment") or "") if p)
+        photos = " ".join(_img(i.get("original") or {}) for i in r.get("imageUrls") or [])
+        rows.append(f"{(r.get('submitDate') or '')[:10]}\t{r.get('stars')}\t{r.get('likes') or ''}\t{variant}\t"
+                    f"{r.get('username', '')}\t{_text(text)}\t{photos}")
+    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
 
 
 # The cart is a plain same-origin API with the session cookie (names from the site's own code:

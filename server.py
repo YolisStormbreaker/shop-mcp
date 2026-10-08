@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["mcp>=1.2,<2", "websockets>=13"]
+# dependencies = ["mcp>=1.2,<2", "websockets>=13", "pillow"]
 # ///
 """shop MCP: search Avito / Ozon / AliExpress in the logged-in Chrome on the Mac mini.
 
@@ -25,6 +25,7 @@ from mcp.server.fastmcp import FastMCP
 import ali
 import avito
 import goldapple
+import images
 import lamoda
 import messenger
 import orders
@@ -71,7 +72,7 @@ mcp = FastMCP("shop", instructions=INSTRUCTIONS)
 # old function until ozon itself is reloaded.
 # shoplog is left alone: reloading it would add a second log handler.
 # A new tool still needs a restart: tools are registered from server.py once, at start.
-_RELOADABLE = ("cdp", "capture", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple")
+_RELOADABLE = ("cdp", "capture", "images", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple")
 _mtimes = {m: Path(sys.modules[m].__file__).stat().st_mtime for m in _RELOADABLE}
 _reload_lock = threading.Lock()
 
@@ -100,9 +101,10 @@ def logged(fn):
         except Exception:
             log.exception("%s failed in %.1f s", call, time.time() - t)
             raise
-        warn = any(w in out for w in ("⚠️", "блокировку", "проверка Авито"))
+        text = out if isinstance(out, str) else "\n".join(x for x in out if isinstance(x, str))  # shop_images: text + pictures
+        warn = any(w in text for w in ("⚠️", "блокировку", "проверка Авито"))
         log.log(30 if warn else 20, "%s ok in %.1f s, %d lines: %s",
-                call, time.time() - t, out.count("\n") + 1, out.split("\n", 1)[0][:150])
+                call, time.time() - t, text.count("\n") + 1, text.split("\n", 1)[0][:150])
         return out
     return wrapper
 
@@ -351,10 +353,24 @@ def goldapple_search(query: str, price_min: int | None = None, price_max: int | 
 
 @mcp.tool()
 @logged
-def goldapple_item(url: str) -> str:
-    """Карточка товара Золотого яблока по ссылке из goldapple_search: цена и наличие каждого
-    варианта (объём, цвет), описание, применение, состав (всего до 2500 символов)."""
-    return goldapple.item(url)
+def goldapple_item(url: str, full: bool = False) -> str:
+    """Карточка товара Золотого яблока по ссылке из goldapple_search: цена, старая цена и скидка в %,
+    наличие каждого варианта (объём, цвет), варианты доставки на адрес пользователя (срок, цена),
+    ссылки на фото (смотреть — shop_images), описание, применение, состав (до 2500 символов; full=True — целиком).
+    Отзывы — goldapple_reviews."""
+    return goldapple.item(url, full)
+
+
+@mcp.tool()
+@logged
+def goldapple_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False,
+                      page: int = 1, limit: int = 20) -> str:
+    """Отзывы Золотого яблока о товаре (артикул или ссылка): общий рейтинг, доля рекомендующих,
+    распределение звёзд; по каждому отзыву дата, звёзды, «полезно», вариант, автор, текст
+    (+ достоинства | − недостатки | комментарий) и ссылки на фото (смотреть — shop_images).
+    sort: useful (по умолчанию), new, high, low. with_media=True — только отзывы с фото.
+    Страницы по 20 отзывов (page=2, 3…)."""
+    return goldapple.reviews(id_or_url, sort, with_media, page, limit)
 
 
 @mcp.tool()
@@ -533,6 +549,17 @@ def ali_leave_review(order_line_id: str, rating: int, text: str, anonymous: bool
     и оценку и дождись согласия. Фото не прикладываются.
     """
     return reviews.ali_review(order_line_id, rating, text, anonymous)
+
+
+@mcp.tool()
+@logged
+def shop_images(urls: list[str], max_side: int = 1024) -> list:
+    """Скачать картинки по ссылкам и показать их: фото товара из строки «фото:» любой *_item,
+    фото из отзывов *_reviews или любые другие http(s)-картинки. До 6 за вызов, каждая — JPEG
+    не больше max_side пикселей по длинной стороне. Ещё сохраняет файлы в cache/images сервера:
+    пути — в первой, текстовой части ответа. Видео не скачивает: для отзывов с видео смотри
+    его превью-картинку."""
+    return images.images(urls, max_side)
 
 
 if __name__ == "__main__":
