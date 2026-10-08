@@ -50,7 +50,14 @@ ITEM_JS = r"""
     seller: q('[data-marker="seller-info/name"]'),
     seller_rating: q('[data-marker="seller-info/score"]'),
     params,
-    description: t(document.querySelector('[data-marker="item-view/item-description"]')?.innerText).slice(0, 2500),
+    description: t(document.querySelector('[data-marker="item-view/item-description"]')?.innerText),
+    // ponytail: gallery markers not checked on a live page (2026-10-08 Avito answered «проблема с IP»);
+    // og:image is the main photo on any page, the rest is every img.avito.st picture in a gallery-like block
+    photos: [...new Set([
+      document.querySelector('meta[property="og:image"]')?.content,
+      ...[...document.querySelectorAll('[data-marker*="image-frame"] [data-url], [data-marker*="image-frame"][data-url]')].map(e => e.dataset.url),
+      ...[...document.querySelectorAll('[data-marker*="gallery"] img, [data-marker*="image-frame"] img, [data-marker*="image-preview"] img')].map(i => i.src),
+    ].filter(u => u && /img\.avito\.st/.test(u)))],
   };
 })()
 """
@@ -187,7 +194,7 @@ def _reveal_address(tab):
     return (addr[-1] if addr else ""), ", ".join(metro)
 
 
-def item(url):
+def item(url, full=False):
     tab = tab_for("avito.ru")
     try:
         tab.goto(url, "avito", wait_js="document.querySelector('h1')")
@@ -216,5 +223,7 @@ def item(url):
         lines.append(f"доставка: {s['text']}" + (f" → итого от {base + cheapest} ₽" if base is not None and cheapest is not None else ""))
     if r["params"]:
         lines.append("параметры: " + "; ".join(r["params"]))
-    lines.append("\n" + r["description"])
+    if r.get("photos"):
+        lines.append("фото (shop_images): " + " ".join(r["photos"][:10]))
+    lines.append("\n" + (r["description"] if full else r["description"][:2500]))
     return "\n".join(lines)
