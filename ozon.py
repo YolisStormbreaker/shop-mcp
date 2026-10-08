@@ -1,4 +1,4 @@
-"""Ozon: search, product card and cart via the site's own JSON API, called from the logged-in tab.
+"""Ozon: search, product card, reviews and cart via the site's own JSON API, called from the logged-in tab.
 
 No navigation per request: fetch() runs inside an ozon.ru page, so cookies and
 anti-bot tokens are the browser's own. Stops at the cart, never checks out.
@@ -152,7 +152,7 @@ def _seller(tab, page):
     return name, legal
 
 
-def item(sku_or_url):
+def item(sku_or_url, full=False):
     sku = _sku(sku_or_url)
     tab = _tab()
     try:
@@ -163,6 +163,8 @@ def item(sku_or_url):
         page2 = _page(tab, nxt)
         dates = _fetch(tab, f"/api/composer-api.bx/_action/pdpGetButtonTexts?product_id={sku}", "POST", {"pageType": "pdp"})
         shop, legal = _seller(tab, page)
+        # «Стало дешевле»: the modal compares today's price with last month's average
+        lower = _page(tab, f"/modal/web_pdp_lower_price?product_id={sku}") if _widgets(page, "webPriceDecreasedCompact-") else {}
     finally:
         tab.close()
 
@@ -171,9 +173,13 @@ def item(sku_or_url):
     sale = next(iter(_widgets(page, "webSale-")), {})
     score = next(iter(_widgets(page, "webReviewProductScore-")), {})
     delivery = next((t for t in _texts(dates) if DATE_RE.search(t)), "?")
+    def rub(x):
+        return int(re.sub(r"\D", "", x or "") or 0)
+    cur, orig = rub(price.get("price")), rub(price.get("originalPrice"))
     out = [f"{title}\nhttps://www.ozon.ru/product/{sku}/",
            f"цена: {price.get('cardPrice') or price.get('price', '?')} с картой Ozon, {price.get('price', '?')} без неё"
-           + (f", без скидки {price['originalPrice']}" if price.get("originalPrice") else ""),
+           + (f", без скидки {price['originalPrice']} (−{round(100 - cur * 100 / orig)}%)" if orig > cur > 0 else "")
+           + (f", {price['pricePerUnit']} {price['measurePerUnit']}" if price.get("pricePerUnit") else ""),
            "в наличии: " + ("да" if sale.get("offer", {}).get("isAvailable", price.get("isAvailable")) else "⛔ нет"),
            f"привезут: {delivery}",
            f"рейтинг: {score.get('totalScore', '?')}, отзывов {score.get('reviewsCount', '?')}"]
@@ -183,6 +189,14 @@ def item(sku_or_url):
         out.append(f"продавец: {shop} · {company}" + (" · ⚠️ из-за рубежа" if foreign else ""))
     else:
         out.append(f"продавец: {shop} (юрлицо не нашёл)")
+    for w in _widgets(lower, "webPriceDecreasedFullView-"):
+        parts = [" ".join(t.get("content", "") for t in x.get("textRs") or [] if t.get("type") == "text")
+                 + (f" (−{x['iconText']})" if x.get("iconText") else "") for x in w.get("lines", [])]
+        out.append("стало дешевле: " + "; ".join(parts) + " — Ozon сравнивает цену без банков-партнёров со средней за прошлый месяц")
+    photos = [i.get("src") for g in _widgets(page, "webGallery-") for i in g.get("images", []) if i.get("src")]
+    if photos:
+        out.append("фото (shop_images): " + " ".join(photos[:10]))
+    out.append("отзывы с фото и видео: ozon_reviews")
     chars = []
     for w in _widgets(page2, "webCharacteristics-"):
         for group in w.get("characteristics", []):
@@ -193,8 +207,57 @@ def item(sku_or_url):
     out.append("характеристики:\n" + ("\n".join(chars) if chars else "  (нет)"))
     desc = _html_text(next(iter(_widgets(page2, "webDescription-")), {}).get("richAnnotation", ""))
     if desc:
-        out.append("описание:\n" + desc[:2500])
+        out.append("описание:\n" + (desc if full else desc[:2500]))
     return "\n".join(out)
+
+
+REVIEW_SORTS = {"useful": "usefulness_desc", "high": "score_desc", "low": "score_asc"}
+
+
+def _list_reviews(page):
+    return next(iter(_widgets(page, "webListReviews-")), {})
+
+
+def reviews(sku_or_url, sort="useful", with_media=False, page=1, this_variant=False):
+    """Ozon's own reviews page: 30 per page. Page N needs the page_key Ozon puts into page 1's links.
+    No server-side filter for photos was found (with_media, withMedia, photo params are ignored),
+    so with_media filters the page that was fetched."""
+    if sort not in REVIEW_SORTS:
+        return f"sort: одно из {', '.join(REVIEW_SORTS)} (сортировки по дате на Ozon нет: useful — «новые и полезные»)"
+    sku = _sku(sku_or_url)
+    base = f"/product/{sku}/reviews/?sort={REVIEW_SORTS[sort]}&reviewsVariantMode={1 if this_variant else 2}"
+    tab = _tab()
+    try:
+        first = _page(tab, base)
+        lr = _list_reviews(first)
+        if page > 1:
+            m = re.search(r"page_key=([^&]+)", json.dumps(lr.get("paging") or {}))
+            lr = _list_reviews(_page(tab, f"{base}&page={page}&page_key={m.group(1)}")) if m else {}
+    finally:
+        tab.close()
+    score = next(iter(_widgets(first, "webReviewProductScore-")), {})
+    total = (lr.get("paging") or {}).get("total") or score.get("reviewsCount") or 0
+    stars = " ".join(f"{x.get('title')}: {x.get('value')}" for x in score.get("score") or [])
+    head = (f"Ozon · sku {sku}: рейтинг {score.get('totalScore', '?')}, отзывов {score.get('reviewsCount', '?')} · {stars}\n"
+            f"{'только этот вариант' if this_variant else 'все варианты товара'}: {total} отзывов, страница {page} из {max(1, -(-total // 30))} (по 30), "
+            f"сортировка {sort}{'; только с фото или видео — из этой страницы' if with_media else ''}\n"
+            "дата\t★\tполезно +/−\tвариант\tавтор\tтекст\tфото (shop_images), видео")
+    products = lr.get("products") or {}
+    rows = []
+    for r in lr.get("reviews") or []:
+        c = r.get("content") or {}
+        if with_media and not (c.get("photos") or c.get("videos")):
+            continue
+        variant = ", ".join(v.get("value", "") for v in (products.get(str(r.get("itemId"))) or {}).get("variants") or [])
+        text = " | ".join(x for x in (f"+ {c['positive']}" if c.get("positive") else "", f"− {c['negative']}" if c.get("negative") else "",
+                                      c.get("comment") or "") if x)
+        media = [ph["url"] for ph in c.get("photos") or [] if ph.get("url")]
+        media += [f"видео {v.get('duration', '')}: {v['url']} превью {v.get('previewUrl', '')}" for v in c.get("videos") or [] if v.get("url")]
+        u = r.get("usefulness") or {}
+        date = time.strftime("%Y-%m-%d", time.localtime(r.get("createdAt") or r.get("publishedAt") or 0))
+        rows.append(f"{date}\t{c.get('score', '')}\t+{u.get('useful', 0)}/−{u.get('unuseful', 0)}\t{variant}\t"
+                    f"{(r.get('author') or {}).get('firstName', '')}\t{' '.join(text.split())}\t{' '.join(media)}")
+    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
 
 
 def _sku(sku_or_url):
