@@ -8,6 +8,8 @@ Run over ssh as a stdio MCP server, or with --http as a streamable HTTP server o
 127.0.0.1:8765 (published through a tunnel, see launchd/local.shop-http.plist).
 Output is compact TSV to keep token use low.
 No tool places orders or pays: Ozon and AliExpress stop at the cart.
+Reviews: the *_leave_review tools post a review under the user's name.
+Avito messenger: avito_send sends a message under the user's name.
 """
 import functools
 import importlib
@@ -24,8 +26,10 @@ import ali
 import avito
 import goldapple
 import lamoda
+import messenger
 import orders
 import ozon
+import reviews
 import wb
 import ym
 from shoplog import log
@@ -36,8 +40,8 @@ INSTRUCTIONS = """\
 
 Что есть: поиск и карточки товара на Авито, Ozon, AliExpress, Wildberries, Яндекс Маркете, Lamoda,
 в Золотом яблоке; корзины Ozon, AliExpress, Wildberries, Яндекс Маркета, Lamoda и Золотого яблока; история
-заказов Ozon и AliExpress. Меняют аккаунт только *_add_to_cart и *_remove_from_cart — только по явной
-просьбе пользователя. Заказы нигде не оформляются и не оплачиваются.
+заказов Ozon и AliExpress; мессенджер Авито; отзывы на купленное на Ozon и AliExpress. Действуют от имени пользователя *_add_to_cart, *_remove_from_cart, avito_send и *_leave_review —
+только по его явной просьбе, текст сообщения или отзыва показать ему до отправки. Заказы нигде не оформляются и не оплачиваются.
 
 Правила:
 - Прежде чем советовать товар, открой его *_item: в поиске данные неполные.
@@ -67,7 +71,7 @@ mcp = FastMCP("shop", instructions=INSTRUCTIONS)
 # old function until ozon itself is reloaded.
 # shoplog is left alone: reloading it would add a second log handler.
 # A new tool still needs a restart: tools are registered from server.py once, at start.
-_RELOADABLE = ("cdp", "capture", "ali", "ozon", "avito", "orders", "wb", "ym", "lamoda", "goldapple")
+_RELOADABLE = ("cdp", "capture", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple")
 _mtimes = {m: Path(sys.modules[m].__file__).stat().st_mtime for m in _RELOADABLE}
 _reload_lock = threading.Lock()
 
@@ -449,6 +453,86 @@ def goldapple_add_to_cart(id_or_url: str, quantity: int = 1) -> str:
 def goldapple_remove_from_cart(sku: str) -> str:
     """Убрать строку из корзины Золотого яблока по артикулу из goldapple_cart. Работает со скрытым браузером."""
     return goldapple.remove_from_cart(sku)
+
+
+@mcp.tool()
+@logged
+def avito_chats(limit: int = 20, unread_only: bool = False, before: int | None = None) -> str:
+    """Чаты в мессенджере Авито, новые сверху. Чаты не отмечаются прочитанными.
+
+    unread_only=True — только непрочитанные. before — значение из строки «следующая страница».
+    Возвращает TSV: id чата (для avito_chat и avito_send), ● если не прочитан, когда, собеседник,
+    объявление, цена, последнее сообщение («я:» — моё), путь объявления.
+    """
+    return messenger.chats(limit, unread_only, before)
+
+
+@mcp.tool()
+@logged
+def avito_chat(chat_id: str, limit: int = 30, offset: int = 0) -> str:
+    """Переписка в чате Авито по id из avito_chats или ссылке на чат: собеседник, объявление,
+    сообщения от старых к новым («я» — мои, «Авито» — системные). Чат не отмечается прочитанным.
+    offset — сколько последних сообщений пропустить, чтобы листать назад.
+    """
+    return messenger.chat(chat_id, limit, offset)
+
+
+@mcp.tool()
+@logged
+def avito_send(text: str, chat_id: str | None = None, item_url: str | None = None) -> str:
+    """Отправить сообщение на Авито от имени пользователя: в существующий чат (chat_id из avito_chats)
+    или продавцу объявления (item_url — ссылка на объявление; чат откроется кнопкой «Написать сообщение»).
+    Только текст, без фото и файлов.
+
+    Перед вызовом покажи пользователю получателя и итоговый текст и дождись согласия.
+    Не пиши от его имени того, чего он не просил: цены, обещания, договорённости — только с его слов.
+    Ответ «отправлено» значит, что сообщение видно в истории чата. При «⚠️» сначала проверь
+    чат через avito_chat и не отправляй повторно вслепую.
+    """
+    return messenger.send(text, chat_id, item_url)
+
+
+@mcp.tool()
+@logged
+def ozon_reviews_waiting(limit: int = 30) -> str:
+    """Купленные на Ozon товары, которые ждут отзыва: sku, название, вариант."""
+    return reviews.ozon_waiting(limit)
+
+
+@mcp.tool()
+@logged
+def ozon_leave_review(sku_or_url: str, rating: int, text: str, anonymous: bool = False,
+                      accept_conditions: bool = False) -> str:
+    """Оставить отзыв на купленный товар Ozon: rating 1–5, text до 3000 символов.
+    Отзыв публикуется от имени пользователя. Оценку и смысл текста бери только у него:
+    не придумывай впечатления и не ставь оценку сам. Перед вызовом покажи ему итоговый текст
+    и оценку и дождись согласия. Фото не прикладываются.
+
+    Если за отзыв на товар дают баллы, Ozon сначала показывает условия; тогда отзыв не уходит,
+    а вернутся условия. Отправить всё равно — повторить с accept_conditions=True.
+    Уже оставленный отзыв не редактирует.
+    """
+    return reviews.ozon_review(sku_or_url, rating, text, anonymous, accept_conditions)
+
+
+@mcp.tool()
+@logged
+def ali_reviews_waiting(limit: int = 30) -> str:
+    """Купленные на AliExpress товары, которые ждут отзыва: строка заказа (для ali_leave_review),
+    id товара, название, вариант."""
+    return reviews.ali_waiting(limit)
+
+
+@mcp.tool()
+@logged
+def ali_leave_review(order_line_id: str, rating: int, text: str, anonymous: bool = False) -> str:
+    """Оставить отзыв на купленный товар AliExpress по строке заказа из ali_reviews_waiting:
+    rating 1–5, text до 10000 символов. Отзыв уходит на модерацию, её проходят за 48 часов.
+    Отзыв публикуется от имени пользователя. Оценку и смысл текста бери только у него:
+    не придумывай впечатления и не ставь оценку сам. Перед вызовом покажи ему итоговый текст
+    и оценку и дождись согласия. Фото не прикладываются.
+    """
+    return reviews.ali_review(order_line_id, rating, text, anonymous)
 
 
 if __name__ == "__main__":

@@ -182,8 +182,11 @@ def remove_from_cart(id_or_url):
         return "нужен артикул из goldapple_cart"
     tab = _ga_tab()
     try:
-        if not any(str(i.get("productSku")) == sku for i in _items(_api(tab, "GET", STATE))):
-            return "такого артикула в корзине нет\n" + cart()
+        d = _api(tab, "GET", STATE)
+        if d is None:
+            return BLOCKED
+        if not any(str(i.get("productSku")) == sku for i in _items(d)):
+            return "такого артикула в корзине нет\n" + _cart_text(d)  # not cart(): that would wait for this very tab
         _api(tab, "DELETE", f"/front/api/cart/v3/items?locale=ru&includeDeliveryThreshold=false&itemSkus={sku}")
         d = _api(tab, "GET", STATE)
     finally:

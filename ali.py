@@ -131,7 +131,12 @@ def search(query, price_min=None, price_max=None, sort="default", limit=30):
 
 MONTHS = "января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря"
 PROP = '[class*="SkuPropertyItem__skuProp"]'
-CART_BTN = "[...document.querySelectorAll('button')].filter(b => b.innerText.trim() === 'В корзину' && b.getBoundingClientRect().height > 0).pop()"
+_BTN = "[...document.querySelectorAll('button')].filter(b => %s && b.getBoundingClientRect().height > 0).pop()"
+CART_BTN = _BTN % "b.innerText.trim() === 'В корзину'"
+# Some items sell only through the separate combo cart, which needs 1+1 items to check out;
+# their page has «В комбо-корзину\n<price>» instead of «В корзину».
+COMBO_BTN = _BTN % "b.innerText.trim().startsWith('В комбо-корзину')"
+PAGE_READY = _BTN % "/^(В корзину|В комбо-корзину|Купить сейчас)/.test(b.innerText.trim())"
 
 
 def _item_id(id_or_url):
@@ -141,27 +146,16 @@ def _item_id(id_or_url):
     return m.group(1)
 
 
-NOT_ON_SCREEN = ("не добавлено: вкладка AliExpress не на экране, а клик по «В корзину» работает только в видимой вкладке. "
-                 "Попроси пользователя выполнить shop-chrome show и открыть вкладку aliexpress.ru, потом повтори.")
-
-
 def _click_js(tab, js_elem):
-    """Real mouse click on the element; False if it is missing or the tab is not on screen (clicks then do nothing)."""
-    if not tab.visible():
-        return False
-    pos = tab.js(f"(() => {{ const e = {js_elem}; if (!e) return null; e.scrollIntoView({{block: 'center'}}); return 1; }})()")
-    if not pos:
-        return False
-    time.sleep(0.4)
-    pos = tab.js(f"(() => {{ const r = ({js_elem}).getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }})()")
-    for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
-        tab.call("Input.dispatchMouseEvent", type=typ, x=pos[0], y=pos[1], button="left", clickCount=1)
-    return True
+    """element.click() in the page.  Not a CDP mouse event: once the mini's display sleeps
+    Chrome counts every tab as hidden, and there Input.dispatchMouseEvent waits 5 s for a
+    frame and the click is lost (2026-09-30: every variant came back as the first one)."""
+    return bool(tab.js(f"(e => {{ if (!e) return false; e.scrollIntoView({{block: 'center'}}); e.click(); return true; }})({js_elem})"))
 
 
 def _open_item(tab, item_id, sku=None):
     url = f"https://aliexpress.ru/item/{item_id}.html" + (f"?sku_id={sku}" if sku else "")
-    tab.goto(url, "ali", wait_js=f"!!({CART_BTN}) || document.body.innerText.includes('Нет в наличии')")
+    tab.goto(url, "ali", wait_js=f"!!({PAGE_READY}) || document.body.innerText.includes('Нет в наличии')")
     time.sleep(1.2)
 
 
@@ -178,7 +172,7 @@ def _pdp_state(tab):
     return {"title": tab.js("document.querySelector('h1')?.innerText.trim() || ''"), "price": price,
             "delivery": list(dict.fromkeys(deliv)), "props": props,
             "sku": (re.search(r"sku_id=(\d+)", tab.js("location.search")) or [None, ""])[1],
-            "in_stock": bool(tab.js(f"!!({CART_BTN})"))}
+            "in_stock": bool(tab.js(f"!!({CART_BTN})")), "combo": bool(tab.js(f"!!({COMBO_BTN})"))}
 
 
 def _skus(tab, item_id):
@@ -221,7 +215,9 @@ def item(id_or_url, sku=None, list_variants=True):
         variants = _skus(tab, item_id) if list_variants else []
     finally:
         tab.close()
-    lines = [st["title"], f"id {item_id} · sku {st['sku']} · {st['price']}" + ("" if st["in_stock"] else " · НЕТ В НАЛИЧИИ"),
+    stock = ("" if st["in_stock"] else " · только комбо-корзина (купить можно от 2 товаров из комбо)"
+             if st["combo"] else " · НЕТ В НАЛИЧИИ")
+    lines = [st["title"], f"id {item_id} · sku {st['sku']} · {st['price']}" + stock,
              "выбрано: " + "; ".join(p for p in st["props"] if p)]
     lines += ["доставка:"] + [f"  {d}" for d in st["delivery"]] if st["delivery"] else ["доставка: не нашёл на странице"]
     if variants:
@@ -243,11 +239,14 @@ def add_to_cart(id_or_url, sku=None, options=None):
             sku = _sku_for(_skus(tab, item_id), options)
         _open_item(tab, item_id, sku)
         st = _pdp_state(tab)
+        if not st["in_stock"] and st["combo"]:
+            return (f"не добавлено: «{st['title'][:80]}» продаётся только через комбо-корзину "
+                    "(отдельная корзина, оформить можно от 2 товаров) — положи вручную")
         if not st["in_stock"]:
             return f"не добавлено: «{st['title'][:80]}» нет в наличии для {st['props']}"
         before = _count(tab)
         if not _click_js(tab, CART_BTN):
-            return NOT_ON_SCREEN
+            return f"не добавлено: не нашёл кнопку «В корзину» на странице «{st['title'][:80]}»"
         after = before
         for _ in range(10):
             time.sleep(0.7)
