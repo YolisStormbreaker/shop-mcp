@@ -105,7 +105,7 @@ mcp = FastMCP("shop", instructions=INSTRUCTIONS)
 # shoplog is left alone: reloading it would add a second log handler.
 # A new tool still needs a restart: tools are registered from server.py once, at start.
 _RELOADABLE = ("cdp", "capture", "images", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple",
-               "grocery.composition", "grocery.lenta", "grocery.samokat", "grocery.lavka", "grocery.perekrestok", "grocery.pyaterochka",
+               "grocery.composition", "grocery.lenta", "grocery.samokat", "grocery.lavka", "grocery.perekrestok", "grocery.pyaterochka", "grocery.vkusvill",
                "grocery")
 _mtimes = {m: Path(sys.modules[m].__file__).stat().st_mtime for m in _RELOADABLE}
 _reload_lock = threading.Lock()
@@ -675,7 +675,7 @@ def shop_images(urls: list[str], max_side: int = 1024) -> list:
 def grocery_search(store: str, query: str = "", tag: str | None = None, sort: str = "popular",
                    page: int = 1, limit: int = 30) -> str:
     """Продукты: поиск в одном продуктовом магазине по названию и/или тегу. store: lenta (Лента), samokat (Самокат),
-    lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка). Цены и наличие — для адреса или магазина
+    lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка), vkusvill (ВкусВилл). Цены и наличие — для адреса или магазина
     пользователя на сайте. Таблица: id, название, фасовка, цена, без скидки, скидка, цена за кг/л/шт, рейтинг, наличие.
     tag — диетический или товарный тег сайта: «без лактозы», «без глютена», «без сахара», «веган», «халяль»,
     «фермерское», «много белка» или значение фильтра сайта («без добавления сахара», «индейка»…); строка
@@ -693,7 +693,7 @@ def grocery_item(store: str, id_or_url: str, full: bool = False) -> str:
     пронумерованный список (по убыванию доли), проценты («какао не менее 72%»), место сахара в списке,
     подсластители, пальмовое масло, ароматизаторы, Е-добавки, следы аллергенов; КБЖУ на 100 г (сахар сайты почти
     не пишут: тогда «сахара ≤ углеводов»). Описание до 2000 символов, full=True — целиком.
-    store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка), vkusvill (ВкусВилл)."""
     return grocery.item(store, id_or_url, full)
 
 
@@ -728,14 +728,14 @@ def grocery_compare_composition(query: str | None = None, items: list[str] | Non
 def grocery_reviews(store: str, id_or_url: str, sort: str = "useful", with_media: bool = False, page: int = 1) -> str:
     """Продукты: отзывы о товаре. Есть у Перекрёстка (с фото, фильтр звёзд: sort high = 5★, low = 1–2★),
     Пятёрочки (без фото, sort useful/new/high/low) и Ленты (5 последних с карточкой). У Самоката и Лавки отзывов нет.
-    store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка), vkusvill (ВкусВилл)."""
     return grocery.call(store, "reviews", id_or_url, sort=sort, with_media=with_media, page=page)
 
 
 @mcp.tool()
 @logged
 def grocery_cart(store: str) -> str:
-    """Продукты: корзина магазина (что лежит, количество, цены, итог). store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    """Продукты: корзина магазина (что лежит, количество, цены, итог). store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка), vkusvill (ВкусВилл)."""
     return grocery.call(store, "cart")
 
 
@@ -743,14 +743,14 @@ def grocery_cart(store: str) -> str:
 @logged
 def grocery_add_to_cart(store: str, id_or_url: str, quantity: int = 1) -> str:
     """Продукты: положить товар в корзину магазина (меняет аккаунт пользователя — только по его явной просьбе).
-    Заказ не оформляется. store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    Заказ не оформляется. store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка), vkusvill (ВкусВилл)."""
     return grocery.call(store, "add_to_cart", id_or_url, quantity)
 
 
 @mcp.tool()
 @logged
 def grocery_remove_from_cart(store: str, id_or_url: str) -> str:
-    """Продукты: убрать товар из корзины магазина (только по явной просьбе пользователя). store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    """Продукты: убрать товар из корзины магазина (только по явной просьбе пользователя). store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка), vkusvill (ВкусВилл)."""
     return grocery.call(store, "remove_from_cart", id_or_url)
 
 
@@ -758,7 +758,7 @@ def grocery_remove_from_cart(store: str, id_or_url: str) -> str:
 @logged
 def grocery_favorites(store: str) -> str:
     """Продукты: избранное пользователя в магазине. Есть у Ленты, Перекрёстка и Лавки; у Самоката и Пятёрочки нет.
-    store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка), vkusvill (ВкусВилл)."""
     return grocery.call(store, "favorites")
 
 
@@ -766,7 +766,7 @@ def grocery_favorites(store: str) -> str:
 @logged
 def grocery_favorite(store: str, id_or_url: str, remove: bool = False) -> str:
     """Продукты: добавить товар в избранное (remove=True — убрать). Меняет аккаунт — только по просьбе пользователя.
-    Есть у Ленты, Перекрёстка и Лавки. store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    Есть у Ленты, Перекрёстка и Лавки. store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка), vkusvill (ВкусВилл)."""
     return grocery.call(store, "favorite", id_or_url, remove)
 
 

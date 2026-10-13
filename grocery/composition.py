@@ -110,9 +110,12 @@ def nutrition_from_text(text):
         if k == "kcal":
             m = re.search(r"(\d+(?:[.,]\d+)?)\s*ккал", low) or re.search(rf"(?:{rx})[^\d]{{0,30}}(\d+(?:[.,]\d+)?)", low)
         else:
-            m = re.search(rf"(?:{rx})[а-я.]*\s*[:\-–—]?\s*(?:[а-я. ]{{0,12}}?)(\d+(?:[.,]\d+)?)", low)
+            m = re.search(rf"(?:{rx})[а-я.]*\s*(?:\([а-я ]*\))?\s*[:\-–—]?\s*(?:[а-я. ]{{0,12}}?)(\d+(?:[.,]\d+)?)", low)
         if m:
             out[k] = float(m.group(1).replace(",", "."))
+    m = re.search(r"добавленн\w*\s+сахар\w*\s*[:\-–—]?\s*(\d+(?:[.,]\d+)?)", low)     # ВкусВилл also gives added sugar
+    if m:
+        out["added_sugar"] = float(m.group(1).replace(",", "."))
     return out
 
 
@@ -123,7 +126,7 @@ def nutrition_line(n):
     parts = [f"{n['kcal']:g} ккал" if n.get("kcal") is not None else ""]
     parts += [f"{label} {n[k]:g}" for k, label in (("protein", "Б"), ("fat", "Ж"), ("carbs", "У")) if n.get(k) is not None]
     if n.get("sugar") is not None:
-        parts.append(f"сахара {n['sugar']:g}")
+        parts.append(f"сахара {n['sugar']:g}" + (f" (добавленного {n['added_sugar']:g})" if n.get("added_sugar") is not None else ""))
     elif n.get("carbs") is not None:
         parts.append(f"сахара ≤{n['carbs']:g} (сайт не пишет, не больше углеводов)")
     return "на 100 г: " + ", ".join(p for p in parts if p)
@@ -174,5 +177,7 @@ if __name__ == "__main__":
     assert parse("томаты (60%), вода, соль")["percents"] == {"томаты (60%)": 60.0}
     n = nutrition_from_text("Пищевая ценность на 100 г: белки 3 г, жиры 3,2 г, углеводы 4,7 г, в т.ч. сахара 4,7 г; энергетическая ценность 58 ккал")
     assert n == {"kcal": 58.0, "protein": 3.0, "fat": 3.2, "carbs": 4.7, "sugar": 4.7}, n
+    n = nutrition_from_text("белки 0 г, жиры 0 г, углеводы 12 г,, в том числе сахара (общие) - 12 г, в том числе добавленный сахар - 12 г; 48 ккал")
+    assert n == {"kcal": 48.0, "protein": 0.0, "fat": 0.0, "carbs": 12.0, "sugar": 12.0, "added_sugar": 12.0}, n
     assert nutrition_line({"carbs": 10.6, "kcal": 42}).endswith("сахара ≤10.6 (сайт не пишет, не больше углеводов)")
     print("ok")

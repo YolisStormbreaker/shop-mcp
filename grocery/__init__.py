@@ -1,4 +1,4 @@
-"""Groceries: Лента, Самокат, Яндекс Лавка, Перекрёсток, Пятёрочка — one tool family, store by name.
+"""Groceries: Лента, Самокат, Яндекс Лавка, Перекрёсток, Пятёрочка, ВкусВилл — one tool family, store by name.
 
 Every site module has the same functions:
   search(query, tag=None, sort="popular", page=1, limit=30) -> {"items": [product], "total", "facets", "note", "url"}
@@ -14,10 +14,11 @@ and from product() also "photos": [url], "description", "composition" (the «С�
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-from . import composition, lavka, lenta, perekrestok, pyaterochka, samokat
+from . import composition, lavka, lenta, perekrestok, pyaterochka, samokat, vkusvill
 
-STORES = {"lenta": lenta, "samokat": samokat, "lavka": lavka, "perekrestok": perekrestok, "5ka": pyaterochka}
-NAMES = {"lenta": "Лента", "samokat": "Самокат", "lavka": "Яндекс Лавка", "perekrestok": "Перекрёсток", "5ka": "Пятёрочка"}
+STORES = {"lenta": lenta, "samokat": samokat, "lavka": lavka, "perekrestok": perekrestok, "5ka": pyaterochka, "vkusvill": vkusvill}
+NAMES = {"lenta": "Лента", "samokat": "Самокат", "lavka": "Яндекс Лавка", "perekrestok": "Перекрёсток", "5ka": "Пятёрочка",
+         "vkusvill": "ВкусВилл"}
 SORTS = ("popular", "price", "price_desc", "discount", "rating")
 
 SIZE = re.compile(r"(?:(\d+)\s*[xх×*]\s*)?(\d+(?:[.,]\d+)?)\s*(кг|г|гр|л|мл|шт)\b\.?", re.I)
@@ -50,7 +51,8 @@ def unit_price(p):
 def _store(store):
     s = (store or "").lower().strip()
     s = {"пятерочка": "5ka", "пятёрочка": "5ka", "pyaterochka": "5ka", "лента": "lenta", "самокат": "samokat",
-         "лавка": "lavka", "яндекс лавка": "lavka", "перекресток": "perekrestok", "перекрёсток": "perekrestok"}.get(s, s)
+         "лавка": "lavka", "яндекс лавка": "lavka", "перекресток": "perekrestok", "перекрёсток": "perekrestok",
+         "вкусвилл": "vkusvill"}.get(s, s)
     if s not in STORES:
         raise ValueError(f"store: одно из {', '.join(STORES)}")
     return s
@@ -185,7 +187,7 @@ def item(store, id_or_url, full=False):
         return p
     price, old = p.get("price"), p.get("old")
     lines = [f"{NAMES[store]} · {p.get('name', '')}" + (f" · {p['brand']}" if p.get("brand") else ""), p.get("url", ""),
-             f"id: {p.get('id')}" + (f" · штрихкод {p['ean']}" if p.get("ean") else "") + (f" · фасовка {p['size']}" if p.get("size") else "")]
+             f"id: {p.get('id')}" + (f" · штрихкод {p['ean']}" if p.get("ean") else "") + (f" · фасовка {_display_size(p)}" if _display_size(p) else "")]
     if price is not None:
         lines.append(f"цена: {price} ₽" + (f", без скидки {old} ₽ (−{round(100 - price * 100 / old)}%)" if old and old > price else "")
                      + (f", {unit_price(p)}" if unit_price(p) else ""))

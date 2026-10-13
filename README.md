@@ -37,18 +37,17 @@ Chrome запущен с отдельным профилем и `--remote-debugg
    git clone https://github.com/YolisStormbreaker/shop-mcp.git ~/shop-mcp
    ```
 
-2. Поставить отдельный Chrome для магазинов. LaunchAgent запускает его при входе в систему с профилем `~/Library/Application Support/shop-chrome` и отладочным портом 9222 только на 127.0.0.1, прячет окно, чтобы он не мешал, и даёт ему свою иконку в Dock. Основной Chrome пользователя не затрагивается:
+2. Поставить отдельный Chrome для магазинов — одна команда, её можно повторять (она же чинит установку):
 
    ```sh
-   sed "s/YOU/$USER/" ~/shop-mcp/launchd/local.shop-chrome.plist > ~/Library/LaunchAgents/local.shop-chrome.plist
-   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.shop-chrome.plist
-   mkdir -p ~/.local/bin && ln -sf ~/shop-mcp/shop-chrome ~/.local/bin/shop-chrome   # show | hide | restart | icon
-   sleep 5 && curl -s http://127.0.0.1:9222/json/version   # ответ JSON — Chrome на месте
+   ~/shop-mcp/shop-chrome setup
    ```
 
-   Убрать совсем: `launchctl bootout gui/$(id -u)/local.shop-chrome` и удалить plist.
+   Она ставит LaunchAgent `local.shop-chrome`: Chrome запускается при входе в систему с отдельным профилем `~/Library/Application Support/shop-chrome` и отладочным портом 9222 только на 127.0.0.1, окно прячется, у процесса своя иконка в Dock. Основной Chrome пользователя не затрагивается. Ещё она кладёт `shop-chrome` в `~/.local/bin`, ждёт, пока Chrome откроет порт, и говорит, чего не хватает (uv, вход на сайты). Если этот шаг пропустить, сервер при первом вызове выполнит `setup` сам.
 
-3. Вход на сайты — делает пользователь, агент пароли не вводит. `shop-chrome show` показывает окно: в нём войти на нужные сайты (Авито, Ozon, AliExpress, Wildberries, Яндекс Маркет, Lamoda, Золотое яблоко) и указать адрес доставки, затем `shop-chrome hide`. Вкладки сайтов не закрывать. Без входа работает только поиск, с ценами и доставкой для региона по умолчанию; корзины и история заказов — только после входа.
+   Убрать совсем: `launchctl bootout gui/$(id -u)/local.shop-chrome` и удалить `~/Library/LaunchAgents/local.shop-chrome.plist`.
+
+3. Вход на сайты — делает пользователь, агент пароли не вводит. `shop-chrome show` показывает окно: в нём войти на нужные сайты (Авито, Ozon, AliExpress, Wildberries, Яндекс Маркет, Lamoda, Золотое яблоко; продукты — Лента, Самокат, Яндекс Лавка, Перекрёсток, Пятёрочка) и указать адрес доставки, затем `shop-chrome hide`. У продуктовых магазинов адрес обязателен: от него зависят ассортимент, цены и корзина. Вкладки сайтов не закрывать. Без входа работает только поиск, с ценами и доставкой для региона по умолчанию; корзины и история заказов — только после входа.
 
 4. Подключить к MCP-клиенту:
    - Claude Code: `claude mcp add shop -s user -- ~/shop-mcp/run.sh`, затем `claude mcp list` — `shop … ✔ Connected`.
@@ -74,11 +73,15 @@ Chrome запущен с отдельным профилем и `--remote-debugg
 
 Как пользоваться инструментами и что работает, а что нет, сервер сообщает агенту сам: в инструкциях при подключении и в описаниях инструментов.
 
-**Если что-то не работает:**
+**Если что-то не работает** — сначала `shop-chrome status` (агенту то же даёт инструмент `shop_status`): что установлено, запущено ли, отвечает ли порт, не обновился ли Chrome, не новый ли профиль.
 
-- Chrome не отвечает на 127.0.0.1:9222 — `shop-chrome restart`.
+- Chrome закрыли (⌘Q) или он упал — LaunchAgent поднимет его сам за ~10 с; если агент выгружен, сервер при следующем вызове сам вернёт его (`launchctl bootstrap`) и подождёт порт.
+- Chrome удалён — сервер так и ответит: «Google Chrome не установлен». Поставить Chrome, затем `shop-chrome setup`.
+- Профиль удалён или это новый пользователь — Chrome создаст пустой профиль, сайты будут без входа; `shop-chrome status` пишет «профиль новый». Повторить шаг 3.
+- Сайт пишет «⚠️ … проверка на бота» — `shop-chrome show`, пройти проверку во вкладке сайта, `shop-chrome hide`.
 - Все инструменты падают по таймауту — `ps -axo pri,stat,command | grep renderer | grep shop-chrome`. Приоритет 4 в состоянии R значит, что Chrome увёл вкладки в фоновый приоритет macOS: после обновления Chrome перестала действовать фича `ForceForegroundPriorityForAllTabs` в plist.
 - Иконка в Dock снова обычная — `shop-chrome icon`.
+- Chrome обновился (status пишет «обновился до …, а запущен …») — `shop-chrome restart`, затем снова `status`.
 - Обновиться: `cd ~/shop-mcp && git pull`. Изменения модулей сервер подхватывает сам, новые инструменты — в новой сессии.
 
 Лог вызовов пишется в `logs/shop.log`, тела неудачных ответов — в `logs/bodies/`. В них бывают данные со страниц сайтов, поэтому `logs/` в `.gitignore`.
