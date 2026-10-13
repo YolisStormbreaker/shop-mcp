@@ -25,6 +25,7 @@ from mcp.server.fastmcp import FastMCP
 import ali
 import avito
 import goldapple
+import grocery
 import images
 import lamoda
 import messenger
@@ -85,7 +86,9 @@ mcp = FastMCP("shop", instructions=INSTRUCTIONS)
 # old function until ozon itself is reloaded.
 # shoplog is left alone: reloading it would add a second log handler.
 # A new tool still needs a restart: tools are registered from server.py once, at start.
-_RELOADABLE = ("cdp", "capture", "images", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple")
+_RELOADABLE = ("cdp", "capture", "images", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple",
+               "grocery.composition", "grocery.lenta", "grocery.samokat", "grocery.lavka", "grocery.perekrestok", "grocery.pyaterochka",
+               "grocery")
 _mtimes = {m: Path(sys.modules[m].__file__).stat().st_mtime for m in _RELOADABLE}
 _reload_lock = threading.Lock()
 
@@ -647,6 +650,114 @@ def shop_images(urls: list[str], max_side: int = 1024) -> list:
     стороне (меньше — дешевле для контекста). Файлы сохраняются в cache/images сервера, пути — в первой,
     текстовой части ответа. Видео не скачивает: для отзывов с видео смотри его превью-картинку."""
     return images.images(urls, max_side)
+
+
+@mcp.tool()
+@logged
+def grocery_search(store: str, query: str = "", tag: str | None = None, sort: str = "popular",
+                   page: int = 1, limit: int = 30) -> str:
+    """Продукты: поиск в одном продуктовом магазине по названию и/или тегу. store: lenta (Лента), samokat (Самокат),
+    lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка). Цены и наличие — для адреса или магазина
+    пользователя на сайте. Таблица: id, название, фасовка, цена, без скидки, скидка, цена за кг/л/шт, рейтинг, наличие.
+    tag — диетический или товарный тег сайта: «без лактозы», «без глютена», «без сахара», «веган», «халяль»,
+    «фермерское», «много белка» или значение фильтра сайта («без добавления сахара», «индейка»…); строка
+    «теги и фильтры сайта» в ответе перечисляет, что этот сайт понимает. Тега нет — ищет текстом и пишет об этом.
+    query можно оставить пустым, если задан tag. sort: popular, price, price_desc, discount, rating
+    (где сайт не сортирует сам — сортирует полученную страницу и пишет об этом)."""
+    return grocery.search(store, query, tag, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def grocery_item(store: str, id_or_url: str, full: bool = False) -> str:
+    """Продукты: карточка товара (id или ссылка из grocery_search). Цена, скидка, цена за кг/л, наличие, доставка,
+    рейтинг, характеристики, ссылки на фото (смотреть — shop_images) и главное — СОСТАВ, разобранный на ингредиенты:
+    пронумерованный список (по убыванию доли), проценты («какао не менее 72%»), место сахара в списке,
+    подсластители, пальмовое масло, ароматизаторы, Е-добавки, следы аллергенов; КБЖУ на 100 г (сахар сайты почти
+    не пишут: тогда «сахара ≤ углеводов»). Описание до 2000 символов, full=True — целиком.
+    store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    return grocery.item(store, id_or_url, full)
+
+
+@mcp.tool()
+@logged
+def grocery_compare(query: str, stores: list[str] | None = None, tag: str | None = None, limit: int = 8) -> str:
+    """Продукты: один и тот же запрос сразу во всех продуктовых магазинах (или в stores) — общая таблица.
+    Одинаковые товары собраны в группы (штрихкодов сайты не дают — по бренду и фасовке), внутри и вне групп
+    дешевле за кг/л — выше. Для выбора по составу — grocery_compare_composition."""
+    return grocery.compare(query, stores, tag, limit)
+
+
+@mcp.tool()
+@logged
+def grocery_compare_composition(query: str | None = None, items: list[str] | None = None, stores: list[str] | None = None,
+                                tag: str | None = None, limit: int = 5, rank: str = "price") -> str:
+    """Продукты: сравнение по составу и КБЖУ, чтобы выбрать лучшее. Либо первые limit товаров поиска query в каждом
+    магазине (stores — какие, по умолчанию все), либо конкретные items вида ["lenta:589914", "5ka:4289719",
+    "lavka:s:<id>"] (store:id из grocery_search). Для каждого: цена и цена за кг/л, состав по ингредиентам,
+    место сахара, подсластители, пальмовое масло, Е-добавки, КБЖУ на 100 г.
+    rank — порядок: price (цена за кг/л), sugar (сахар/углеводы на 100 г, меньше — выше), kcal, protein (больше — выше),
+    fat, ingredients (короче состав — выше) или «%ингредиент» — доля ингредиента, больше — выше:
+    %какао для шоколада, %томат для соусов, %мясо, %сок. Медленный: по карточке на товар (до ~1 мин на 5×5)."""
+    return grocery.compare_details(query, stores, tag, limit, rank, items)
+
+
+@mcp.tool()
+@logged
+def grocery_reviews(store: str, id_or_url: str, sort: str = "useful", with_media: bool = False, page: int = 1) -> str:
+    """Продукты: отзывы о товаре. Есть у Перекрёстка (с фото, фильтр звёзд: sort high = 5★, low = 1–2★),
+    Пятёрочки (без фото, sort useful/new/high/low) и Ленты (5 последних с карточкой). У Самоката и Лавки отзывов нет.
+    store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    return grocery.call(store, "reviews", id_or_url, sort=sort, with_media=with_media, page=page)
+
+
+@mcp.tool()
+@logged
+def grocery_cart(store: str) -> str:
+    """Продукты: корзина магазина (что лежит, количество, цены, итог). store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    return grocery.call(store, "cart")
+
+
+@mcp.tool()
+@logged
+def grocery_add_to_cart(store: str, id_or_url: str, quantity: int = 1) -> str:
+    """Продукты: положить товар в корзину магазина (меняет аккаунт пользователя — только по его явной просьбе).
+    Заказ не оформляется. store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    return grocery.call(store, "add_to_cart", id_or_url, quantity)
+
+
+@mcp.tool()
+@logged
+def grocery_remove_from_cart(store: str, id_or_url: str) -> str:
+    """Продукты: убрать товар из корзины магазина (только по явной просьбе пользователя). store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    return grocery.call(store, "remove_from_cart", id_or_url)
+
+
+@mcp.tool()
+@logged
+def grocery_favorites(store: str) -> str:
+    """Продукты: избранное пользователя в магазине. Есть у Ленты, Перекрёстка и Лавки; у Самоката и Пятёрочки нет.
+    store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    return grocery.call(store, "favorites")
+
+
+@mcp.tool()
+@logged
+def grocery_favorite(store: str, id_or_url: str, remove: bool = False) -> str:
+    """Продукты: добавить товар в избранное (remove=True — убрать). Меняет аккаунт — только по просьбе пользователя.
+    Есть у Ленты, Перекрёстка и Лавки. store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка)."""
+    return grocery.call(store, "favorite", id_or_url, remove)
+
+
+@mcp.tool()
+@logged
+def shop_status() -> str:
+    """Диагностика: установлен ли и запущен ли Chrome магазинов (LaunchAgent local.shop-chrome, порт 9222),
+    версия, профиль (новый — значит, на сайтах не выполнен вход), uv, открытые вкладки, что исправить.
+    Вызови, если инструменты падают с ошибкой Chrome или сайты ведут себя как без входа."""
+    import subprocess
+    r = subprocess.run([str(Path(__file__).parent / "shop-chrome"), "status"], capture_output=True, text=True, timeout=30)
+    return (r.stdout + r.stderr).strip()
 
 
 if __name__ == "__main__":

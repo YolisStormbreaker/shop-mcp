@@ -6,13 +6,15 @@ the response through CDP Network.getResponseBody.
 """
 import base64
 import json
+import re
 import time
 
 import cdp
 
 
-def capture(tab, site, url, patterns, timeout=20, rewrite=None):
-    """Navigate to url; return {name: JSON} of the first response whose URL contains every part of patterns[name].
+def capture(tab, site, url, patterns, timeout=20, rewrite=None, js=None):
+    """Navigate to url; return {name: JSON} of the first response whose URL contains every part of patterns[name]
+    (a part "re:<regex>" is searched as a regular expression instead).
 
     rewrite=(glob, fn): the page's own requests matching glob are sent to fn(url) instead, with the
     browser's own headers (CDP Fetch); fn may return (url, body) to replace the body too. Wildberries
@@ -20,6 +22,8 @@ def capture(tab, site, url, patterns, timeout=20, rewrite=None):
     page N; its cart sync, sent on every page load, carries our cart change. Only requestId and url
     are read from the paused request: its headers carry the user's token.
     Names whose response did not arrive within timeout are missing from the result.
+    js: run this in the page instead of navigating to url — e.g. the site's own router, so a single-page
+    app fetches the next screen's data without a full page load (Samokat's bot check counts page loads).
     """
     gap = cdp.MIN_GAP - (time.time() - cdp._last_nav.get(site, 0))
     if gap > 0:
@@ -49,7 +53,10 @@ def capture(tab, site, url, patterns, timeout=20, rewrite=None):
     send("Network.enable")
     if rewrite:
         tab.call("Fetch.enable", patterns=[{"urlPattern": rewrite[0], "requestStage": "Request"}])  # before navigate
-    send("Page.navigate", url=url)
+    if js:
+        send("Runtime.evaluate", expression=js)
+    else:
+        send("Page.navigate", url=url)
     pending, out, deadline = {}, {}, time.time() + timeout
     try:
         while time.time() < deadline and len(out) < len(patterns):
@@ -62,7 +69,8 @@ def capture(tab, site, url, patterns, timeout=20, rewrite=None):
                 resume(p)
             elif m.get("method") == "Network.responseReceived":
                 for name, parts in patterns.items():
-                    if name not in out and name not in pending.values() and all(s in p["response"]["url"] for s in parts):
+                    if name not in out and name not in pending.values() and all(
+                            re.search(s[3:], p["response"]["url"]) if s.startswith("re:") else s in p["response"]["url"] for s in parts):
                         pending[p["requestId"]] = name
             elif m.get("method") == "Network.loadingFinished" and p.get("requestId") in pending:
                 i = send("Network.getResponseBody", requestId=p["requestId"])

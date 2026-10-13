@@ -1,15 +1,59 @@
 #!/bin/zsh
-# Show / hide / restart / re-icon the hidden Chrome that shop-mcp drives (LaunchAgent local.shop-chrome, port 9222).
+# The hidden Chrome that shop-mcp drives (LaunchAgent local.shop-chrome, port 9222):
+#   setup    install or repair everything (idempotent): LaunchAgent from launchd/, this command in ~/.local/bin, start Chrome
+#   status   what is installed and running, what is missing
+#   show / hide / restart / icon
 # ponytail: finds the instance by the debugging port, the only thing that tells it apart from the main Chrome.
 pid=$(lsof -tiTCP:9222 -sTCP:LISTEN)
+uid=$(id -u)
+dir=${0:A:h}
+chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+plist=~/Library/LaunchAgents/local.shop-chrome.plist
+profile="$HOME/Library/Application Support/shop-chrome"
+version() { curl -s -m 2 http://127.0.0.1:9222/json/version | sed -n 's/.*"Browser": *"\([^"]*\)".*/\1/p' }
+has_uv() { command -v uv >/dev/null || [[ -x ~/.local/bin/uv || -x /opt/homebrew/bin/uv || -x /usr/local/bin/uv ]] }
 case $1 in
   show|hide)
     [[ -n $pid ]] || { echo "shop Chrome не запущен: shop-chrome restart" >&2; exit 1; }
     js="ObjC.import('AppKit'); const a = \$.NSRunningApplication.runningApplicationWithProcessIdentifier($pid);"
     [[ $1 == show ]] && js+=" a.unhide; a.activateWithOptions(\$.NSApplicationActivateAllWindows)" || js+=" a.hide"
     osascript -l JavaScript -e "$js" >/dev/null ;;
-  restart) launchctl kickstart -k gui/$(id -u)/local.shop-chrome ;;
+  restart)
+    launchctl kickstart -k gui/$uid/local.shop-chrome 2>/dev/null || { echo "LaunchAgent не загружен: shop-chrome setup" >&2; exit 1; } ;;
   icon)  # its own Dock/⌘Tab icon, for this process only (dock_icon.py); the LaunchAgent runs it at every start
-    PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH exec uv run --quiet --script "${0:A:h}/dock_icon.py" ;;
-  *) echo "usage: shop-chrome show|hide|restart|icon" >&2; exit 1 ;;
+    PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH exec uv run --quiet --script "$dir/dock_icon.py" ;;
+  setup)
+    [[ -x $chrome ]] || { echo "Нет Google Chrome в /Applications: установите его (https://www.google.com/chrome/ или brew install --cask google-chrome) и повторите shop-chrome setup" >&2; exit 1; }
+    mkdir -p ~/.local/bin ~/Library/LaunchAgents "$profile"
+    ln -sf "$dir/shop-chrome" ~/.local/bin/shop-chrome
+    # the template names /Users/YOU and ~/shop-mcp; this copy of the repo may live elsewhere
+    subs=(-e "s#/Users/YOU#$HOME#g")
+    [[ $dir == $HOME/shop-mcp ]] || subs+=(-e "s#\\\$HOME/shop-mcp#$dir#g")
+    sed "${subs[@]}" "$dir/launchd/local.shop-chrome.plist" > "$plist.new"
+    if cmp -s "$plist.new" "$plist"; then
+      rm "$plist.new"
+    else
+      mv "$plist.new" "$plist"
+      launchctl bootout gui/$uid/local.shop-chrome 2>/dev/null && sleep 2   # reload a changed agent (restarts this Chrome)
+    fi
+    launchctl print gui/$uid/local.shop-chrome >/dev/null 2>&1 || launchctl bootstrap gui/$uid "$plist"
+    for i in {1..30}; do [[ -n $(version) ]] && break; sleep 1; done
+    [[ -n $(version) ]] || { echo "Chrome не открыл порт 9222 за 30 с: shop-chrome status" >&2; exit 1; }
+    echo "shop Chrome работает: $(version)"
+    has_uv || echo "⚠️ нет uv, без него сервер не запустится: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    [[ -s "$profile/Default/Cookies" ]] || echo "Профиль новый: войдите на нужные сайты — shop-chrome show, вход во вкладках, потом shop-chrome hide" ;;
+  status)
+    app=$([[ -x $chrome ]] && "$chrome" --version 2>/dev/null | awk '{print $3}')
+    echo "Chrome: ${app:-НЕТ в /Applications — установите, затем shop-chrome setup}"
+    [[ -f $plist ]] && echo "LaunchAgent: $plist" || echo "LaunchAgent: НЕТ — shop-chrome setup"
+    st=$(launchctl print gui/$uid/local.shop-chrome 2>/dev/null | awk '$1 == "state" {print $3; exit}')
+    echo "агент: ${st:-не загружен (shop-chrome setup)}"
+    v=$(version); echo "порт 9222: ${v:-не отвечает}${pid:+ (pid $pid)}"
+    [[ -n $app && -n $v && ${v#Chrome/} != $app ]] && echo "⚠️ Chrome обновился до $app, а запущен ${v#Chrome/}: shop-chrome restart, потом снова status (проверка приоритета рендеров)"
+    [[ -s "$profile/Default/Cookies" ]] && echo "профиль: $profile" || echo "профиль: новый или удалён — войдите на сайты (shop-chrome show)"
+    has_uv && echo "uv: есть" || echo "uv: НЕТ — curl -LsSf https://astral.sh/uv/install.sh | sh"
+    slow=$(ps -axo pri,stat,command | grep renderer | grep shop-chrome | awk '$1 == 4 && $2 ~ /^R/' | wc -l | tr -d ' ')
+    [[ $slow == 0 ]] || echo "⚠️ $slow рендеров в фоновом приоритете macOS: флаг ForceForegroundPriorityForAllTabs перестал действовать"
+    [[ -n $v ]] && curl -s -m 2 http://127.0.0.1:9222/json/list | sed -n 's/.*"url": *"\(https*:\/\/[^/"]*\).*/  вкладка \1/p' ;;
+  *) echo "usage: shop-chrome setup|status|show|hide|restart|icon" >&2; exit 1 ;;
 esac
