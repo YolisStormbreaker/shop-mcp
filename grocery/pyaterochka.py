@@ -32,9 +32,11 @@ CHECKED = ("⚠️ Пятёрочка показала проверку на б�
 
 def _tab():
     tab = tab_for("5ka.ru")
-    if "/xpvnsulc/" in (tab.js("location.pathname") or ""):
-        tab.close()
-        raise RuntimeError(CHECKED)
+    if "/xpvnsulc/" in (tab.js("location.pathname") or ""):      # maybe a stale page from session restore: try once
+        tab.goto("https://5ka.ru/", "5ka", wait_js="!!document.getElementById('__NEXT_DATA__') || location.pathname.includes('/xpvnsulc/')")
+        if "/xpvnsulc/" in (tab.js("location.pathname") or ""):
+            tab.close()
+            raise RuntimeError(CHECKED)
     if "5ka.ru" not in (tab.js("location.hostname") or ""):
         tab.goto("https://5ka.ru/", "5ka", wait_js="!!document.getElementById('__NEXT_DATA__')")
     return tab

@@ -204,7 +204,8 @@ CARD_JS = r"""(pid => { try { const s = JSON.parse(document.getElementById('ng-s
 
 def _goods(cart_lookup):
     cl = (((cart_lookup or {}).get("Body") or {}).get("CartList") or [{}])[0]
-    return {str(g.get("GoodsItemId")): g for g in cl.get("Goods") or []}, cl
+    # the cart writes some ids with a leading zero («052602» for 52602)
+    return {str(g.get("GoodsItemId")).lstrip("0") or "0": g for g in cl.get("Goods") or []}, cl
 
 
 def _load(tab, pid):

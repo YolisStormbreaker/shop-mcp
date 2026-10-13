@@ -37,8 +37,9 @@ SORT = {"popular": ("relevance", "desc"), "price": ("price", "asc"), "price_desc
 def _tab():
     tab = tab_for("perekrestok.ru")
     if "perekrestok.ru" not in (tab.js("location.hostname") or "") or not tab.js(FIND_API):
-        if "/xpvnsulc/" not in (tab.js("location.pathname") or ""):      # don't reload a bot check: it only gets stricter
-            tab.goto(SITE + "/", "perekrestok", wait_js="!!window.__LOADABLE_LOADED_CHUNKS__ && document.readyState === 'complete'")
+        # one load of the home page; a check page left in the tab may be stale — session restore after a Chrome
+        # restart brings back the old one, already passed (2026-10-13). If the home page shows the check, it is real.
+        tab.goto(SITE + "/", "perekrestok", wait_js="!!window.__LOADABLE_LOADED_CHUNKS__ && document.readyState === 'complete' || location.pathname.includes('/xpvnsulc/')")
         if not tab.js(FIND_API):
             checked = "/xpvnsulc/" in (tab.js("location.pathname") or "")
             tab.close()
@@ -105,6 +106,8 @@ def _url(p):
 
 
 def _size(md):
+    if md.get("unitName") == "кг":       # sold by weight: the price is per kilogram
+        return "1 кг"
     if md.get("weight"):
         return f"{md['weight']} г"
     if md.get("volume"):
@@ -205,6 +208,9 @@ def product(id_or_url):
     extra = []
     if pt.get("labels"):
         extra.append("акции: " + "; ".join(x.get("text", "") for x in pt["labels"] if x.get("text")))
+    md = p.get("masterData") or {}
+    if md.get("unitName") == "кг" and md.get("quantum"):
+        extra.append(f"весовой товар: цена за кг, шаг продажи {md['quantum'] / 1000:g} кг (≈ {round(_rub(pt.get('price')) * md['quantum'] / 1000)} ₽ за шаг)")
     if p.get("medianPrice"):
         extra.append(f"обычная цена (медиана): {_rub(p['medianPrice'])} ₽")
     tabs = [f"{t.get('title') or t.get('type')}: {t.get('costString') or (str(_rub(t.get('cost'))) + ' ₽')}, "
