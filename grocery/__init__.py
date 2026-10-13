@@ -136,7 +136,9 @@ def compare(query, stores=None, tag=None, limit=8, strict=True):
             r = STORES[s].search(query, tag=tag, sort="popular", page=1, limit=max(limit * 3, 20) if strict else limit)
             if isinstance(r, str):
                 return s, r
-            return s, [p for p in r["items"] if not strict or _relevant(p.get("name"), query)][:limit]
+            hits = [p for p in r["items"] if not strict or _relevant(p.get("name"), query)]
+            # no name has every word («соус для фрикаделек»): the site's own best matches, marked as such
+            return s, hits[:limit] or [dict(p, name=p.get("name", "") + " (≈ похожее)") for p in r["items"][:min(limit, 4)]]
         except Exception as e:
             return s, f"ошибка: {str(e)[:150]}"
 
@@ -174,7 +176,7 @@ def compare(query, stores=None, tag=None, limit=8, strict=True):
             lines.append(f"{gi}\t" + _row(n, s, p))
     if rest:
         lines.append("Остальное, дешевле за кг/л — выше:" if same else "")
-        for s, p in sorted(rest, key=per_unit):
+        for s, p in sorted(rest, key=lambda x: ("(≈ похожее)" in (x[1].get("name") or ""), per_unit(x))):   # exact matches first
             n += 1
             lines.append("—\t" + _row(n, s, p))
     return "\n".join(x for x in lines if x is not None)
@@ -232,7 +234,7 @@ def _rank_value(p, rank):
 def _relevant(name, query):
     """Every word of the query (by its first four letters) is in the name: sites pad their results with
     neighbours — dried fish for «рыбные котлеты», chicken cutlets in Лавка."""
-    stems = [w[:4] for w in re.findall(r"[а-яёa-z]{3,}", (query or "").lower())]
+    stems = [w[:4] for w in re.findall(r"[а-яёa-z]{3,}", (query or "").lower()) if w not in ("для", "или", "под", "как")]
     if re.search(r"\bкорм|для (кошек|собак)", (name or "").lower()) and "корм" not in (query or "").lower():
         return False                       # pet food: «Корм … курица-тунец» is not «тунец»
     return all(st in (name or "").lower().replace("ё", "е") for st in (x.replace("ё", "е") for x in stems))
@@ -257,8 +259,8 @@ def compare_details(query=None, stores=None, tag=None, limit=5, rank="price", it
                 r = STORES[s].search(query, tag=tag, sort="popular", page=1, limit=max(limit * 4, 20))
                 if isinstance(r, str):
                     return s, r
-                hits = [p for p in r["items"] if not strict or _relevant(p.get("name"), query)]
-                return s, [p["id"] for p in hits[:limit]] or f"в поиске нет товаров со всеми словами «{query}» (strict=False — брать все)"
+                hits = [p for p in r["items"] if not strict or _relevant(p.get("name"), query)] or r["items"][:min(limit, 3)]
+                return s, [p["id"] for p in hits[:limit]] or f"по «{query}» ничего не нашлось"
             except Exception as e:
                 return s, f"ошибка: {str(e)[:150]}"
         with ThreadPoolExecutor(len(keys)) as ex:

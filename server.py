@@ -47,6 +47,20 @@ INSTRUCTIONS = """\
 пользователя *_add_to_cart, *_remove_from_cart, avito_send и *_leave_review —
 только по его явной просьбе, текст сообщения или отзыва показать ему до отправки. Заказы нигде не оформляются и не оплачиваются.
 
+Куда идти — реши это первым:
+- Еда, напитки и всё, что покупают в продуктовом (соусы, молочное, мясо, рыба, овощи, фрукты, крупы, хлеб,
+  сладости, вода, чай и кофе), — раздел «Продукты питания», не маркетплейсы. Магазин не назван — сразу
+  grocery_compare (все продуктовые: Лента, Перекрёсток, Пятёрочка, Самокат, Яндекс Лавка, ВкусВилл), а в ответе
+  предложи поискать ещё и на маркетплейсах. Назван продуктовый магазин — grocery_search или grocery_compare
+  со stores. Выбор по составу — grocery_compare_composition. Ozon, Wildberries и другие маркетплейсы для еды —
+  только если пользователь сам их назвал.
+- Если неясно, продуктовый это товар или нет (корм для животных, бытовая химия, витамины, спортпит, детское
+  питание), — сначала один короткий вопрос: «Где искать: в продуктовых магазинах (Лента, Перекрёсток, Пятёрочка,
+  Самокат, Яндекс Лавка, ВкусВилл) или на маркетплейсах (Ozon, Wildberries, Яндекс Маркет)?» Если спросить не у
+  кого (работаешь без собеседника) — ищи и там, и там.
+- Остальное — маркетплейсы: техника, дом, хобби — Ozon, Wildberries, Яндекс Маркет, AliExpress; одежда
+  и обувь — ещё Lamoda; косметика — ещё Золотое яблоко; с рук и б/у — Авито.
+
 Правила:
 - Прежде чем советовать товар, открой его *_item: в поиске данные неполные.
 - Пометки: «реклама» и «продвижение» — платные места; «из-за рубежа»; «⛔ ЗАРЕЗЕРВИРОВАН» на Авито — не советовать.
@@ -127,6 +141,11 @@ def _reload_changed():
                 log.info("reloaded %s.py", m)
 
 
+_STARTED = Path(__file__).stat().st_mtime
+STALE = ("⚠️ Сервер shop запущен со старой версией: server.py изменился после запуска, и новых инструментов "
+         "у этого процесса нет. Перезапусти клиент (Claude Desktop — ⌘Q и снова открыть; Claude Code — новая сессия).\n")
+
+
 def logged(fn):
     """Log every tool call to logs/shop.log: arguments, time, first line of the answer or the error."""
     @functools.wraps(fn)
@@ -139,6 +158,8 @@ def logged(fn):
         except Exception:
             log.exception("%s failed in %.1f s", call, time.time() - t)
             raise
+        if Path(__file__).stat().st_mtime != _STARTED and isinstance(out, str):
+            out = STALE + out          # tools are registered once, at start: a newer server.py needs a new process
         text = out if isinstance(out, str) else "\n".join(x for x in out if isinstance(x, str))  # shop_images: text + pictures
         warn = any(w in text for w in ("⚠️", "блокировку", "проверка Авито"))
         log.log(30 if warn else 20, "%s ok in %.1f s, %d lines: %s",
@@ -152,7 +173,8 @@ def logged(fn):
 def avito_search(query: str, region: str = "sankt-peterburg", price_min: int | None = None,
                  price_max: int | None = None, sort: str = "default", page: int = 1,
                  limit: int = 30, delivery: bool = False, shipping: int = 15) -> str:
-    """Поиск на Авито под аккаунтом пользователя.
+    """Не для еды и напитков, если пользователь сам не назвал этот магазин: еду ищи в продуктовых — grocery_compare (сразу все).
+    Поиск на Авито под аккаунтом пользователя.
 
     region — часть адреса Авито: sankt-peterburg, moskva, all (вся Россия) и т.п.
     sort — default | date | price | price_desc. delivery=True — только с Авито Доставкой.
@@ -182,7 +204,8 @@ def avito_item(url: str, full: bool = False) -> str:
 @logged
 def ozon_search(query: str, price_min: int | None = None, price_max: int | None = None,
                 sort: str = "score", limit: int = 30) -> str:
-    """Поиск на Ozon под аккаунтом пользователя (доставка — на его адрес).
+    """Не для еды и напитков, если пользователь сам не назвал этот магазин: еду ищи в продуктовых — grocery_compare (сразу все).
+    Поиск на Ozon под аккаунтом пользователя (доставка — на его адрес).
 
     sort — score (популярные) | new | price | price_desc | rating | discount.
     Возвращает TSV: sku, цена, цена без скидки, название, рейтинг, отзывы, когда привезут.
@@ -242,7 +265,8 @@ def ozon_remove_from_cart(sku_or_url: str) -> str:
 @logged
 def ali_search(query: str, price_min: int | None = None, price_max: int | None = None,
                sort: str = "default", limit: int = 30) -> str:
-    """Поиск на AliExpress (aliexpress.ru) под аккаунтом пользователя.
+    """Не для еды и напитков, если пользователь сам не назвал этот магазин: еду ищи в продуктовых — grocery_compare (сразу все).
+    Поиск на AliExpress (aliexpress.ru) под аккаунтом пользователя.
 
     sort — default | orders (по числу покупок) | price | price_desc.
     Возвращает TSV: id, sku, цена, название, рейтинг, купили, «привезут до» (оценка),
@@ -336,7 +360,8 @@ def ali_orders(query: str | None = None, limit: int = 30, max_new: int = 60) -> 
 @logged
 def wb_search(query: str, price_min: int | None = None, price_max: int | None = None,
               sort: str = "popular", page: int = 1, limit: int = 30) -> str:
-    """Поиск на Wildberries под аккаунтом пользователя (регион и доставка — из его профиля).
+    """Не для еды и напитков, если пользователь сам не назвал этот магазин: еду ищи в продуктовых — grocery_compare (сразу все).
+    Поиск на Wildberries под аккаунтом пользователя (регион и доставка — из его профиля).
 
     sort — popular | rate | priceup | pricedown | newly | benefit. page — страница по 100 товаров
     (в шапке «страница N из M»). При сортировке по цене строки страницы упорядочены по цене заново:
@@ -376,7 +401,8 @@ def wb_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False,
 @logged
 def ym_search(query: str, price_min: int | None = None, price_max: int | None = None,
               sort: str = "default", page: int = 1, limit: int = 30) -> str:
-    """Поиск на Яндекс Маркете под аккаунтом пользователя (регион и доставка — из его профиля).
+    """Не для еды и напитков, если пользователь сам не назвал этот магазин: еду ищи в продуктовых — grocery_compare (сразу все).
+    Поиск на Яндекс Маркете под аккаунтом пользователя (регион и доставка — из его профиля).
 
     sort — default | price | price_desc | rating («Высокий рейтинг») | with_reviews («С отзывами» —
     только товары с отзывами, не по их числу) | new. На странице видна лишь часть выдачи (обычно 8–40
@@ -678,7 +704,8 @@ def shop_images(urls: list[str], max_side: int = 1024) -> list:
 @logged
 def grocery_search(store: str, query: str = "", tag: str | None = None, sort: str = "popular",
                    page: int = 1, limit: int = 30) -> str:
-    """Продукты: поиск в одном продуктовом магазине по названию и/или тегу. store: lenta (Лента), samokat (Самокат),
+    """Продукты питания: поиск еды и напитков в одном продуктовом магазине по названию и/или тегу —
+    для любых запросов про еду вместо маркетплейсов. Во всех магазинах сразу — grocery_compare. store: lenta (Лента), samokat (Самокат),
     lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка), vkusvill (ВкусВилл). Цены и наличие — для адреса или магазина
     пользователя на сайте. Таблица: id, название, фасовка, цена, без скидки, скидка, цена за кг/л/шт, рейтинг, наличие.
     tag — диетический или товарный тег сайта: «без лактозы», «без глютена», «без сахара», «веган», «халяль»,
@@ -705,7 +732,10 @@ def grocery_item(store: str, id_or_url: str, full: bool = False) -> str:
 @logged
 def grocery_compare(query: str, stores: list[str] | None = None, tag: str | None = None, limit: int = 8,
                     strict: bool = True) -> str:
-    """Продукты: один и тот же запрос сразу во всех продуктовых магазинах (или в stores) — общая таблица.
+    """Продукты питания: найти еду или напитки сразу во всех продуктовых магазинах (Лента, Перекрёсток,
+    Пятёрочка, Самокат, Яндекс Лавка, ВкусВилл; или в stores) — первый выбор для любых запросов про еду, где
+    магазин не назван («поищи соус для фрикаделек»). Общая таблица со ссылками. tag — как в grocery_search
+    («без лактозы», «без сахара», «веган»…): каждый магазин применит свой раздел или фильтр.
     Одинаковые товары собраны в группы (штрихкодов сайты не дают — по бренду и фасовке), внутри и вне групп
     дешевле за кг/л — выше. Сайты подмешивают соседние товары, поэтому берутся только названия со всеми словами
     запроса (strict=False — все результаты поиска). Для выбора по составу — grocery_compare_composition."""
