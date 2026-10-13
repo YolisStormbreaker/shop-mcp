@@ -46,9 +46,30 @@ def _tab():
     return tab
 
 
+_last = 0.0
+_cache: dict = {}            # (method, path, body) → (time, data) for slow-changing reads: delivery terms, search facets
+GAP = 1.5                    # s between calls: a burst of ~30 in a few seconds brought ServicePipe's bot check (2026-10-13)
+
+
+def _cached(tab, method, path, body=None, ttl=600):
+    key = (method, path, json.dumps(body, sort_keys=True))
+    hit = _cache.get(key)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    d = _call(tab, method, path, body)
+    if isinstance(d, dict) and "__error" not in d:
+        _cache[key] = (time.time(), d)
+    return d
+
+
 def _call(tab, method, path, body=None, retried=False):
     """The site's client: method get/post/put/delete. Only response data comes back, never the request config.
     401/403: the page's session or anti-bot cookie went stale (2026-10-13, after an hour of calls) — a reload renews it."""
+    global _last
+    wait = GAP - (time.time() - _last)
+    if wait > 0:
+        time.sleep(wait)
+    _last = time.time()
     args = json.dumps(path) + ("" if body is None else ", " + json.dumps(body))
     r = tab.js(f"window.__shopApi.{method}({args}).then(r => JSON.stringify(r.data ?? null))"
                ".catch(e => JSON.stringify({__error: e.response ? e.response.status : String(e.message || e)}))")
@@ -101,7 +122,7 @@ def _listed(p):
 
 def _facets(tab, query):
     """{title: (feature key, value)} of the search's own filters: «Без лактозы» → ("osobennosti", "bez-laktozy")…"""
-    form = _call(tab, "post", "/catalog/search/form", {"filter": {"textQuery": query}, "disableBubbleUp": True, "sortByAlpha": True}) or {}
+    form = _cached(tab, "post", "/catalog/search/form", {"filter": {"textQuery": query}, "disableBubbleUp": True, "sortByAlpha": True}) or {}
     out = {}
     for f in form.get("searchFeatures") or []:
         if f.get("key") in ("brand",):
@@ -158,7 +179,7 @@ def product(id_or_url):
     tab = _tab()
     try:
         p = _call(tab, "get", f"/catalog/product/plu{plu}")
-        delivery = _call(tab, "get", "/delivery/switcher") or {}
+        delivery = _cached(tab, "get", "/delivery/switcher") or {}
     finally:
         tab.close()
     if not isinstance(p, dict) or "masterData" not in p:

@@ -52,8 +52,9 @@ case $1 in
     [[ -n $app && -n $v && ${v#Chrome/} != $app ]] && echo "⚠️ Chrome обновился до $app, а запущен ${v#Chrome/}: shop-chrome restart, потом снова status (проверка приоритета рендеров)"
     [[ -s "$profile/Default/Cookies" ]] && echo "профиль: $profile" || echo "профиль: новый или удалён — войдите на сайты (shop-chrome show)"
     has_uv && echo "uv: есть" || echo "uv: НЕТ — curl -LsSf https://astral.sh/uv/install.sh | sh"
-    slow=$(ps -axo pri,stat,command | grep renderer | grep shop-chrome | awk '$1 == 4 && $2 ~ /^R/' | wc -l | tr -d ' ')
-    [[ $slow == 0 ]] || echo "⚠️ $slow рендеров в фоновом приоритете macOS: флаг ForceForegroundPriorityForAllTabs перестал действовать"
+    # tabs' renderers in macOS background priority (4) never get CPU; one idle at 4 is Chrome's spare process
+    slow=$(ps -axo pri,stat,command | grep -- '--type=renderer' | grep shop-chrome | awk '$1 == 4 && $2 ~ /^R/' | wc -l | tr -d ' ')
+    (( slow > 1 )) && echo "⚠️ $slow рендеров в фоновом приоритете macOS: флаг ForceForegroundPriorityForAllTabs перестал действовать"
     [[ -n $v ]] && curl -s -m 2 http://127.0.0.1:9222/json/list | sed -n 's/.*"url": *"\(https*:\/\/[^/"]*\).*/  вкладка \1/p' ;;
   *) echo "usage: shop-chrome setup|status|show|hide|restart|icon" >&2; exit 1 ;;
 esac
