@@ -7,6 +7,7 @@ nothing. The cart is a draft order behind headers that only the site's code adds
 """
 import json
 import re
+import time
 import urllib.parse
 
 from cdp import tab_for
@@ -17,9 +18,12 @@ REVIEWS = "https://gw-fb5.x5.ru/api/product-review/v1"
 BLOCKED = "⚠️ Пятёрочка не отдала данные (проверка на бота?): shop-chrome show, открыть 5ka.ru, повторить."
 ORDER = {"popular": "popularity", "price": "price_asc", "price_desc": "price_desc", "discount": "discount_desc", "rating": "rating_desc"}
 # Diet tags are subcategories of «Здоровый выбор», not search filters (seen 2026-10-13)
+# The store of the user's delivery address is kept by the site in localStorage (DeliveryPanelStore.selectedAddress
+# .sapCode); the server-rendered catalogStore.storeId stays the default 35XY even then (2026-10-13). Only the code is read.
 STATE_JS = """(() => { const p = JSON.parse(document.getElementById('__NEXT_DATA__')?.textContent || '{}').props?.pageProps?.props || {};
   const c = typeof p.catalogStore === 'string' ? JSON.parse(p.catalogStore) : (p.catalogStore || {});
-  return {store: c.storeId || '35XY', address: document.querySelector('[data-qa="delivery-panel-address"]')?.innerText || ''} })()"""
+  let sap = null; try { sap = JSON.parse(localStorage.getItem('DeliveryPanelStore') || '{}').selectedAddress?.sapCode } catch (e) {}
+  return {store: sap || c.storeId || '35XY', address: document.querySelector('[data-qa="delivery-panel-address"]')?.innerText || ''} })()"""
 
 
 def _tab():
@@ -46,7 +50,7 @@ def _get(tab, url, retried=False):
 def _ctx(tab):
     s = tab.js(STATE_JS)
     note = ("⚠️ на 5ka.ru не задан адрес доставки: цены и наличие — для магазина по умолчанию сайта (35XY). "
-            "Выбрать адрес можно на сайте.") if "Уточните" in s["address"] or not s["address"] else ""
+            "Выбрать адрес можно на сайте.") if s["store"] == "35XY" and ("Уточните" in s["address"] or not s["address"]) else ""
     return s["store"], note
 
 
@@ -189,3 +193,93 @@ def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=20):
     rows = [f"{(x.get('date') or '')[:10]}\t{x.get('rate')}\t+{x.get('likes', 0)}/−{x.get('dislikes', 0)}\t{' '.join((x.get('text') or '').split())}"
             for x in d.get("items") or []]
     return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)") + ("\nесть ещё: page=" + str(page + 1) if d.get("has_next_page") else "")
+
+
+# Cart: a draft order behind headers only the site's code adds, so we press the product page's own buttons
+# (element.click() reaches them in the hidden tab) and read the cart the site keeps in localStorage («cart-store»).
+CART_JS = """(() => { try { const o = JSON.parse(localStorage.getItem('cart-store') || '{}').order || {};
+  return {total: o.total_sum, items: (o.basket?.items || o.items || []).map(i => ({plu: String(i.product_plu), qty: parseFloat(i.quantity),
+    price: i.price_promo || i.price_reg, total: i.total, name: i.name, uom: i.uom, gone: !!i.unavailability}))} } catch (e) { return {items: []} } })()"""
+MAIN = "[...document.querySelectorAll('[data-qa=\"%s\"]')].find(b => !b.closest('[data-qa^=\"product-card-\"]'))"
+
+
+def _qty(tab, plu):
+    return next((i["qty"] for i in tab.js(CART_JS)["items"] if i["plu"] == str(plu)), 0)
+
+
+def _press(tab, qa, plu=None):
+    """Click the product's own button; with plu, wait until the site's cart shows a new quantity."""
+    before = _qty(tab, plu) if plu else None
+    if not tab.js(f"(() => {{ const b = {MAIN % qa}; if (!b) return false; b.click(); return true }})()"):
+        return False
+    for _ in range(12):
+        time.sleep(0.5)
+        if plu is None or _qty(tab, plu) != before:
+            break
+    return True
+
+
+def _open(tab, plu):
+    tab.goto(f"https://5ka.ru/product/{plu}/", "5ka", wait_js="!!document.querySelector('[data-qa=\"product-detail-add-to-cart-button\"], [data-qa=\"cart-button-with-item\"]')")
+    time.sleep(2)              # hydration: a click before it does nothing
+    return tab.js("document.querySelector('h1')?.innerText || ''")
+
+
+def _settled(tab, plu):
+    """The site sends quantity changes a moment after the clicks: wait, then reload and read what the server kept."""
+    time.sleep(3)
+    tab.goto(f"https://5ka.ru/product/{plu}/", "5ka", wait_js="!!document.getElementById('__NEXT_DATA__')")
+    time.sleep(2)
+    return _qty(tab, plu)
+
+
+def add_to_cart(id_or_url, quantity=1):
+    plu = _plu(id_or_url)
+    tab = _tab()
+    try:
+        name = _open(tab, plu)
+        start = _qty(tab, plu)
+        for i in range(max(1, min(int(quantity), 30))):
+            if not _press(tab, "product-detail-add-to-cart-button" if i == 0 and not start else "cart-button-increment-button", plu):
+                break
+            if tab.js("!!document.querySelector('[data-qa=\"delivery-modal\"]')"):
+                return "Пятёрочка просит адрес доставки: выберите его на 5ka.ru (shop-chrome show), потом повторите"
+        n, cart = _settled(tab, plu), tab.js(CART_JS)
+    finally:
+        tab.close()
+    if n <= start:
+        return f"Пятёрочка не положила «{name}» в корзину (нет в наличии?)"
+    return f"в корзине Пятёрочки: {name} — {n:g} шт; корзина {cart.get('total')} ₽"
+
+
+def remove_from_cart(id_or_url):
+    plu = _plu(id_or_url)
+    tab = _tab()
+    try:
+        name = _open(tab, plu)
+        for _ in range(2):                     # a second round if the server kept some
+            for _ in range(30):
+                # «−» is the decrement button above one unit and a remove (bin) button at the last one
+                if not _qty(tab, plu) or not (_press(tab, "cart-button-decrement-button", plu) or _press(tab, "cart-button-remove-button", plu)):
+                    break
+            left = _settled(tab, plu)
+            if not left:
+                break
+    finally:
+        tab.close()
+    return f"не удалось убрать «{name}» из корзины Пятёрочки" if left else f"убрано из корзины Пятёрочки: {name}"
+
+
+def cart():
+    tab = _tab()
+    try:
+        tab.goto("https://5ka.ru/", "5ka", wait_js="!!document.getElementById('__NEXT_DATA__')")   # the site refreshes its cart on load
+        time.sleep(1.5)
+        c = tab.js(CART_JS)
+    finally:
+        tab.close()
+    if not c["items"]:
+        return "корзина Пятёрочки пуста"
+    return (f"корзина Пятёрочки: итого {c.get('total')} ₽\nplu\tкол-во\tцена ₽\tсумма ₽\tназвание\n"
+            + "\n".join(f"{i['plu']}\t{i['qty']:g} {i['uom'] or ''}\t{i['price']}\t{i['total']}\t{i['name']}{' — нет в наличии' if i['gone'] else ''}"
+                        for i in c["items"]))
