@@ -292,6 +292,7 @@ def compare_details(query=None, stores=None, tag=None, limit=5, rank="price", it
         rating = f" · рейтинг {p['rating']}" + (f" ({p['reviews']})" if p.get("reviews") else "") if p.get("rating") else ""
         lines.append(f"\n{i}. {NAMES[s]} · {p.get('name', '')} · {price} ₽" + (f" ({unit_price(p)})" if unit_price(p) else "")
                      + ("" if p.get("available", True) else " · нет в наличии") + val + rating + f" · {s}:{p.get('id')}")
+        lines.append(f"   {p.get('url', '')}")
         lines += ["   " + x for x in composition.describe(p.get("composition"), p.get("nutrition"), p.get("composition_extra"))]
     return "\n".join(lines)
 
