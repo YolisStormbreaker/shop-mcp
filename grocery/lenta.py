@@ -189,3 +189,131 @@ def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=5):
     line = next((x for x in p.get("extra") or [] if x.startswith("отзывы")), "")
     return (f"Лента · {p['name']}: рейтинг {p.get('rating') or '—'} ({p.get('reviews') or 0} оценок)\n"
             "Лента отдаёт с карточкой 5 последних отзывов; фото в отзывах у Ленты нет\n" + (line or "(отзывов нет)"))
+
+
+# Cart and favorites: the legacy cart API signs its body with the session token, so we press the page's own
+# buttons (element.click() works in the hidden tab) on a fully loaded product page and read the site's answers.
+DEC = "[...document.querySelectorAll('button[automation-id=goods-card-delete-btn]')].find(b => !b.closest('lu-product-card, lu-sidebar-cart-item'))"
+INC = "[...document.querySelectorAll('button[automation-id=goods-card-add-btn]')].find(b => !b.closest('lu-product-card, lu-sidebar-cart-item'))"
+ADD = "document.querySelector('div.add-to-cart button.lui-button')"
+HEART = "document.querySelector('button.product-page-favorite-btn')"
+CARD_JS = r"""(pid => { try { const s = JSON.parse(document.getElementById('ng-state').textContent);
+  const m = Object.entries(s).find(([k]) => new RegExp('/catalog/items/' + pid + '($|[?|])').test(k));
+  const c = m && (m[1].b || m[1].body || m[1]); return c ? {name: (c.display || {}).name || c.name, fav: !!(c.features || {}).isFavorite, count: c.count} : null } catch (e) { return null } })"""
+
+
+def _goods(cart_lookup):
+    cl = (((cart_lookup or {}).get("Body") or {}).get("CartList") or [{}])[0]
+    return {str(g.get("GoodsItemId")): g for g in cl.get("Goods") or []}, cl
+
+
+def _load(tab, pid):
+    """Full load of the product page: the cart (cartLookup, sent on every load) and the card from ng-state."""
+    got = capture(tab, "lenta", f"{SITE}/product/x-{pid}/", {"c": ["/api/rest/cartLookup"]}, timeout=20)
+    time.sleep(1.5)
+    return _goods(got.get("c")), tab.js(f"{CARD_JS}({json.dumps(pid)})")
+
+
+def _press(tab, js, what="m", url="/api/rest/cartItemModify"):
+    return capture(tab, "lenta", None, {what: [url]}, timeout=10, js=f"({js}).click()").get(what)
+
+
+def cart():
+    tab = _tab()
+    try:
+        got = capture(tab, "lenta", SITE + "/", {"c": ["/api/rest/cartLookup"]}, timeout=20)
+    finally:
+        tab.close()
+    goods, cl = _goods(got.get("c"))
+    if not goods:
+        return "корзина Ленты пуста"
+    rows = [f"{i}\t{g.get('Quantity')}\t{g.get('Price')}\t{g.get('PriceTotal') or ''}\t{g.get('Name') or ''}" for i, g in goods.items()]
+    return (f"корзина Ленты: позиций {cl.get('PositionsCount')}, итого {cl.get('TotalCost')} ₽"
+            + (f", доставка {cl.get('DeliveryPrice')} ₽" if cl.get("DeliveryPrice") is not None else "")
+            + "\nid\tшт\tцена ₽\tсумма ₽\tназвание\n" + "\n".join(rows))
+
+
+def add_to_cart(id_or_url, quantity=1):
+    pid = _id(id_or_url)
+    tab = _tab()
+    try:
+        (goods, _), card = _load(tab, pid)
+        if not card:
+            return f"Лента: товар {pid} не открылся"
+        have = float((goods.get(pid) or {}).get("Quantity") or 0)
+        for i in range(max(1, min(int(quantity), 30))):
+            first = i == 0 and not have
+            if not tab.js(f"!!({ADD if first else INC})"):
+                return f"Лента: кнопки «{'В корзину' if first else '+'}» на странице {card['name']} нет (нет в наличии?)"
+            _press(tab, ADD if first else INC)
+            time.sleep(0.8)
+        (goods, cl), _ = _load(tab, pid)
+    finally:
+        tab.close()
+    g = goods.get(pid)
+    if not g or float(g.get("Quantity") or 0) <= have:
+        return f"Лента не положила {card['name']} в корзину"
+    return f"в корзине Ленты: {card['name']} — {g.get('Quantity')} шт × {g.get('Price')} ₽; итого корзины {cl.get('TotalCost')} ₽"
+
+
+def remove_from_cart(id_or_url):
+    pid = _id(id_or_url)
+    tab = _tab()
+    try:
+        (goods, _), card = _load(tab, pid)
+        name = (card or {}).get("name") or pid
+        n = int(float((goods.get(pid) or {}).get("Quantity") or 0))
+        if not n:
+            return f"{name} в корзине Ленты нет"
+        for _ in range(min(n, 30)):            # «−» takes one unit; at one unit it removes the line
+            if not tab.js(f"!!({DEC})"):
+                break
+            _press(tab, DEC)
+            time.sleep(0.8)
+        (goods, _), _ = _load(tab, pid)
+    finally:
+        tab.close()
+    return f"не удалось убрать {name} из корзины Ленты" if pid in goods else f"убрано из корзины Ленты: {name}"
+
+
+def _favorite_ids(tab):
+    """The user's favorites, from the list page's own request on a full load (moving there inside the app
+    fetched nothing more than once; the card's isFavorite in the server-rendered page lags behind: it still
+    said false right after an add, 2026-10-13)."""
+    return capture(tab, "lenta", SITE + "/my-account/favorites/", {"f": ["re:/catalog/items/favorites$"]}, timeout=20).get("f")
+
+
+def favorites():
+    tab = _tab()
+    try:
+        d = _favorite_ids(tab)
+    finally:
+        tab.close()
+    if d is None:
+        return "Лента не отдала избранное"
+    rows = [_listed(p) for p in d.get("items") or []]
+    if not rows:
+        return "избранное Ленты пусто"
+    return f"избранное Ленты ({d.get('total')})\nid\tцена ₽\tналичие\tназвание\n" + "\n".join(
+        f"{r['id']}\t{r['price']}\t{'' if r['available'] else 'нет в наличии'}\t{r['name']}" for r in rows)
+
+
+def favorite(id_or_url, remove=False):
+    pid = _id(id_or_url)
+    tab = _tab()
+    try:
+        d = _favorite_ids(tab)
+        if d is None:
+            return "Лента не отдала избранное"
+        now = any(str(p.get("id")) == pid for p in d.get("items") or [])
+        _, card = _load(tab, pid)
+        if not card:
+            return f"Лента: товар {pid} не открылся"
+        if now != remove:      # already as asked
+            return f"{card['name']} {'уже в избранном' if now else 'и так не в избранном'} Ленты"
+        r = _press(tab, HEART, "f", "/catalog/items/favorites/" + ("delete" if remove else "add"))
+    finally:
+        tab.close()
+    if not (r or {}).get("result"):
+        return "Лента не изменила избранное"
+    return f"{'убрано из избранного' if remove else 'в избранном'} Ленты: {card['name']}"

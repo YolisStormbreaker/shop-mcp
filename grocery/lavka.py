@@ -8,6 +8,7 @@ has no sugar line, but products carry tags (without sugar / lactose, vegan, hala
 """
 import json
 import re
+import time
 import urllib.parse
 
 from cdp import tab_for
@@ -183,3 +184,110 @@ def product(id_or_url):
     if nut.get("carbs") == 0:          # no sugar line on the site, but zero carbs means zero sugar
         nut["sugar"] = 0.0
     return p
+
+
+# Cart: its update call carries the whole cart with the delivery address the page keeps, so we press the page's
+# own buttons on the product page (element.click() works in the hidden tab) and read the cart back by API.
+MAIN = "[data-testid=snippet-control-base]"           # the product's own controls; cards below have the same buttons
+
+
+def _cart_items(tab, depot):
+    r = _post(tab, "cart/v1/retrieve", {}, depot) or {}
+    return {i.get("id"): i for i in r.get("items") or []}, r
+
+
+def _open_good(tab, pid, depot):
+    d = _post(tab, "v1/product", {"productId": pid, "enableUnavailable": True}, depot)
+    c = (d or {}).get("product")
+    if not c:
+        raise ValueError(f"Лавка: товар {pid} не найден")
+    tab.goto(f"{SITE}{'/supermarket' if depot == 'supermarket' else ''}/good/{c.get('deepLink') or c['id']}", "lavka",
+             wait_js="!!document.querySelector('[data-testid=snippet-control], [data-testid=snippet-control-base]')")
+    return c
+
+
+def _qty(tab, pid, depot):
+    return float((_cart_items(tab, depot)[0].get(pid) or {}).get("quantity") or 0)
+
+
+def add_to_cart(id_or_url, quantity=1):
+    pid, depot = _pid(id_or_url)
+    tab = _tab()
+    try:
+        c = _open_good(tab, pid, depot)
+        pid = c["id"]
+        start = _qty(tab, pid, depot)
+        if not c.get("available"):
+            return f"Лавка: {_clean(c.get('longTitle'))} сейчас нет в наличии"
+        for i in range(max(1, min(int(quantity), 30))):
+            sel = "[data-testid=snippet-control]" if i == 0 and not start else f"{MAIN} [data-testid=add-spin-button]"
+            if not tab.js(f"(() => {{ const b = document.querySelector('{sel}'); if (!b) return false; b.click(); return true }})()"):
+                break
+            time.sleep(1.2)
+        n = _qty(tab, pid, depot)
+        items, r = _cart_items(tab, depot)
+    finally:
+        tab.close()
+    if n <= start:
+        return f"Лавка не положила {_clean(c.get('longTitle'))} в корзину (кнопка не сработала)"
+    return (f"в корзине {DEPOTS[depot]}: {_clean(c.get('longTitle'))} — {n:g} шт; корзина {r.get('totalItemsPrice')} ₽ без доставки"
+            + (f" · к заказу пока нельзя: {r.get('checkoutUnavailableReason')}" if not r.get("availableForCheckout") else ""))
+
+
+def remove_from_cart(id_or_url):
+    pid, depot = _pid(id_or_url)
+    tab = _tab()
+    try:
+        c = _open_good(tab, pid, depot)
+        pid = c["id"]
+        for _ in range(30):
+            if not _qty(tab, pid, depot):
+                break
+            if not tab.js(f"(() => {{ const b = document.querySelector('{MAIN} [data-testid=remove-spin-button]'); if (!b) return false; b.click(); return true }})()"):
+                break
+            time.sleep(1.2)
+        left = _qty(tab, pid, depot)
+    finally:
+        tab.close()
+    return f"не удалось убрать {_clean(c.get('longTitle'))} из корзины Лавки" if left else f"убрано из корзины {DEPOTS[depot]}: {_clean(c.get('longTitle'))}"
+
+
+def cart():
+    tab = _tab()
+    try:
+        out = []
+        for depot, name in DEPOTS.items():
+            items, r = _cart_items(tab, depot)
+            if items:
+                out.append(f"{name}: {r.get('totalItemsPrice')} ₽ без доставки, итого {r.get('totalPriceValue')} ₽"
+                           + ("" if r.get("availableForCheckout") else f" (к заказу нельзя: {r.get('checkoutUnavailableReason')})"))
+                out += [f"  {('s:' if depot == 'supermarket' else '') + i}\t{x.get('quantity')} шт\t{x.get('price')} ₽\t{_clean(x.get('title'))}" for i, x in items.items()]
+    finally:
+        tab.close()
+    return "корзина Лавки\n" + "\n".join(out) if out else "корзины Лавки (у дома и Большой лавки) пусты"
+
+
+def favorites():
+    tab = _tab()
+    try:
+        d = _post(tab, "v1/api/v1/user/favorites", {}) or {}
+    finally:
+        tab.close()
+    rows = [_listed(p, "regular") for p in d.get("products") or []]
+    if not rows:
+        return "избранное Лавки пусто"
+    return "избранное Лавки\nid\tцена ₽\tналичие\tназвание\n" + "\n".join(
+        f"{r['id']}\t{r['price']}\t{'' if r['available'] else 'нет в наличии'}\t{r['name']}" for r in rows)
+
+
+def favorite(id_or_url, remove=False):
+    pid, depot = _pid(id_or_url)
+    tab = _tab()
+    try:
+        c = (_post(tab, "v1/product", {"productId": pid, "enableUnavailable": True}, depot) or {}).get("product") or {}
+        r = _post(tab, "attributes/v2/favorite", {"productId": c.get("id") or pid, "isFavorite": not remove}, depot)
+    finally:
+        tab.close()
+    if not r or r.get("isFavorite") is not (not remove):
+        return "Лавка не изменила избранное"
+    return f"{'убрано из избранного' if remove else 'в избранном'} Лавки: {_clean(c.get('longTitle')) or pid}"

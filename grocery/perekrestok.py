@@ -238,3 +238,77 @@ def cart():
             for i in items]
     return ("корзина Перекрёстка" + (f", итого {_rub(d['totalCost'])} ₽" if d.get("totalCost") else "")
             + "\nplu\tшт\tцена ₽\tсумма ₽\tназвание\tналичие\n" + "\n".join(rows))
+
+
+def _product_id(tab, plu):
+    """Cart and favorites take the product's own id, not its plu."""
+    p = _call(tab, "get", f"/catalog/product/plu{plu}")
+    if not isinstance(p, dict) or not p.get("id"):
+        raise ValueError(f"Перекрёсток: товар plu {plu} не найден")
+    return p["id"], p.get("title", "")
+
+
+def _line(b, plu):
+    it = next((i for i in (b or {}).get("items") or [] if str(((i.get("product") or {}).get("masterData") or {}).get("plu")) == str(plu)), None)
+    state = {"too_cheap": f"до минимального заказа {b.get('disabledButtonTitle', '').lower()}" if b.get("disabledButtonTitle") else "сумма меньше минимального заказа"}.get(b.get("state"), "")
+    return it, state
+
+
+def add_to_cart(id_or_url, quantity=1):
+    plu = _plu(id_or_url)
+    tab = _tab()
+    try:
+        pid, title = _product_id(tab, plu)
+        b = None
+        for _ in range(max(1, min(int(quantity), 30))):          # the site's own «+»: one unit per call
+            b = _call(tab, "put", f"/basket/plu{plu}/plus")
+            if not isinstance(b, dict) or "__error" in b:
+                return f"Перекрёсток не положил {title}: {b.get('__error') if isinstance(b, dict) else b}"
+    finally:
+        tab.close()
+    it, state = _line(b, plu)
+    if not it:
+        return f"Перекрёсток: {title} в корзине не появился (нет в наличии?)"
+    return (f"в корзине Перекрёстка: {title} — {it.get('quantity')} шт × {_rub(it.get('price'))} ₽ = {_rub(it.get('cost'))} ₽"
+            + (f"\n{state}" if state else ""))
+
+
+def remove_from_cart(id_or_url):
+    plu = _plu(id_or_url)
+    tab = _tab()
+    try:
+        pid, title = _product_id(tab, plu)
+        b = _call(tab, "get", "/basket") or {}
+        if not _line(b, plu)[0]:
+            return f"{title} в корзине Перекрёстка нет"
+        _call(tab, "delete", f"/basket/item/{pid}")
+        left = _line(_call(tab, "get", "/basket") or {}, plu)[0]
+    finally:
+        tab.close()
+    return f"не удалось убрать {title} из корзины Перекрёстка" if left else f"убрано из корзины Перекрёстка: {title}"
+
+
+def favorites():
+    tab = _tab()
+    try:
+        d = _call(tab, "get", "/user/liked-product?page=1&perPage=100") or {}
+    finally:
+        tab.close()
+    rows = [_listed(x["product"]) for x in d.get("items") or [] if x.get("product")]
+    if not rows:
+        return "избранное Перекрёстка пусто"
+    return "избранное Перекрёстка\nplu\tцена ₽\tналичие\tназвание\n" + "\n".join(
+        f"{r['id']}\t{r['price']}\t{'' if r['available'] else 'нет в наличии'}\t{r['name']}" for r in rows)
+
+
+def favorite(id_or_url, remove=False):
+    plu = _plu(id_or_url)
+    tab = _tab()
+    try:
+        pid, title = _product_id(tab, plu)
+        r = _call(tab, "delete" if remove else "post", f"/user/liked-product/{pid}")
+    finally:
+        tab.close()
+    if isinstance(r, dict) and "__error" in r:
+        return f"Перекрёсток не изменил избранное: {r['__error']}"
+    return f"{'убрано из избранного' if remove else 'в избранном'} Перекрёстка: {title}"
