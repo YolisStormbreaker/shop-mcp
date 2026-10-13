@@ -78,11 +78,16 @@ def flags(text, items=None):
     In a sugar-free product a sweetener name like «сорбит» is not «sugar»."""
     items = items if items is not None else parse(text)["ingredients"]
     out = []
-    pos = next((i for i, s in enumerate(items, 1) if SUGARS.search(s) and not SWEETENERS.search(s)), None)
-    if pos:
-        kind = SUGARS.search(items[pos - 1]).group(0).lower()
-        out.append(("сахар" if kind.startswith("сахар") else f"сахар как «{items[pos - 1][:40]}»") + f" — {pos}-й из {len(items)}")
-    elif items:
+    def head(s):        # an ingredient's own name, without its bracketed parts: «томатный соус (паста, сахар…)» → «томатный соус»
+        return re.sub(r"\(.*", "", s).strip()
+    own = next((i for i, s in enumerate(items, 1) if SUGARS.search(head(s)) and not SWEETENERS.search(head(s))), None)
+    inner = next((i for i, s in enumerate(items, 1) if SUGARS.search(s) and not SWEETENERS.search(s)), None)
+    if own:
+        kind = SUGARS.search(head(items[own - 1])).group(0).lower()
+        out.append(("сахар" if kind.startswith("сахар") else f"сахар как «{head(items[own - 1])[:40]}»") + f" — {own}-й из {len(items)}")
+    if inner and inner != own:
+        out.append(f"сахар внутри «{head(items[inner - 1])[:40]}» ({inner}-й компонент из {len(items)})")
+    if not own and not inner and items:
         out.append("без сахара в составе")
     sw = sorted({m.group(0).lower() for m in SWEETENERS.finditer(text or "")})
     if sw:
@@ -157,6 +162,8 @@ if __name__ == "__main__":
     assert percent_of("какао", "Шоколад тёмный Ritter Sport 74% какао; % содержания какао: 0") == 74.0
     assert percent_of("какао", "Тип продукта: Шоколад; % содержания какао: 72") == 72.0
     assert flags("какао тертое, мед, масло какао")[0] == "сахар как «мед» — 2-й из 3"
+    f = flags("скумбрия, томатный соус (паста томатная, сахар, соль)")
+    assert f[0] == "сахар внутри «томатный соус» (2-й компонент из 2)", f
     assert flags(choc)[0] == "сахар — 2-й из 5" and "ароматизатор" in flags(choc)
     soda = "вода питьевая, диоксид углерода, регулятор кислотности лимонная кислота, подсластители (аспартам, ацесульфам калия), консервант бензоат натрия (E211), ароматизатор"
     f = flags(soda)

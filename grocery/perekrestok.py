@@ -15,6 +15,8 @@ from cdp import tab_for
 from shoplog import log
 
 BLOCKED = "⚠️ Перекрёсток не отдал данные (проверка на бота или сайт не загрузился): shop-chrome show, открыть perekrestok.ru, повторить."
+CHECKED = ("⚠️ Перекрёсток показал проверку на бота (ServicePipe): попроси пользователя выполнить shop-chrome show, пройти её во "
+           "вкладке perekrestok.ru, потом shop-chrome hide. Она включается после долгой серии запросов с одного IP.")
 SITE = "https://www.perekrestok.ru"
 FIND_API = """(() => {
   if (window.__shopApi) return true;
@@ -35,21 +37,32 @@ SORT = {"popular": ("relevance", "desc"), "price": ("price", "asc"), "price_desc
 def _tab():
     tab = tab_for("perekrestok.ru")
     if "perekrestok.ru" not in (tab.js("location.hostname") or "") or not tab.js(FIND_API):
-        tab.goto(SITE + "/", "perekrestok", wait_js="!!window.__LOADABLE_LOADED_CHUNKS__ && document.readyState === 'complete'")
+        if "/xpvnsulc/" not in (tab.js("location.pathname") or ""):      # don't reload a bot check: it only gets stricter
+            tab.goto(SITE + "/", "perekrestok", wait_js="!!window.__LOADABLE_LOADED_CHUNKS__ && document.readyState === 'complete'")
         if not tab.js(FIND_API):
+            checked = "/xpvnsulc/" in (tab.js("location.pathname") or "")
             tab.close()
-            raise RuntimeError(BLOCKED)
+            raise RuntimeError(CHECKED if checked else BLOCKED)
     return tab
 
 
-def _call(tab, method, path, body=None):
-    """The site's client: method get/post/put/delete. Only response data comes back, never the request config."""
+def _call(tab, method, path, body=None, retried=False):
+    """The site's client: method get/post/put/delete. Only response data comes back, never the request config.
+    401/403: the page's session or anti-bot cookie went stale (2026-10-13, after an hour of calls) — a reload renews it."""
     args = json.dumps(path) + ("" if body is None else ", " + json.dumps(body))
     r = tab.js(f"window.__shopApi.{method}({args}).then(r => JSON.stringify(r.data ?? null))"
                ".catch(e => JSON.stringify({__error: e.response ? e.response.status : String(e.message || e)}))")
     d = json.loads(r) if r else None
     if isinstance(d, dict) and "__error" in d:
-        log.warning("perekrestok %s %s: %s", method, path[:120], d["__error"])
+        log.warning("perekrestok %s %s: %s%s", method, path[:120], d["__error"], " again after reload" if retried else "")
+        if d["__error"] in (401, 403) and not retried:
+            tab.js("delete window.__shopApi")
+            tab.goto(SITE + "/", "perekrestok", wait_js="!!window.__LOADABLE_LOADED_CHUNKS__ && document.readyState === 'complete'")
+            time.sleep(1.5)
+            if tab.js(FIND_API):
+                return _call(tab, method, path, body, True)
+            if "/xpvnsulc/" in (tab.js("location.pathname") or ""):
+                raise RuntimeError(CHECKED)
     return d
 
 

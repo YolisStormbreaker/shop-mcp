@@ -103,7 +103,8 @@ def _percents(name):
 
 def _same(a, b):
     """Same product in two stores. No site gives a barcode, and search results rarely carry a brand, so:
-    same size, same percents (fat, cocoa) and at least 60% of the name's significant words in common.
+    same size, same percents (fat, cocoa) and at least 75% of the name's significant words in common
+    (60% joined «тортильи со злаками» with «тортильи гриль»).
     ponytail: a word-overlap rule, not a matcher; it misses renamed lines and may join near-twins."""
     if a.get("ean") and b.get("ean"):
         return a["ean"] == b["ean"]
@@ -114,7 +115,7 @@ def _same(a, b):
     if a.get("brand") and b.get("brand") and a["brand"].lower() != b["brand"].lower():
         return False
     wa, wb = _words(a.get("name")), _words(b.get("name"))
-    return bool(wa and wb) and len(wa & wb) / len(wa | wb) >= 0.6
+    return bool(wa and wb) and len(wa & wb) / len(wa | wb) >= 0.75
 
 
 def _display_size(p):
@@ -123,15 +124,17 @@ def _display_size(p):
     return m[-1].group(0).strip() if m else (p.get("size") or "")
 
 
-def compare(query, stores=None, tag=None, limit=8):
+def compare(query, stores=None, tag=None, limit=8, strict=True):
     """Search every store at once (each site has its own tab and lock) and put the results in one table:
     groups of the same product (see _same) first, cheapest per kg/l inside a group."""
     keys = [_store(s) for s in stores] if stores else list(STORES)
 
     def one(s):
         try:
-            r = STORES[s].search(query, tag=tag, sort="popular", page=1, limit=limit)
-            return s, (r if isinstance(r, str) else r["items"][:limit])
+            r = STORES[s].search(query, tag=tag, sort="popular", page=1, limit=max(limit * 3, 20) if strict else limit)
+            if isinstance(r, str):
+                return s, r
+            return s, [p for p in r["items"] if not strict or _relevant(p.get("name"), query)][:limit]
         except Exception as e:
             return s, f"ошибка: {str(e)[:150]}"
 
@@ -224,7 +227,16 @@ def _rank_value(p, rank):
     return -v if v is not None else inf
 
 
-def compare_details(query=None, stores=None, tag=None, limit=5, rank="price", items=None):
+def _relevant(name, query):
+    """Every word of the query (by its first four letters) is in the name: sites pad their results with
+    neighbours — dried fish for «рыбные котлеты», chicken cutlets in Лавка."""
+    stems = [w[:4] for w in re.findall(r"[а-яёa-z]{3,}", (query or "").lower())]
+    if re.search(r"\bкорм|для (кошек|собак)", (name or "").lower()) and "корм" not in (query or "").lower():
+        return False                       # pet food: «Корм … курица-тунец» is not «тунец»
+    return all(st in (name or "").lower().replace("ё", "е") for st in (x.replace("ё", "е") for x in stems))
+
+
+def compare_details(query=None, stores=None, tag=None, limit=5, rank="price", items=None, strict=True):
     """Composition and nutrition side by side: either the first `limit` search results of every store,
     or the given items ["store:id", …]. Ranked by `rank` (see RANKS, or "%word" — share of that ingredient)."""
     if rank not in RANKS and not rank.startswith("%"):
@@ -240,8 +252,11 @@ def compare_details(query=None, stores=None, tag=None, limit=5, rank="price", it
 
         def one(s):
             try:
-                r = STORES[s].search(query, tag=tag, sort="popular", page=1, limit=limit)
-                return s, r if isinstance(r, str) else [p["id"] for p in r["items"][:limit]]
+                r = STORES[s].search(query, tag=tag, sort="popular", page=1, limit=max(limit * 4, 20))
+                if isinstance(r, str):
+                    return s, r
+                hits = [p for p in r["items"] if not strict or _relevant(p.get("name"), query)]
+                return s, [p["id"] for p in hits[:limit]] or f"в поиске нет товаров со всеми словами «{query}» (strict=False — брать все)"
             except Exception as e:
                 return s, f"ошибка: {str(e)[:150]}"
         with ThreadPoolExecutor(len(keys)) as ex:
@@ -272,8 +287,9 @@ def compare_details(query=None, stores=None, tag=None, limit=5, rank="price", it
         if rank.startswith("%"):
             v = composition.percent_of(rank.lstrip("%"), "; ".join((p.get("composition") or "", p.get("composition_extra") or "", p.get("name") or "")))
             val = f" · {rank.lstrip('%')}: {v:g}%" if v is not None else f" · {rank.lstrip('%')}: % не указан"
+        rating = f" · рейтинг {p['rating']}" + (f" ({p['reviews']})" if p.get("reviews") else "") if p.get("rating") else ""
         lines.append(f"\n{i}. {NAMES[s]} · {p.get('name', '')} · {price} ₽" + (f" ({unit_price(p)})" if unit_price(p) else "")
-                     + ("" if p.get("available", True) else " · нет в наличии") + val + f" · {s}:{p.get('id')}")
+                     + ("" if p.get("available", True) else " · нет в наличии") + val + rating + f" · {s}:{p.get('id')}")
         lines += ["   " + x for x in composition.describe(p.get("composition"), p.get("nutrition"), p.get("composition_extra"))]
     return "\n".join(lines)
 
@@ -299,4 +315,5 @@ if __name__ == "__main__":
     assert not _same(a, {"name": "Молоко Простоквашино пастеризованное 3.2% БЗМЖ 930мл"})      # other fat
     assert not _same(a, {"name": "Кефир 2,5% «Простоквашино»", "size": "930 мл"})               # other product
     assert _display_size({"name": "Молоко 2.5%, 930мл", "size": "958 г"}) == "930мл"
+    assert not _same({"name": "Лепешки тортильи MISSION пшеничные со злаками", "size": "250 г"}, {"name": "Лепешки Mission пшеничные тортильи гриль 250г"})
     print("ok")

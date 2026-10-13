@@ -26,8 +26,15 @@ STATE_JS = """(() => { const p = JSON.parse(document.getElementById('__NEXT_DATA
   return {store: sap || c.storeId || '35XY', address: document.querySelector('[data-qa="delivery-panel-address"]')?.innerText || ''} })()"""
 
 
+CHECKED = ("⚠️ Пятёрочка показала проверку на бота (ServicePipe): попроси пользователя выполнить shop-chrome show, пройти её во "
+           "вкладке 5ka.ru, потом shop-chrome hide.")
+
+
 def _tab():
     tab = tab_for("5ka.ru")
+    if "/xpvnsulc/" in (tab.js("location.pathname") or ""):
+        tab.close()
+        raise RuntimeError(CHECKED)
     if "5ka.ru" not in (tab.js("location.hostname") or ""):
         tab.goto("https://5ka.ru/", "5ka", wait_js="!!document.getElementById('__NEXT_DATA__')")
     return tab

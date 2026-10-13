@@ -75,6 +75,24 @@ INSTRUCTIONS = """\
   превью для shop_images). sort: useful, new, high, low (на Ozon без new); with_media=True — только с фото.
   Ограничения: WB отдаёт до ~1000 отзывов с текстом; Маркет — первые 10 на сортировку, без страниц;
   на Ozon фильтр with_media работает внутри полученной страницы. У Авито отзывов на товары нет.
+
+Продукты питания (grocery_*, параметр store): lenta — Лента, samokat — Самокат, lavka — Яндекс Лавка,
+perekrestok — Перекрёсток, 5ka — Пятёрочка. Цены и наличие — для адреса доставки пользователя на сайте.
+- Найти: grocery_search (название и/или tag: «без лактозы», «без сахара», «веган», «халяль», «фермерское»,
+  значение фильтра сайта; в ответе строка тегов, которые сайт понимает). Синонимы ищи отдельно:
+  свежие помидоры у Ленты и Пятёрочки — «томаты».
+- Один товар во всех магазинах: grocery_compare (цена за кг/л, одинаковые товары в группах).
+- Выбрать лучшее по составу: grocery_compare_composition — состав по ингредиентам, сахар, подсластители,
+  пальмовое масло, Е-добавки, КБЖУ; rank: price, sugar, kcal, protein, fat, ingredients или «%ингредиент»
+  (%какао, %томат, %мясо). Перед советом сверь, что товар тот (сайты подмешивают соседние).
+  «Сахара ≤ углеводов» — сайты почти никогда не пишут сахар отдельно.
+- Карточка — grocery_item; отзывы — grocery_reviews (Перекрёсток, Пятёрочка, Лента; у Самоката и Лавки нет).
+- Корзина и избранное (grocery_cart, grocery_add_to_cart, grocery_remove_from_cart, grocery_favorites,
+  grocery_favorite) меняют аккаунт — только по явной просьбе. Избранного нет у Самоката и Пятёрочки.
+- Самокат, Перекрёсток и Пятёрочка закрыты проверкой ServicePipe: после долгой серии запросов она
+  включается, и инструмент так и пишет — попроси пользователя пройти её (shop-chrome show). Не делай
+  десятки запросов подряд в один магазин без нужды.
+- Если инструменты падают с ошибкой Chrome или сайты ведут себя как без входа — shop_status.
 """
 
 mcp = FastMCP("shop", instructions=INSTRUCTIONS)
@@ -681,25 +699,28 @@ def grocery_item(store: str, id_or_url: str, full: bool = False) -> str:
 
 @mcp.tool()
 @logged
-def grocery_compare(query: str, stores: list[str] | None = None, tag: str | None = None, limit: int = 8) -> str:
+def grocery_compare(query: str, stores: list[str] | None = None, tag: str | None = None, limit: int = 8,
+                    strict: bool = True) -> str:
     """Продукты: один и тот же запрос сразу во всех продуктовых магазинах (или в stores) — общая таблица.
     Одинаковые товары собраны в группы (штрихкодов сайты не дают — по бренду и фасовке), внутри и вне групп
-    дешевле за кг/л — выше. Для выбора по составу — grocery_compare_composition."""
-    return grocery.compare(query, stores, tag, limit)
+    дешевле за кг/л — выше. Сайты подмешивают соседние товары, поэтому берутся только названия со всеми словами
+    запроса (strict=False — все результаты поиска). Для выбора по составу — grocery_compare_composition."""
+    return grocery.compare(query, stores, tag, limit, strict)
 
 
 @mcp.tool()
 @logged
 def grocery_compare_composition(query: str | None = None, items: list[str] | None = None, stores: list[str] | None = None,
-                                tag: str | None = None, limit: int = 5, rank: str = "price") -> str:
+                                tag: str | None = None, limit: int = 5, rank: str = "price", strict: bool = True) -> str:
     """Продукты: сравнение по составу и КБЖУ, чтобы выбрать лучшее. Либо первые limit товаров поиска query в каждом
     магазине (stores — какие, по умолчанию все), либо конкретные items вида ["lenta:589914", "5ka:4289719",
     "lavka:s:<id>"] (store:id из grocery_search). Для каждого: цена и цена за кг/л, состав по ингредиентам,
     место сахара, подсластители, пальмовое масло, Е-добавки, КБЖУ на 100 г.
     rank — порядок: price (цена за кг/л), sugar (сахар/углеводы на 100 г, меньше — выше), kcal, protein (больше — выше),
     fat, ingredients (короче состав — выше) или «%ингредиент» — доля ингредиента, больше — выше:
-    %какао для шоколада, %томат для соусов, %мясо, %сок. Медленный: по карточке на товар (до ~1 мин на 5×5)."""
-    return grocery.compare_details(query, stores, tag, limit, rank, items)
+    %какао для шоколада, %томат для соусов, %мясо, %сок. Из поиска берутся только названия со всеми словами query
+    (strict=False — все). Медленный: по карточке на товар (до ~1 мин на 5×5)."""
+    return grocery.compare_details(query, stores, tag, limit, rank, items, strict)
 
 
 @mcp.tool()
