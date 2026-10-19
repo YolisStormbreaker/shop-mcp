@@ -8,6 +8,7 @@ import re
 import time
 import urllib.parse
 
+import pics
 from cdp import tab_for
 from shoplog import dump, log
 
@@ -191,10 +192,55 @@ def item(sku_or_url):
                     if c.get("key") != "Sku":
                         chars.append(f"  {c.get('name')}: {', '.join(v.get('text', '') for v in c.get('values', []))}")
     out.append("характеристики:\n" + ("\n".join(chars) if chars else "  (нет)"))
-    desc = _html_text(next(iter(_widgets(page2, "webDescription-")), {}).get("richAnnotation", ""))
+    descs = _widgets(page2, "webDescription-")
+    desc = _html_text(next(iter(descs), {}).get("richAnnotation", ""))
     if desc:
         out.append("описание:\n" + desc[:2500])
+    # sellers' own blocks next to the description, e.g. «Комплектация» (2026-10-19, Multifix card)
+    for w in descs:
+        for c in w.get("characteristics", []):
+            if c.get("title") and c.get("content"):
+                out.append(f"{c['title']}:\n  " + c["content"].strip().replace("\n", "\n  "))
+    n = len(_gallery(page))
+    if n:
+        out.append(f"картинок в карточке: {n}. На них часто комплектация и размеры: ozon_item_images")
     return "\n".join(out)
+
+
+def _gallery(page):
+    """[(label, url)] of the card's pictures, resized by the CDN to 1000 px."""
+    out = []
+    for w in _widgets(page, "webGallery-"):
+        for i, im in enumerate(w.get("images", []), 1):
+            src = im.get("src", "")
+            if src:
+                out.append((f"#{i}", re.sub(r"(/s3/[^/]+/)(?:wc\d+/)?", r"\1wc1000/", src, count=1)))
+    return out
+
+
+def images(sku_or_url, limit=6):
+    sku = _sku(sku_or_url)
+    tab = _tab()
+    try:
+        page = _page(tab, f"/product/{sku}/")
+        page2 = _page(tab, f"/product/{sku}/?layout_container=pdpPage2column&layout_page_index=2")
+    finally:
+        tab.close()
+    gal = _gallery(page)
+    # rich descriptions keep their own pictures in the widget JSON
+    seen = {u for _, u in gal}
+    extra = []
+    for w in _widgets(page2, "webDescription-"):
+        for u in re.findall(r'https://(?:ir|cdn\d*)\.ozone\.ru/[^"\s\\]+?\.(?:jpe?g|png|webp)', json.dumps(w)):
+            u = re.sub(r"(/s3/[^/]+/)(?:wc\d+/)?", r"\1wc1000/", u, count=1)
+            if u not in seen:
+                seen.add(u)
+                extra.append((f"описание #{len(extra) + 1}", u))
+    allp = gal + extra
+    title = next(iter(_widgets(page, "webProductHeading-")), {}).get("title", "?")
+    head = (f"{title}\nhttps://www.ozon.ru/product/{sku}/\nкартинок: в галерее {len(gal)}, в описании {len(extra)}; "
+            f"показываю {min(limit, len(allp))}")
+    return pics.fetch(head, allp, limit)
 
 
 def _sku(sku_or_url):

@@ -7,6 +7,7 @@ import json
 import re
 import time
 
+import pics
 from cdp import tab_for
 from shoplog import dump, log
 
@@ -226,6 +227,51 @@ def item(id_or_url, sku=None, list_variants=True):
         lines.append(f"варианты «{name}» (название\tsku\tцена):")
         lines += [f"  {v}\t{s}\t{p}" for v, s, p in opts]
     return "\n".join(lines)
+
+
+# the video's preview item comes first and its poster is often a blank background (2026-10-19)
+GALLERY_IMG = '[class*="SnowProductGallery_SnowProductGallery__previewItem"]:not([class*="videoPreview"]) img'
+DESC_IMG = '[class*="SnowProductContent_SnowProductContent__content"] img'
+
+
+def _img_urls(tab, selector):
+    urls = tab.js(f"[...document.querySelectorAll('{selector}')].map(i => i.currentSrc || i.src)") or []
+    out = []
+    for u in urls:
+        if not u.startswith("http"):
+            continue
+        # «….jpg_.webp» and «….jpg_220x220.jpg» are resized copies; the CDN resizes to 960 on request
+        base = re.sub(r"(\.(?:jpe?g|png|webp))_.*$", r"\1", u, flags=re.I)
+        u = base + "_960x960.jpg"
+        if u not in out:
+            out.append(u)
+    return out
+
+
+def images(id_or_url, part="all", limit=6):
+    if part not in ("all", "gallery", "description"):
+        raise ValueError("part: all | gallery | description")
+    item_id = _item_id(id_or_url)
+    tab = _tab()
+    try:
+        _open_item(tab, item_id)
+        title = tab.js("document.querySelector('h1')?.innerText.trim() || ''")
+        gal = _img_urls(tab, GALLERY_IMG)
+        desc = []
+        if part != "gallery":
+            # the description loads lazily as the page scrolls
+            for y in range(0, 15000, 1500):
+                tab.js(f"window.scrollTo(0, {y})")
+                time.sleep(0.4)
+            time.sleep(1.5)
+            desc = [u for u in _img_urls(tab, DESC_IMG) if u not in gal]
+    finally:
+        tab.close()
+    allp = ([(f"#{i}", u) for i, u in enumerate(gal, 1)] if part != "description" else []) + \
+           [(f"описание #{i}", u) for i, u in enumerate(desc, 1)]
+    head = (f"{title}\nhttps://aliexpress.ru/item/{item_id}.html\nкартинок: в галерее {len(gal)}, "
+            f"в описании {len(desc) if part != 'gallery' else '?'}; показываю {min(limit, len(allp))}")
+    return pics.fetch(head, allp, limit)
 
 
 def _count(tab):

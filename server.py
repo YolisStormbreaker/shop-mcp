@@ -27,6 +27,7 @@ import avito
 import messenger
 import orders
 import ozon
+import pics
 import reviews
 from shoplog import log
 
@@ -39,7 +40,7 @@ mcp = FastMCP("shop")
 # old function until ozon itself is reloaded.
 # shoplog is left alone: reloading it would add a second log handler.
 # A new tool still needs a restart: tools are registered from server.py once, at start.
-_RELOADABLE = ("cdp", "ali", "ozon", "avito", "messenger", "orders", "reviews")
+_RELOADABLE = ("cdp", "pics", "ali", "ozon", "avito", "messenger", "orders", "reviews")
 _mtimes = {m: Path(sys.modules[m].__file__).stat().st_mtime for m in _RELOADABLE}
 _reload_lock = threading.Lock()
 
@@ -68,9 +69,11 @@ def logged(fn):
         except Exception:
             log.exception("%s failed in %.1f s", call, time.time() - t)
             raise
-        warn = any(w in out for w in ("⚠️", "блокировку", "проверка Авито"))
+        # the *_item_images tools return [text, image, …]; log their text part
+        text = out if isinstance(out, str) else "\n".join(x for x in out if isinstance(x, str))
+        warn = any(w in text for w in ("⚠️", "блокировку", "проверка Авито"))
         log.log(30 if warn else 20, "%s ok in %.1f s, %d lines: %s",
-                call, time.time() - t, out.count("\n") + 1, out.split("\n", 1)[0][:150])
+                call, time.time() - t, text.count("\n") + 1, text.split("\n", 1)[0][:150])
         return out
     return wrapper
 
@@ -156,8 +159,21 @@ def ozon_search(query: str, price_min: int | None = None, price_max: int | None 
 def ozon_item(sku_or_url: str) -> str:
     """Карточка товара Ozon по sku или ссылке: цена, наличие, когда привезут, рейтинг, продавец
     с юрлицом и адресом (строка «⚠️ из-за рубежа», если продавец иностранный), все характеристики,
-    описание (до 2500 символов). Проверяй товар через неё, прежде чем советовать или класть в корзину."""
+    описание (до 2500 символов) и блоки продавца вроде «Комплектация». Проверяй товар через неё,
+    прежде чем советовать или класть в корзину. Комплектацию и размеры продавцы часто пишут только
+    на картинках: их показывает ozon_item_images."""
     return ozon.item(sku_or_url)
+
+
+@mcp.tool(structured_output=False)
+@logged
+def ozon_item_images(sku_or_url: str, limit: int = 6) -> list:
+    """Картинки карточки Ozon: галерея по порядку, потом картинки из описания, около 1000 px.
+
+    Смотри их, когда в тексте карточки не хватает комплектации, размеров или совместимости:
+    продавцы часто пишут это только на картинках. Каждая картинка ~1,3 тыс. токенов, limit — сколько показать.
+    """
+    return ozon.images(sku_or_url, limit)
 
 
 @mcp.tool()
@@ -200,8 +216,20 @@ def ali_item(id_or_url: str, sku: str | None = None, list_variants: bool = True)
     """Товар AliExpress: цена, точные даты и цена доставки по способам, варианты (название, sku, цена).
 
     list_variants=False быстрее: не перебирает варианты.
+    Описание и характеристики у Али обычно на картинках: их показывает ali_item_images.
     """
     return ali.item(id_or_url, sku, list_variants)
+
+
+@mcp.tool(structured_output=False)
+@logged
+def ali_item_images(id_or_url: str, part: str = "all", limit: int = 6) -> list:
+    """Картинки товара AliExpress, около 960 px: галерея, потом картинки описания.
+
+    part — all | gallery | description. На картинках описания у Али обычно комплектация,
+    размеры и характеристики. Каждая картинка ~1,2 тыс. токенов, limit — сколько показать.
+    """
+    return ali.images(id_or_url, part, limit)
 
 
 @mcp.tool()
