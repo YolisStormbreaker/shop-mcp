@@ -178,6 +178,22 @@ def ozon_item_images(sku_or_url: str, limit: int = 6) -> list:
 
 @mcp.tool()
 @logged
+def ozon_item_reviews(sku_or_url: str, sort: str = "useful", all_variants: bool = False,
+                      query: str | None = None, limit: int = 20) -> str:
+    """Отзывы покупателей на товар Ozon: оценка, дата, автор, сколько сочли полезным, фото, текст
+    с достоинствами и недостатками. В шапке — общий рейтинг и сколько отзывов на каждую оценку.
+
+    sort — useful (полезные) | low (сначала низкие оценки) | high. Жалобы ищи через low.
+    all_variants=False — только этот вариант карточки. Продавцы склеивают разные товары
+    под один рейтинг, тогда all_variants=True покажет и чужие отзывы с пометкой варианта.
+    query — слова, которые все должны быть в отзыве, например «высота центра»; несколько
+    вариантов через «|». С query листает до 300 отзывов и отдаёт подходящие.
+    """
+    return ozon.reviews(sku_or_url, sort, all_variants, query, limit)
+
+
+@mcp.tool()
+@logged
 def ozon_add_to_cart(sku_or_url: str, quantity: int = 1) -> str:
     """Положить товар Ozon в корзину по sku или ссылке. Заказ не оформляет."""
     return ozon.add_to_cart(sku_or_url, quantity)
@@ -230,6 +246,19 @@ def ali_item_images(id_or_url: str, part: str = "all", limit: int = 6) -> list:
     размеры и характеристики. Каждая картинка ~1,2 тыс. токенов, limit — сколько показать.
     """
     return ali.images(id_or_url, part, limit)
+
+
+@mcp.tool()
+@logged
+def ali_item_reviews(id_or_url: str, sort: str = "useful", query: str | None = None, limit: int = 20) -> str:
+    """Отзывы покупателей на товар AliExpress: оценка, дата, автор, вариант товара, фото, текст
+    и ответ продавца. Отзывы общие на все варианты карточки, вариант указан у каждого.
+
+    sort — useful (полезные) | new (новые) | low (сначала низкие оценки). Жалобы ищи через low.
+    query — слова, которые все должны быть в отзыве, например «S08K»; несколько вариантов
+    через «|». С query листает до 80 отзывов (по 10 за запрос) и отдаёт подходящие.
+    """
+    return ali.reviews(id_or_url, sort, query, limit)
 
 
 @mcp.tool()

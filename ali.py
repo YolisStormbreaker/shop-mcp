@@ -31,7 +31,15 @@ def _fetch(tab, path, body=None, method="POST", retried=False):
     opts = {"method": method, "credentials": "include", "headers": {"Content-Type": "application/json"}}
     if body is not None:
         opts["body"] = json.dumps(body)
-    r = tab.js(f"fetch({json.dumps(path)}, {json.dumps(opts)}).then(async r => ({{s: r.status, b: await r.text()}}))")
+    # Ali wraps fetch(): while its slider check (baxia-dialog) is open, the request waits for a
+    # human and never settles.  Seen 2026-10-22 after a burst of review requests; a reload kept it.
+    r = tab.js(f"Promise.race([fetch({json.dumps(path)}, {json.dumps(opts)}).then(async r => ({{s: r.status, b: await r.text()}})),"
+               " new Promise(res => setTimeout(() => res(null), 25000))])", timeout=40)
+    if r is None:
+        if tab.js("!!document.querySelector('.baxia-dialog-content')"):
+            raise RuntimeError("AliExpress показал проверку на бота (слайдер) и держит запросы. "
+                               "Пройди её руками в Chrome на макмини, вкладка aliexpress.ru.")
+        raise RuntimeError(f"AliExpress не ответил за 25 с на {path}")
     try:
         return json.loads(r["b"])
     except ValueError:
@@ -272,6 +280,62 @@ def images(id_or_url, part="all", limit=6):
     head = (f"{title}\nhttps://aliexpress.ru/item/{item_id}.html\nкартинок: в галерее {len(gal)}, "
             f"в описании {len(desc) if part != 'gallery' else '?'}; показываю {min(limit, len(allp))}")
     return pics.fetch(head, allp, limit)
+
+
+# the reviews page's own request, 2026-10-22; pageSize above 10 is «Неверный запрос».
+# sort 3 looked like 1, so it is left out
+REVIEW_SORTS = {"useful": 1, "new": 2, "low": 4}
+
+
+def reviews(id_or_url, sort="useful", query=None, limit=20, max_pages=8):
+    if sort not in REVIEW_SORTS:
+        raise ValueError(f"sort: одно из {tuple(REVIEW_SORTS)}")
+    item_id = _item_id(id_or_url)
+    alts = [a for a in ([w for w in q.lower().split() if w] for q in (query or "").split("|")) if a]
+    tab = _tab()
+    got, scanned = [], 0
+    try:
+        for p in range(1, (max_pages if alts else max(1, -(-limit // 10))) + 1):
+            if p > 1:
+                time.sleep(1.5)         # on top of _fetch's gap: a burst of pages brought the slider
+            body = {"productKey": {"id": item_id, "sourceId": 0}, "pagination": {"pageNum": p, "pageSize": 10},
+                    "sort": REVIEW_SORTS[sort], "filters": [], "skuFilter": []}
+            r = _fetch(tab, "/aer-jsonapi/review/v5/desktop/product-reviews", body)
+            if "error" in r:
+                raise RuntimeError(f"AliExpress не отдал отзывы: {r['error'].get('message')}")
+            batch = (r.get("data") or {}).get("reviews") or []
+            scanned += len(batch)
+            for x in batch:
+                root = x.get("root") or {}
+                text = (root.get("text") or "").strip()
+                add = x.get("additional")
+                if isinstance(add, dict) and (add.get("text") or "").strip():
+                    text += f"\nДополнено {add.get('date', '')}: {add['text'].strip()}"
+                if not alts or any(all(w in text.lower() for w in a) for a in alts):
+                    got.append((x, text))
+            if len(got) >= limit or len(batch) < 10:
+                break
+    finally:
+        tab.close()
+    head = (f"AliExpress, отзывы https://aliexpress.ru/item/{item_id}/reviews\nсортировка {sort}; просмотрено {scanned}"
+            + (f"; «{query}»: нашлось {len(got)}" if alts else ""))
+    out = []
+    for x, text in got[:limit]:
+        root = x.get("root") or {}
+        meta = [f"{root.get('grade', '?')}★", root.get("date", ""), (x.get("reviewer") or {}).get("name", "")]
+        likes = (x.get("interaction") or {}).get("likesAmount")
+        if likes:
+            meta.append(f"полезен {likes}")
+        if root.get("images"):
+            meta.append(f"фото {len(root['images'])}")
+        sku = (x.get("product") or {}).get("skuProperties")
+        if sku:
+            meta.append(f"вариант {sku}")
+        block = " · ".join(m for m in meta if m) + "\n" + (text[:1200] or "(без текста)")
+        for c in (root.get("comments") or [])[:2]:
+            block += f"\n  ↳ {c.get('commenterName') or 'ответ'}: {(c.get('text') or '').strip()[:400]}"
+        out.append(block)
+    return head + "\n\n" + ("\n\n".join(out) if out else "(ничего)")
 
 
 def _count(tab):

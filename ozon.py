@@ -243,6 +243,83 @@ def images(sku_or_url, limit=6):
     return pics.fetch(head, allp, limit)
 
 
+REVIEW_SORTS = {"useful": "usefulness_desc", "low": "score_asc", "high": "score_desc"}
+
+
+def _alts(query):
+    """«высота | центр» -> [["высота"], ["центр"]], as in orders.py: a review matches if it has
+    every word of any one alternative."""
+    alts = [[w for w in q.lower().split() if w] for q in (query or "").split("|")]
+    return [a for a in alts if a]
+
+
+def _review_text(r):
+    c = r.get("content") or {}
+    parts = [c.get("comment") or ""]
+    if c.get("positive"):
+        parts.append("Достоинства: " + c["positive"])
+    if c.get("negative"):
+        parts.append("Недостатки: " + c["negative"])
+    return "\n".join(p.strip() for p in parts if p and p.strip())
+
+
+def reviews(sku_or_url, sort="useful", all_variants=False, query=None, limit=20, max_pages=10):
+    """Reviews from the product's reviews page, 30 per page.  reviewsVariantMode=1 is this variant
+    only, 2 is every card the seller glued together under one rating (2026-10-22: 141 vs 663
+    on the AXA 250-111 set)."""
+    if sort not in REVIEW_SORTS:
+        raise ValueError(f"sort: одно из {tuple(REVIEW_SORTS)}")
+    sku = _sku(sku_or_url)
+    alts = _alts(query)
+    url = f"/product/{sku}/reviews/?reviewsVariantMode={2 if all_variants else 1}&sort={REVIEW_SORTS[sort]}"
+    tab = _tab()
+    got, scanned, total, score, products = [], 0, "?", {}, {}
+    try:
+        for _ in range(max_pages if alts else max(1, -(-limit // 30))):
+            page = _page(tab, url)
+            w = next(iter(_widgets(page, "webListReviews")), {})
+            if not score:
+                score = next(iter(_widgets(page, "webReviewProductScore-")), {})
+                total = w.get("paging", {}).get("total", "?")
+            products.update(w.get("products") or {})
+            batch = w.get("reviews") or []
+            scanned += len(batch)
+            for r in batch:
+                text = _review_text(r)
+                low = text.lower()
+                if not alts or any(all(x in low for x in a) for a in alts):
+                    got.append((r, text))
+            url = page.get("nextPage")
+            if len(got) >= limit or not batch or not url:
+                break
+    finally:
+        tab.close()
+
+    stars = ", ".join(f"{s['title'].split()[0]}★ {s['value']}" for s in score.get("score", []))
+    head = [f"Ozon, отзывы https://www.ozon.ru/product/{sku}/reviews/",
+            f"рейтинг {score.get('totalScore', '?')}, отзывов {score.get('reviewsCount', '?')} ({stars})",
+            f"показаны: {'все варианты карточки' if all_variants else 'только этот вариант'}, {total} отзывов; "
+            f"сортировка {sort}" + (f"; «{query}»: нашлось {len(got)} из {scanned} просмотренных" if alts else "")]
+    out = []
+    for r, text in got[:limit]:
+        c = r.get("content") or {}
+        when = time.strftime("%d.%m.%Y", time.localtime(r.get("publishedAt") or 0))
+        meta = [f"{c.get('score', '?')}★", when, (r.get("author") or {}).get("firstName", "")]
+        useful = (r.get("usefulness") or {}).get("useful")
+        if useful:
+            meta.append(f"полезен {useful}")
+        if c.get("photos"):
+            meta.append(f"фото {len(c['photos'])}")
+        ncom = (r.get("comments") or {}).get("totalCount")
+        if ncom:
+            meta.append(f"ответов {ncom}")
+        if str(r.get("itemId")) != str(sku):
+            name = (products.get(str(r.get("itemId"))) or {}).get("name", r.get("itemId"))
+            meta.append(f"на другой вариант: {str(name)[:70]}")
+        out.append(" · ".join(m for m in meta if m) + "\n" + (text[:1200] or "(без текста)"))
+    return "\n".join(head) + "\n\n" + ("\n\n".join(out) if out else "(ничего)")
+
+
 def _sku(sku_or_url):
     s = str(sku_or_url).strip()
     if s.isdigit():
