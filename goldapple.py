@@ -70,13 +70,14 @@ def _img(o, screen="fullhd"):
 
 
 def _delivery(d):
-    rows = []
-    for o in (d or {}).get("options") or []:
-        cost = ((o.get("cost") or {}).get("value") or {}).get("amount")
-        rows.append(f"{o.get('name')} — {o.get('dateInfo') or (o.get('date') or '')[:10]}"
-                    + (f", {cost} ₽" if cost else ", бесплатно" if cost == 0 else "")
-                    + (f" ({o['costSpecial']})" if o.get("costSpecial") else ""))
-    return rows
+    return [_delivery_option(o) for o in (d or {}).get("options") or []]
+
+
+def _delivery_option(o):
+    cost = ((o.get("cost") or {}).get("value") or {}).get("amount")
+    return (f"{o.get('name')} — {o.get('dateInfo') or (o.get('date') or '')[:10]}"
+            + (f", {cost} ₽" if cost else ", бесплатно" if cost == 0 else "")
+            + (f" ({o['costSpecial']})" if o.get("costSpecial") else ""))
 
 
 def item(url, full=False):
