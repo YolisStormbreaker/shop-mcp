@@ -35,6 +35,8 @@ OTHER = re.compile(r"zero\s*-?\s*2|2\s*w\b|\blts\b|zero\s*-?\s*3\s*w|\b3\s*b\b|h
 # Accessories. A board "в корпусе" is fine, a case on its own starts with the word.
 SKIP = re.compile(r"^\W*(корпус|кейс|case|акрилов|металлическ|прозрачн)|\bдля\b|блок питания|бп\b|кулер|радиатор|вентилятор|плата расширения|expansion|"
                   r"камер|дисплей|экран|монитор|кабель|адаптер|переходник|без платы", re.I)
+# Where what comes with the item starts: «Orange Pi Zero 3 + БП», «… с корпусом», «… в комплекте с БП».
+BUNDLE = re.compile(r"[+&]|\s(?:с|со|и)\s|в\s+комплекте", re.I)
 RAM = re.compile(r"(1(?:[.,]5)?|2|4)\s*(?:gb|гб|g\b)", re.I)
 
 
@@ -44,8 +46,10 @@ def ram(title):
 
 
 def wanted(title):
+    # accessories are looked for before the bundle starts: a board sold with a power supply is a board,
+    # a power supply sold with a cable is not
     return bool(BOARD.search(title)) and bool(BRAND.search(title)) and not OTHER.search(title) \
-        and not SKIP.search(title)
+        and not SKIP.search(BUNDLE.split(title, maxsplit=1)[0])
 
 
 def scan(tab, query):

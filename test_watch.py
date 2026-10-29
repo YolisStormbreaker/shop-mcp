@@ -48,13 +48,19 @@ def line(n, total, price, cheapest, title, ram):
 class TitleTests(unittest.TestCase):
     def test_boards(self):
         for title in ("Orange Pi Zero 3 2GB", "Orange Pi Zero3", "Orange Pi 3 Zero 1.5GB", "Оранж Пи Zero-3", "OPi Zero 3 4гб",
-                      "Orange Pi Zero 3 в корпусе", "Orange Pi Zero 3 & корпус"):
+                      "Orange Pi Zero 3 в корпусе", "Orange Pi Zero 3 & корпус",
+                      # a board sold with its accessories is a board: «+ БП», «с блоком питания», «в комплекте с БП»
+                      "Orange Pi Zero 3 + БП", "Orange Pi Zero 3 4GB с блоком питания и корпусом", "Orange Pi Zero 3 в комплекте с БП",
+                      "Orange Pi Zero 3 2GB + кабель + радиатор"):
             self.assertTrue(watch.wanted(title), title)
 
     def test_not_boards(self):
         for title in ("Zero 3 1GB", "Orange Pi Zero 2W", "Orange Pi Zero 3W", "Orange Pi 3 LTS", "Orange Pi 3B", "Orange Pi Zero 32",
                       "Orange Pi Zero 3 512MB", "Orange Pi Zero 3 H2+", "Raspberry Pi Zero 3 orange", "Корпус для Orange Pi Zero 3",
-                      "Кейс Orange Pi Zero3", "Orange Pi Zero 3 для проекта", "Блок питания Orange Pi Zero 3", "Orange Pi Zero 3 + БП"):
+                      "Кейс Orange Pi Zero3", "Orange Pi Zero 3 для проекта", "Блок питания Orange Pi Zero 3",
+                      # an accessory sold with others is still an accessory
+                      "Блок питания для Orange Pi Zero 3 + кабель", "Корпус + вентилятор для Orange Pi Zero3",
+                      "Кабель USB-C и блок питания Orange Pi Zero 3"):
             self.assertFalse(watch.wanted(title), title)
 
     def test_ram(self):
