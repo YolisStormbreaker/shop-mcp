@@ -114,7 +114,7 @@ def _open(nm, patterns):
     tab = tab_for("wildberries.ru")
     try:
         d = capture(tab, "wb", f"https://www.wildberries.ru/catalog/{nm}/detail.aspx",
-                    {"detail": ["/cards/v4/detail", f"nm={nm}"], **patterns})
+                    {"detail": ["/cards/v4/detail", f"nm={nm}"], **patterns}, optional=tuple(patterns))
         base = tab.js("(performance.getEntriesByType('resource').map(e => e.name)"
                       f".find(n => /\\/vol\\d+\\/part\\d+\\/{nm}\\//.test(n)) || '').split('/{nm}/')[0]")
     finally:

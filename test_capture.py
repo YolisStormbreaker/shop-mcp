@@ -156,5 +156,19 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(got, {})
         self.assertEqual(sent[-2:], [("Fetch.disable", {}), ("Network.disable", {})])
 
+    def test_an_optional_name_gets_a_short_wait_once_the_others_are_in(self):
+        script, patterns = [response("r1", "https://api.test/x"), finished("r1"), body("1")], {"x": ["/x"], "seller": ["/s"]}
+        got, _, clock = run(list(script), patterns, optional=("seller",))
+        _, _, waited = run(list(script), patterns)
+        self.assertEqual(got, {"x": 1})
+        self.assertLess(clock.time.call_count, 12)          # the clock moves a second per reading: ~3 s, not 20
+        self.assertGreaterEqual(waited.time.call_count, 20)
+
+    @patch.object(C, "OPTIONAL_WAIT", 10)      # the fake clock moves a second per reading
+    def test_an_optional_name_that_comes_in_time_is_read(self):
+        got, _, _ = run([response("r1", "https://api.test/x"), finished("r1"), body("1"), response("r2", "https://api.test/s"),
+                         finished("r2"), body("2")], {"x": ["/x"], "seller": ["/s"]}, optional=("seller",))
+        self.assertEqual(got, {"x": 1, "seller": 2})
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,7 +12,7 @@ import time
 import cdp
 
 
-def capture(tab, site, url, patterns, timeout=20, rewrite=None, js=None):
+def capture(tab, site, url, patterns, timeout=20, rewrite=None, js=None, optional=()):
     """Navigate to url; return {name: JSON} of the first response whose URL contains every part of patterns[name]
     (a part "re:<regex>" is searched as a regular expression instead).
 
@@ -24,6 +24,8 @@ def capture(tab, site, url, patterns, timeout=20, rewrite=None, js=None):
     Names whose response did not arrive within timeout are missing from the result.
     js: run this in the page instead of navigating to url — e.g. the site's own router, so a single-page
     app fetches the next screen's data without a full page load (Samokat's bot check counts page loads).
+    optional: names the page may never ask for (Wildberries' seller card for its own goods); once every other
+    name is in, they get OPTIONAL_WAIT seconds more, not the rest of timeout.
     """
     _wait_turn(site)
     ws = tab.ws
@@ -38,11 +40,16 @@ def capture(tab, site, url, patterns, timeout=20, rewrite=None, js=None):
     try:
         while time.time() < deadline and len(out) < len(patterns):
             _on(ws, _recv(ws), patterns, rewrite, pending, out)
+            if optional and set(patterns) - set(optional) <= set(out):
+                deadline = min(deadline, time.time() + OPTIONAL_WAIT)
         return out
     finally:
         if rewrite:
             _send(ws, "Fetch.disable")
         _send(ws, "Network.disable")
+
+
+OPTIONAL_WAIT = 3
 
 
 def _wait_turn(site):

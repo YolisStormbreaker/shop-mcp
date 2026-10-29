@@ -151,7 +151,8 @@ class ItemTests(WbTest):
             "характеристики: Цвет: белый; Длина: 1 м",
             "\n" + DESC[:2500]]))
         self.capture.assert_called_once_with(self.tab, "wb", "https://www.wildberries.ru/catalog/101/detail.aspx",
-                                             {"detail": ["/cards/v4/detail", "nm=101"], "seller": ["/api/v1/suppliers/"]})
+                                             {"detail": ["/cards/v4/detail", "nm=101"], "seller": ["/api/v1/suppliers/"]},
+                                             optional=("seller",))
         self.assertEqual([c.args[0] for c in self.get.call_args_list],
                          [f"{BASE}/101/info/ru/card.json", f"{BASE}/101/info/price-history.json"])
         self.tab.close.assert_called_once()
@@ -237,7 +238,7 @@ class ReviewsTests(WbTest):
         self.get.side_effect = lambda url: ["https://fb.test"] if "host" in url else {}
         self.assertTrue(wb.reviews("https://www.wildberries.ru/catalog/101/detail.aspx").startswith("Wildberries · артикул 101 (карточка 5001)"))
         self.capture.assert_called_once_with(self.tab, "wb", "https://www.wildberries.ru/catalog/101/detail.aspx",
-                                             {"detail": ["/cards/v4/detail", "nm=101"]})
+                                             {"detail": ["/cards/v4/detail", "nm=101"]}, optional=())
         wb.reviews("101")
         self.capture.assert_called_once()
 
