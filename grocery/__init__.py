@@ -214,7 +214,7 @@ def _table(same, rest):
               for s, p in sorted(c, key=lambda x: _per_unit(x[1]))]
     others = [("—", s, p) for s, p in sorted(rest, key=lambda x: ("(≈ похожее)" in (x[1].get("name") or ""), _per_unit(x[1])))]
     rows = [f"{g}\t" + _row(n, s, p) for n, (g, s, p) in enumerate(groups + others, 1)]
-    middle = ["Остальное, дешевле за кг/л — выше:" if same else ""] if rest else []
+    middle = ["Остальное, дешевле за кг/л — выше:"] if same and rest else []
     head = ("Одинаковые товары в разных магазинах (фасовка, проценты и слова названия совпадают; сверяй названия), дешевле за кг/л — выше:"
             if same else "Одинаковых товаров не нашлось — сравнивай по цене за кг/л:")
     return [head, "группа\t" + HEAD] + rows[:len(groups)] + middle + rows[len(groups):]
