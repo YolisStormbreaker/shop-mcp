@@ -17,6 +17,7 @@ from shoplog import log
 BLOCKED = "⚠️ Перекрёсток не отдал данные (проверка на бота или сайт не загрузился): shop-chrome show, открыть perekrestok.ru, повторить."
 CHECKED = ("⚠️ Перекрёсток показал проверку на бота (ServicePipe): попроси пользователя выполнить shop-chrome show, пройти её во "
            "вкладке perekrestok.ru, потом shop-chrome hide. Она включается после долгой серии запросов с одного IP.")
+UNCHECKED = "{}: Перекрёсток не отдал корзину, и не видно, что получилось — проверь grocery_cart, прежде чем повторять"
 SITE = "https://www.perekrestok.ru"
 FIND_API = """(() => {
   if (window.__shopApi) return true;
@@ -69,7 +70,7 @@ def _cached(tab, method, path, body=None, ttl=600):
     if hit and time.time() - hit[0] < ttl:
         return hit[1]
     d = _call(tab, method, path, body)
-    if isinstance(d, dict) and "__error" not in d:
+    if isinstance(d, dict) and not _failed(d):
         _cache[key] = (time.time(), d)
     return d
 
@@ -83,11 +84,16 @@ def _call(tab, method, path, body=None, retried=False):
         time.sleep(wait)
     _last = time.time()
     d = _request(tab, method, path, body)
-    if isinstance(d, dict) and "__error" in d:
+    if _failed(d):
         log.warning("perekrestok %s %s: %s%s", method, path[:120], d["__error"], " again after reload" if retried else "")
         if d["__error"] in (401, 403) and not retried and _renew(tab):
             return _call(tab, method, path, body, True)
     return d
+
+
+def _failed(d):
+    """The site's client answered with an error status, not with data: not an empty basket."""
+    return isinstance(d, dict) and "__error" in d
 
 
 def _request(tab, method, path, body):
@@ -330,6 +336,8 @@ def cart():
         d = _call(tab, "get", "/basket") or {}
     finally:
         tab.close()
+    if _failed(d):
+        return BLOCKED
     items = d.get("items") or []
     if not items:
         return "корзина Перекрёстка пуста"
@@ -382,13 +390,17 @@ def remove_from_cart(id_or_url):
     try:
         pid, title = _product_id(tab, plu)
         b = _call(tab, "get", "/basket") or {}
+        if _failed(b):
+            return BLOCKED
         if not _line(b, plu)[0]:
             return f"{title} в корзине Перекрёстка нет"
         _call(tab, "delete", f"/basket/item/{pid}")
-        left = _line(_call(tab, "get", "/basket") or {}, plu)[0]
+        b = _call(tab, "get", "/basket") or {}
     finally:
         tab.close()
-    return f"не удалось убрать {title} из корзины Перекрёстка" if left else f"убрано из корзины Перекрёстка: {title}"
+    if _failed(b):
+        return UNCHECKED.format(title)
+    return f"не удалось убрать {title} из корзины Перекрёстка" if _line(b, plu)[0] else f"убрано из корзины Перекрёстка: {title}"
 
 
 def favorites():
@@ -397,6 +409,8 @@ def favorites():
         d = _call(tab, "get", "/user/liked-product?page=1&perPage=100") or {}
     finally:
         tab.close()
+    if _failed(d):
+        return BLOCKED
     rows = [_listed(x["product"]) for x in d.get("items") or [] if x.get("product")]
     if not rows:
         return "избранное Перекрёстка пусто"
@@ -412,6 +426,6 @@ def favorite(id_or_url, remove=False):
         r = _call(tab, "delete" if remove else "post", f"/user/liked-product/{pid}")
     finally:
         tab.close()
-    if isinstance(r, dict) and "__error" in r:
+    if _failed(r):
         return f"Перекрёсток не изменил избранное: {r['__error']}"
     return f"{'убрано из избранного' if remove else 'в избранном'} Перекрёстка: {title}"

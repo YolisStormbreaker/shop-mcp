@@ -399,9 +399,12 @@ class CartTests(unittest.TestCase):
         self.assertEqual(got.split("\n")[0], "корзина Перекрёстка")
 
     def test_empty_cart(self):
-        for answer in ({"items": []}, None, {"__error": 403}):
+        for answer in ({"items": []}, None):
             with self.subTest(answer):
                 self.assertEqual(run(pk.cart, {"/basket": answer})[0], "корзина Перекрёстка пуста")
+
+    def test_cart_that_did_not_come(self):
+        self.assertEqual(run(pk.cart, {"/basket": {"__error": 403}})[0], pk.BLOCKED)
 
 
 class AddToCartTests(unittest.TestCase):
@@ -454,11 +457,13 @@ class RemoveFromCartTests(unittest.TestCase):
 
     def test_basket_that_did_not_come(self):
         got, calls = run(pk.remove_from_cart, Basket(kefir=1).answers([{"__error": 500}]), "2093082")
-        self.assertEqual((got, calls), ("Кефир 2,5%, 930г в корзине Перекрёстка нет", [PRODUCT, BASKET]))
+        self.assertEqual((got, calls), (pk.BLOCKED, [PRODUCT, BASKET]))
 
     def test_basket_that_did_not_come_back(self):
-        got, _ = run(pk.remove_from_cart, Basket(kefir=1, delete=False).answers([None, {"__error": 500}]), "2093082")
-        self.assertEqual(got, "убрано из корзины Перекрёстка: Кефир 2,5%, 930г")
+        got, calls = run(pk.remove_from_cart, Basket(kefir=1, delete=False).answers([None, {"__error": 500}]), "2093082")
+        self.assertEqual(got, "Кефир 2,5%, 930г: Перекрёсток не отдал корзину, и не видно, что получилось — проверь grocery_cart, "
+                              "прежде чем повторять")
+        self.assertEqual(calls, [PRODUCT, BASKET, ("delete", "/basket/item/7001", None), BASKET])
 
 
 class FavoritesTests(unittest.TestCase):
@@ -468,9 +473,12 @@ class FavoritesTests(unittest.TestCase):
         self.assertEqual(got, "избранное Перекрёстка\nplu\tцена ₽\tналичие\tназвание\n2093082\t109.99\t\tКефир 2.5%\n777\tNone\tнет в наличии\tКефир 1%")
 
     def test_no_favorites(self):
-        for answer in ({"items": [{}]}, None, {"__error": 403}):
+        for answer in ({"items": [{}]}, None):
             with self.subTest(answer):
                 self.assertEqual(run(pk.favorites, {"/user/liked-product": answer})[0], "избранное Перекрёстка пусто")
+
+    def test_favorites_that_did_not_come(self):
+        self.assertEqual(run(pk.favorites, {"/user/liked-product": {"__error": 403}})[0], pk.BLOCKED)
 
 
 class FavoriteTests(unittest.TestCase):
