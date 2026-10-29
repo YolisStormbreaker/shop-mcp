@@ -161,7 +161,8 @@ def _search_products(tab, store, query, page, limit):
 
 
 BY = {"price": lambda x: x["price"] or 1e9, "price_desc": lambda x: -(x["price"] or 0),
-      "discount": lambda x: (x["price"] or 0) / (x["old"] or x["price"] or 1), "rating": lambda x: -(x["rating"] or 0)}
+      # no price or no old one: no discount, after every discounted product
+      "discount": lambda x: x["price"] / x["old"] if x["price"] and x["old"] else 1, "rating": lambda x: -(x["rating"] or 0)}
 
 
 def _search_rows(products, sort):

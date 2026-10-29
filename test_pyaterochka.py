@@ -88,7 +88,7 @@ class SearchTests(unittest.TestCase):
         page = {"&offset=0": {"products": [listed(1, "A", "200", "100", rating={"rating_average": 4.5}), listed(2, "B", "50"),
                                            {"plu": 3, "name": "C", "rating": {"rating_average": 5.0}},
                                            listed(4, "D", "100", "80", rating={"rating_average": 4.9})]}}
-        for sort, ids in {"price": "2413", "price_desc": "1423", "discount": "3142", "rating": "3412"}.items():
+        for sort, ids in {"price": "2413", "price_desc": "1423", "discount": "1423", "rating": "3412"}.items():
             with self.subTest(sort):
                 got, _ = self.search(page, sort=sort)
                 self.assertEqual("".join(r["id"] for r in got["items"]), ids)
