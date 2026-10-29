@@ -125,7 +125,7 @@ def _item_head(p):
     brand = p.get("brand") or {}
     title = " ".join(x for x in (brand.get("title") or brand.get("name"), p.get("model_title") or p.get("title")) if x)
     price, base, _ = _offers(p.get("prices"))
-    return f"{title} ({p.get('title')}) — {price or None} ₽" + (f", без скидок {base} ₽" if base > price else "")
+    return f"{title} ({p.get('title')})" + (f" — {price} ₽" if price else "") + (f", без скидок {base} ₽" if base > price else "")
 
 
 def _seller(p):

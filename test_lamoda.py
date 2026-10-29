@@ -153,7 +153,7 @@ class LamodaItemTests(unittest.TestCase):
     def test_bare_card_by_relative_link(self):
         got, tab, _, _ = self.item(BARE_ITEM, " /p/ab123xy45678/sharf/?utm_source=x ")
         self.assertEqual(tab.goto.call_args.args[0], "https://www.lamoda.ru/p/ab123xy45678/sharf/?utm_source=x")
-        self.assertEqual(got, "Шарф (Шарф) — None ₽\nhttps://www.lamoda.ru/p/ab123xy45678/sharf/\n"
+        self.assertEqual(got, "Шарф (Шарф)\nhttps://www.lamoda.ru/p/ab123xy45678/sharf/\n"
                               "sku: AB123XY45678 · продавец:  · ⚠️ без возврата\nнет в наличии\n"
                               "рейтинг —, отзывов на этот цвет 0 (все цвета — lamoda_reviews)\n\n")
 
