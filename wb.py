@@ -369,8 +369,11 @@ def add_to_cart(id_or_url, size=None, quantity=1):
         items = _cart(tab, [_add_op(nm, chrt, quantity)])
     finally:
         tab.close()
-    if items is None:
-        return BLOCKED
+    return BLOCKED if items is None else _added_text(items, chrt, p, quantity)
+
+
+def _added_text(items, chrt, p, quantity):
+    """Whether WB confirmed adding size chrt of product p, and the cart."""
     return (f"{'добавлено' if _has(items, chrt) else '⚠️ Wildberries не подтвердил добавление'}: {p.get('name', '')}, {quantity} шт\n"
             + _cart_text(items))
 
