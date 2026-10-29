@@ -421,12 +421,9 @@ def remove_from_cart(id_or_url_or_chrt):
         items = _cart(tab)
         if items is None:
             return BLOCKED
-        hits = [i for i in items if key in (str(i.get("cod1S")), str(i.get("id")))]
-        if not hits:
-            return "такого товара в корзине нет\n" + _cart_text(items)
-        if len(hits) > 1:
-            return "в корзине несколько размеров этого товара, укажи chrt\n" + _cart_text(hits)
-        it = hits[0]
+        it, why = _line(items, key)
+        if why:
+            return why
         if not tab.js(f"{REMOVE_JS}({int(it['id'])}, {int(it['quantity'])})"):
             return "⚠️ не нашёл корзину Wildberries в браузере, ничего не удалил"
         items = _cart(tab)  # the page syncs the queued removal on this load
@@ -434,6 +431,15 @@ def remove_from_cart(id_or_url_or_chrt):
         tab.close()
     if items is None:
         return BLOCKED
-    gone = not any(i.get("id") == it["id"] for i in items)
-    return (f"{'удалено' if gone else '⚠️ Wildberries не подтвердил удаление'}: {it.get('goodsName', '')}\n"
+    return (f"{'⚠️ Wildberries не подтвердил удаление' if _has(items, it['id']) else 'удалено'}: {it.get('goodsName', '')}\n"
             + _cart_text(items))
+
+
+def _line(items, key):
+    """(the one cart line of article or chrt key, None) or (None, why not)."""
+    hits = [i for i in items if key in (str(i.get("cod1S")), str(i.get("id")))]
+    if not hits:
+        return None, "такого товара в корзине нет\n" + _cart_text(items)
+    if len(hits) > 1:
+        return None, "в корзине несколько размеров этого товара, укажи chrt\n" + _cart_text(hits)
+    return hits[0], None
