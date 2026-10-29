@@ -14,24 +14,8 @@ SORTS = ("default", "new", "price_asc", "price_desc", "new_sale", "discount")
 STATE = "window.__NUXT__?.payload?.state?.payload"
 BLOCKED = "⚠️ Lamoda не отдала данные страницы (проверка на бота?): shop-chrome show, открыть сайт, повторить."
 
-SEARCH_JS = f"""
-(() => {{
-  const P = {STATE};
-  if (!P?.products) return null;
-  return {{found: P.pagination?.found ?? P.products.length, pages: P.pagination?.pages || 1, page: P.pagination?.page || 1, items: P.products.map(p => {{
-    const pr = p.prices || [];
-    const last = pr[pr.length - 1] || {{}};
-    return {{
-      sku: p.sku, name: p.name, brand: p.brand?.name || '',
-      price: +(last.price ?? p.price_amount), base: +(pr[0]?.price ?? p.old_price_amount ?? 0),
-      until: (last.discount?.active_to || '').slice(0, 10),
-      rating: p.rating?.average_rating ? (p.rating.average_rating / 20).toFixed(1) : '', reviews: p.rating?.reviews_count || '',
-      sizes: (p.sizes || []).filter(s => s.is_available).map(s => s.brand_size).join(' '),
-      ad: !!p.ad_params, url: `/p/${{p.sku.toLowerCase()}}/${{p.seo_tail}}/`,
-    }};
-  }})}};
-}})()
-"""
+SEARCH_JS = f"(() => {{ const P = {STATE}; return P?.products ? {{pagination: P.pagination || {{}}, products: P.products}} : null }})()"
+
 
 ITEM_JS = f"""
 (() => {{
@@ -79,16 +63,31 @@ def search(query, price_min=None, price_max=None, sort="default", page=1, limit=
         tab.close()
     if r is None:
         return BLOCKED
-    rows = []
-    for i, x in enumerate(r["items"][:limit]):
-        marks = "реклама" if x["ad"] else ""
-        rows.append(f"{i+1}\t{x['sku']}\t{x['price']}\t{x['base'] if x['base'] > x['price'] else ''}\t{x['until']}\t"
-                    f"{x['brand']}\t{x['name']}\t{x['rating']}\t{x['reviews']}\t{x['sizes']}\t{marks}\t{x['url']}")
-    head = (f"Lamoda · {r['found']} найдено · страница {r['page']} из {r['pages']} · {url}\n"
+    products = [x["product"] for x in r["products"] if x.get("type") == "product"]   # the rest are ad banners
+    rows = [_search_row(i + 1, p) for i, p in enumerate(products[:limit])]
+    pg = r["pagination"]
+    head = (f"Lamoda · {pg.get('found', len(products))} найдено · страница {pg.get('page') or 1} из {pg.get('pages') or 1} · {url}\n"
             "ссылки относительно https://www.lamoda.ru; цена — со всеми скидками, включая вашу скидку лояльности; "
             "«до» — когда кончается акционная цена; размеры в наличии — в системе бренда\n"
             "#\tsku\tцена ₽\tбез скидок\tакция до\tбренд\tназвание\tрейтинг\tотзывов\tразмеры в наличии\tпометки\tссылка")
     return head + "\n" + ("\n".join(rows) if rows else "(пусто)")
+
+
+def _rub(price):
+    return int(re.sub(r"\D", "", str(price.get("price", ""))) or 0)     # "1 040" -> 1040
+
+
+def _search_row(n, p):
+    """p.prices: {"original": {"price": "1 040"}, "action": {"price": "728", "discount": {"active_to": …}}, …}"""
+    prices = [x for x in (p.get("prices") or {}).values() if _rub(x)]
+    final = min(prices, key=_rub, default={})
+    price, base = _rub(final), max(map(_rub, prices), default=0)
+    sizes = " ".join(s["brand_title"] for s in p.get("sizes") or [] if s.get("stock_quantity"))
+    return "\t".join(map(str, [
+        n, p["sku"], price, base if base > price else "", ((final.get("discount") or {}).get("active_to") or "")[:10],
+        (p.get("brand") or {}).get("title", ""), p.get("title", ""), f"{p['average_rating']:.1f}" if p.get("average_rating") else "",
+        (p.get("counters") or {}).get("reviews") or "", sizes, "реклама" if p.get("ad_params") else "",
+        f"/p/{p['sku'].lower()}/{p.get('seo_tail', '')}/"]))
 
 
 def item(sku_or_url, full=False):
