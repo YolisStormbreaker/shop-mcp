@@ -167,10 +167,9 @@ REVIEW_SORTS = {"useful": ("ranking_score", "desc"), "new": ("date", "desc"), "h
 def reviews(sku_or_url, sort="useful", with_media=False, page=1, this_color=False, limit=20):
     if sort not in REVIEW_SORTS:
         return f"sort: одно из {', '.join(REVIEW_SORTS)}"
-    m = re.search(r"/p/([a-z0-9]+)", sku_or_url, re.I) or re.fullmatch(r"\s*([a-z0-9]{10,})\s*", sku_or_url, re.I)
-    if not m:
+    sku = _review_sku(sku_or_url)
+    if not sku:
         return "нужен sku Lamoda или ссылка https://www.lamoda.ru/p/<sku>/..."
-    sku = m.group(1).upper()
     by, direction = REVIEW_SORTS[sort]
     body = {"limit": limit, "offset": (page - 1) * limit, "sku": sku, "with_related": not this_color,
             "sort": by, "sort_direction": direction}
@@ -179,29 +178,47 @@ def reviews(sku_or_url, sort="useful", with_media=False, page=1, this_color=Fals
     tab = _lm_tab()
     try:
         d = _api(tab, "POST", "/api/v1/product/reviews_v2", body)
-        info = _api(tab, "GET", f"/api/v1/product/reviews_info?sku={sku}&with_related={'false' if this_color else 'true'}") or {}
+        info = _api(tab, "GET", f"/api/v1/product/reviews_info?sku={sku}&with_related={json.dumps(not this_color)}") or {}
     finally:
         tab.close()
     if d is None:
         return BLOCKED
-    total = d.get("total") or 0
-    fit = "; ".join(v.get("title", "") for v in (info.get("average_fittings") or {}).values() if isinstance(v, dict) and v.get("title"))
-    head = (f"Lamoda · {sku}: рейтинг {info.get('average_rating') or '—'}, отзывов {info.get('total_review_count', total)}, "
-            f"фото в отзывах {info.get('total_photos_count', d.get('total_photos', 0))}" + (f" · по отзывам: {fit}" if fit else "") + "\n"
-            f"{'только этот цвет' if this_color else 'все цвета модели'}: {total}{' с фото' if with_media else ''}, "
-            f"страница {page} из {max(1, -(-total // limit))} по {limit}, сортировка {sort}\n"
-            "дата\t★\tполезно +/−\tкуплено (размер, цвет)\tавтор\tтекст\tфото (shop_images)")
-    rows = []
-    for x in d.get("reviews") or []:
-        sn = x.get("snippet") or {}
-        pur = sn.get("purchase") or {}
-        bought = ", ".join(v for v in [pur.get("value", ""), *((pur.get("combines") or {}).values())] if v)
-        params = "; ".join(p.get("title", "") for p in sn.get("item_params") or [] if p.get("title"))
-        text = " ".join(((x.get("text") or "") + (f" | {params}" if params else "")).split())
-        photos = [p["url"] for p in x.get("photos") or [] if p.get("url")]
-        rows.append(f"{(x.get('created_time') or '')[:10]}\t{x.get('rating', '')}\t+{x.get('like_count', 0)}/−{x.get('dislike_count', 0)}\t"
-                    f"{bought}\t{(sn.get('header') or {}).get('author', '')}\t{text}\t{' '.join(photos)}")
-    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
+    rows = "\n".join(map(_review_row, d.get("reviews") or [])) or "(отзывов нет)"
+    return (_reviews_rating(sku, d, info) + "\n" + _reviews_scope(d.get("total") or 0, sort, with_media, page, this_color, limit) + "\n"
+            "дата\t★\tполезно +/−\tкуплено (размер, цвет)\tавтор\tтекст\tфото (shop_images)\n" + rows)
+
+
+def _review_sku(sku_or_url):
+    m = re.search(r"/p/([a-z0-9]+)", sku_or_url, re.I) or re.fullmatch(r"\s*([a-z0-9]{10,})\s*", sku_or_url, re.I)
+    return m and m.group(1).upper()
+
+
+def _reviews_rating(sku, d, info):
+    fit = "; ".join(v["title"] for v in (info.get("average_fittings") or {}).values() if isinstance(v, dict) and v.get("title"))
+    return (f"Lamoda · {sku}: рейтинг {info.get('average_rating') or '—'}, отзывов {info.get('total_review_count', d.get('total') or 0)}, "
+            f"фото в отзывах {info.get('total_photos_count', d.get('total_photos', 0))}" + (f" · по отзывам: {fit}" if fit else ""))
+
+
+def _reviews_scope(total, sort, with_media, page, this_color, limit):
+    return (f"{'только этот цвет' if this_color else 'все цвета модели'}: {total}{' с фото' if with_media else ''}, "
+            f"страница {page} из {max(1, -(-total // limit))} по {limit}, сортировка {sort}")
+
+
+def _review_row(x):
+    sn = x.get("snippet") or {}
+    photos = " ".join(p["url"] for p in x.get("photos") or [] if p.get("url"))
+    return (f"{(x.get('created_time') or '')[:10]}\t{x.get('rating', '')}\t+{x.get('like_count', 0)}/−{x.get('dislike_count', 0)}\t"
+            f"{_bought(sn.get('purchase') or {})}\t{(sn.get('header') or {}).get('author', '')}\t{_review_text(x, sn)}\t{photos}")
+
+
+def _bought(purchase):
+    """the size, then the color and the rest"""
+    return ", ".join(v for v in [purchase.get("value", ""), *((purchase.get("combines") or {}).values())] if v)
+
+
+def _review_text(x, sn):
+    params = "; ".join(p["title"] for p in sn.get("item_params") or [] if p.get("title"))
+    return " ".join(((x.get("text") or "") + (f" | {params}" if params else "")).split())
 
 
 # Cart: the site's own API client (cartGet / cartAdd / cartRemove in its code) — same-origin JSON with

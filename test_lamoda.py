@@ -172,5 +172,62 @@ class LamodaItemTests(unittest.TestCase):
         tab.close.assert_called_once()
 
 
+REVIEWS = {"total": 45, "total_photos": 3, "reviews": [
+    {"created_time": "2026-09-01T12:00:00+03:00", "rating": 5, "like_count": 4, "dislike_count": 1, "text": "Хорошие\n  носки",
+     "snippet": {"purchase": {"value": "42/44", "combines": {"color": "чёрный", "pattern": ""}}, "header": {"author": "Покупатель А."},
+                 "item_params": [{"title": "Размер: в размер"}, {"title": ""}, {"title": "Полнота: нормальная"}]},
+     "photos": [{"url": "https://a.lmcdn.ru/photoreview/?key=a1"}, {"url": ""}, {}]},
+    {}]}
+REVIEWS_INFO = {"average_rating": 4.8, "total_review_count": 563, "total_photos_count": 7,
+                "average_fittings": {"size": {"title": "в размер"}, "width": {"title": ""}, "note": "x", "fit": {"title": "по фигуре"}}}
+
+
+class LamodaReviewsTests(unittest.TestCase):
+    def reviews(self, d, info, sku_or_url="MP002XM01L0O", **kw):
+        tab = MagicMock()
+        with patch.object(lamoda, "_lm_tab", return_value=tab), patch.object(lamoda, "_api", side_effect=[d, info]) as api:
+            return lamoda.reviews(sku_or_url, **kw), api, tab
+
+    def test_page_with_reviews(self):
+        got, api, tab = self.reviews(REVIEWS, REVIEWS_INFO)
+        self.assertEqual(got, "Lamoda · MP002XM01L0O: рейтинг 4.8, отзывов 563, фото в отзывах 7 · по отзывам: в размер; по фигуре\n"
+                              "все цвета модели: 45, страница 1 из 3 по 20, сортировка useful\n"
+                              "дата\t★\tполезно +/−\tкуплено (размер, цвет)\tавтор\tтекст\tфото (shop_images)\n"
+                              "2026-09-01\t5\t+4/−1\t42/44, чёрный\tПокупатель А.\tХорошие носки | Размер: в размер; Полнота: нормальная\t"
+                              "https://a.lmcdn.ru/photoreview/?key=a1\n"
+                              "\t\t+0/−0\t\t\t\t")
+        self.assertEqual([c.args[1:] for c in api.call_args_list], [
+            ("POST", "/api/v1/product/reviews_v2", {"limit": 20, "offset": 0, "sku": "MP002XM01L0O", "with_related": True,
+                                                    "sort": "ranking_score", "sort_direction": "desc"}),
+            ("GET", "/api/v1/product/reviews_info?sku=MP002XM01L0O&with_related=true")])
+        self.assertIs(api.call_args.args[0], tab)
+        tab.close.assert_called_once()
+
+    def test_this_color_with_photos_without_info(self):
+        got, api, _ = self.reviews({"total": 0, "reviews": []}, None, "https://www.lamoda.ru/p/mp002xm01l0o/clothes-omsa/",
+                                   sort="low", with_media=True, page=2, this_color=True, limit=10)
+        self.assertEqual(got, "Lamoda · MP002XM01L0O: рейтинг —, отзывов 0, фото в отзывах 0\n"
+                              "только этот цвет: 0 с фото, страница 2 из 1 по 10, сортировка low\n"
+                              "дата\t★\tполезно +/−\tкуплено (размер, цвет)\tавтор\tтекст\tфото (shop_images)\n(отзывов нет)")
+        self.assertEqual([c.args[1:] for c in api.call_args_list], [
+            ("POST", "/api/v1/product/reviews_v2", {"limit": 10, "offset": 10, "sku": "MP002XM01L0O", "with_related": False,
+                                                    "sort": "rating", "sort_direction": "asc", "only_with_photos": True}),
+            ("GET", "/api/v1/product/reviews_info?sku=MP002XM01L0O&with_related=false")])
+
+    def test_counts_from_the_list_when_info_has_none(self):
+        got, _, _ = self.reviews({"total": 41, "total_photos": 2, "reviews": None}, {}, " mp002xm01l0o ")
+        self.assertEqual(got.splitlines()[:2], ["Lamoda · MP002XM01L0O: рейтинг —, отзывов 41, фото в отзывах 2",
+                                                "все цвета модели: 41, страница 1 из 3 по 20, сортировка useful"])
+
+    def test_blocked(self):
+        got, _, tab = self.reviews(None, None)
+        self.assertEqual(got, lamoda.BLOCKED)
+        tab.close.assert_called_once()
+
+    def test_bad_arguments(self):
+        self.assertEqual(lamoda.reviews("MP002XM01L0O", sort="best"), "sort: одно из useful, new, high, low")
+        self.assertEqual(lamoda.reviews("носки"), "нужен sku Lamoda или ссылка https://www.lamoda.ru/p/<sku>/...")
+
+
 if __name__ == "__main__":
     unittest.main()
