@@ -76,27 +76,41 @@ def percent_of(word, text):
 def flags(text, items=None):
     """Short facts: «сахар — 2-й из 6», «подсластители: сукралоза», «пальмовое масло», «E-добавки: 6».
     In a sugar-free product a sweetener name like «сорбит» is not «sugar»."""
+    text = text or ""
     items = items if items is not None else parse(text)["ingredients"]
-    out = []
-    def head(s):        # an ingredient's own name, without its bracketed parts: «томатный соус (паста, сахар…)» → «томатный соус»
-        return re.sub(r"\(.*", "", s).strip()
-    own = next((i for i, s in enumerate(items, 1) if SUGARS.search(head(s)) and not SWEETENERS.search(head(s))), None)
-    inner = next((i for i, s in enumerate(items, 1) if SUGARS.search(s) and not SWEETENERS.search(s)), None)
-    if own:
-        kind = SUGARS.search(head(items[own - 1])).group(0).lower()
-        out.append(("сахар" if kind.startswith("сахар") else f"сахар как «{head(items[own - 1])[:40]}»") + f" — {own}-й из {len(items)}")
-    if inner and inner != own:
-        out.append(f"сахар внутри «{head(items[inner - 1])[:40]}» ({inner}-й компонент из {len(items)})")
-    if not own and not inner and items:
-        out.append("без сахара в составе")
-    sw = sorted({m.group(0).lower() for m in SWEETENERS.finditer(text or "")})
-    if sw:
-        out.append("подсластители: " + ", ".join(sw))
-    out += [name for name, rx in FLAGS.items() if rx.search(text or "")]
-    e = sorted({"E" + m.group(1).upper() for m in ECODE.finditer(text or "")})
-    if e:
-        out.append(f"E-добавки ({len(e)}): " + " ".join(e))
-    return out
+    sw = sorted({m.group(0).lower() for m in SWEETENERS.finditer(text)})
+    e = sorted({"E" + m.group(1).upper() for m in ECODE.finditer(text)})
+    return (_sugar(items) + (["подсластители: " + ", ".join(sw)] if sw else []) + [name for name, rx in FLAGS.items() if rx.search(text)]
+            + ([f"E-добавки ({len(e)}): " + " ".join(e)] if e else []))
+
+
+def _head(s):
+    """An ingredient's own name, without its bracketed parts: «томатный соус (паста, сахар…)» → «томатный соус»."""
+    return re.sub(r"\(.*", "", s).strip()
+
+
+def _sugary(s):
+    return SUGARS.search(s) and not SWEETENERS.search(s)
+
+
+def _sugar(items):
+    """Where sugar is in the list (ingredients go by weight, largest first): an ingredient of its own,
+    inside a compound one («томатный соус (…, сахар)»), or none at all."""
+    own = next((i for i, s in enumerate(items, 1) if _sugary(_head(s))), None)
+    inner = next((i for i, s in enumerate(items, 1) if _sugary(s)), None)
+    if not own and not inner:
+        return ["без сахара в составе"] if items else []
+    within = [f"сахар внутри «{_head(items[inner - 1])[:40]}» ({inner}-й компонент из {len(items)})"] if inner and inner != own else []
+    return _own_sugar(items, own) + within
+
+
+def _own_sugar(items, own):
+    """«сахар — 2-й из 6», or «сахар как «мед» — 2-й из 3» for another kind of sugar."""
+    if not own:
+        return []
+    name = _head(items[own - 1])
+    kind = "сахар" if SUGARS.search(name).group(0).lower().startswith("сахар") else f"сахар как «{name[:40]}»"
+    return [f"{kind} — {own}-й из {len(items)}"]
 
 
 NUTRIENTS = {"kcal": r"ккал|калорийн|энергетическ", "protein": r"белк", "fat": r"жир", "carbs": r"углевод", "sugar": r"сахар"}
