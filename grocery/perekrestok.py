@@ -266,8 +266,9 @@ def _delivery(delivery):
 
 
 def _delivery_tab(t):
-    return (f"{t.get('title') or t.get('type')}: {t.get('costString') or (str(_rub(t.get('cost'))) + ' ₽')}, "
-            f"{(t.get('congestion') or {}).get('deliveryRange') or ''}".strip(", ")
+    rub = _rub(t.get("cost"))
+    terms = f"{t.get('costString') or ('' if rub is None else f'{rub} ₽')}, {(t.get('congestion') or {}).get('deliveryRange') or ''}".strip(", ")
+    return (f"{t.get('title') or t.get('type')}" + (f": {terms}" if terms else "")
             + (f", заказ от {_rub(t['minCost'])} ₽" if t.get("minCost") else ""))
 
 

@@ -50,6 +50,7 @@ DELIVERY = {"tabs": [
     {"type": "express", "cost": 29900, "congestion": {}},
     {"type": "pickup", "title": "Самовывоз", "costString": "Бесплатно,"},
     {"type": "nocost"},
+    {"type": "later", "congestion": {"deliveryRange": "завтра"}},
 ]}
 WEIGHED = {"masterData": {"plu": 42, "unitName": "кг", "quantum": 500, "weight": 1000}, "priceTag": {"price": 50000}, "balanceState": "sold-out"}
 
@@ -68,7 +69,7 @@ class ProductTests(unittest.TestCase):
             "extra": ["акции: -26%; 2 по цене 1",
                       "обычная цена (медиана): 129.99 ₽",
                       "доставка на адрес из профиля: Стандарт: Доставка 99 ₽, сегодня 18–20, заказ от 1000.0 ₽; express: 299.0 ₽; "
-                      "Самовывоз: Бесплатно; nocost: None ₽",
+                      "Самовывоз: Бесплатно; nocost; later: завтра",
                       "характеристики: Жирность, %: до 2,5%; strana: Россия, Беларусь; Какао, %: 30"]})
 
     def test_weighed_card_without_extras(self):
