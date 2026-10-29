@@ -156,5 +156,132 @@ class SearchTests(unittest.TestCase):
             ali.search("usb", sort="rating")
 
 
+ITEM = "1005006043702745"
+PHOTOS = [f"https://ae-pic-a1.aliexpress-media.com/kf/S{n}.jpg" for n in range(1, 12)]
+DESC_IMGS = [f"https://ae-pic-a1.aliexpress-media.com/kf/D{n}.jpg" for n in range(1, 10)]
+PRODUCT_DATA = {"data": {
+    "price": {"discount": 51, "formattedActivityPrice": "88–147 ₽", "formattedPrice": "180–300 ₽"},
+    "rating": {"middle": 4.8}, "reviews": 1657, "tradeInfo": {"formatTradeCount": "18 906 купили"}, "productInfo": {"brand": "OLOPKY"},
+    "gallery": [{"imageUrl": u} for u in PHOTOS] + [{"videoUrl": "https://video.aliexpress-media.com/v1.mp4"}, {"other": 1}],
+    "skuInfo": {
+        "propertyList": [{"name": "Цвет", "values": [{"id": "200", "name": "as the pictures show "},
+                                                     {"id": "201", "name": "black", "displayName": "Черный"}]},
+                         {"name": "Длина", "values": [{"id": "300", "name": "1m"}, {"id": "301", "name": "2m", "displayName": "2 м"}]}],
+        "priceList": [{"skuId": 12000035460442808, "skuPropIds": "200,300", "activityAmount": {"formatted": "88 ₽"},
+                       "amount": {"formatted": "180 ₽"}, "availQuantity": 2480},
+                      {"skuId": 12000035597315109, "skuPropIds": "201,301", "amount": {"formatted": "300 ₽"}, "availQuantity": 0},
+                      {"skuId": 12000036024713698, "skuPropIds": "200,301", "amount": {"formatted": "147 ₽"}, "availQuantity": 4983},
+                      {"skuId": 12000036024713699}]}}}
+VARIANT_ROWS = ["  Цвет: as the pictures show; Длина: 1m\t12000035460442808\t88 ₽\t2480",
+                "  Цвет: Черный; Длина: 2 м\t12000035597315109\t300 ₽\tнет",
+                "  Цвет: as the pictures show; Длина: 2 м\t12000036024713698\t147 ₽\t4983",
+                "  \t12000036024713699\t\tнет"]
+BODY = "\n".join([
+    "PD 60 Вт USB C кабель", "88 ₽", "  ", "Доставка",
+    "9–12 ноября в пункт выдачи", "20 ₽",
+    "15–19 ноября почтой", "Бесплатно",
+    "9–12 ноября в пункт выдачи", "20 ₽",                          # the same option shown twice
+    "3 ноября курьером", "Бесплатная доставка от 1 000 ₽",   # not a price line
+    "12 ноября — строка, в которой слишком много текста для строки со сроком доставки", "20 ₽",
+    "В корзину", "1 декабря"])
+
+
+def pdp(body=BODY, title="PD 60 Вт USB C кабель", price="88 ₽", props=("Цвет: as the pictures show", None, "Длина: 1m"),
+        search="?sku_id=12000035460442808", in_stock=True, combo=False, content=None):
+    """The product page as item() sees it: one answer per JS expression it runs there."""
+    answers = {"document.body.innerText": body, "location.search": search, f"!!({ali.CART_BTN})": in_stock,
+               f"!!({ali.COMBO_BTN})": combo, ali.CONTENT_JS: content or {"chars": "", "desc": "", "imgs": []},
+               "document.querySelector('h1')?.innerText.trim() || ''": title}
+
+    def js(expr, **_):
+        if "propNameWrap" in expr:
+            return list(props)
+        if "findIndex(s => s === 'В корзину')" in expr:
+            return price
+        return answers[expr]
+    tab = MagicMock()
+    tab.js.side_effect = js
+    return tab
+
+
+class ItemTests(unittest.TestCase):
+    def item(self, tab, data, id_or_url=ITEM, **kw):
+        with patch.object(ali, "_tab", return_value=tab), patch.object(ali, "_fetch", return_value=data) as fetch, \
+                patch.object(ali.time, "sleep"):
+            out = ali.item(id_or_url, **kw)
+        tab.close.assert_called_once()
+        self.assertEqual(fetch.call_args.args[1], f"/aer-jsonapi/v1/bx/pdp/web/productData?productId={ITEM}&sourceId=0&sku_id=0")
+        return out, fetch
+
+    def test_full_card_in_stock(self):
+        tab = pdp(content={"chars": "Характеристики\nНазвание бренда\nOLOPKY\nПроисхождение\nКитай\nМатериал",
+                           "desc": "Описание\n\n\nкабель\n  \nдля зарядки  ", "imgs": DESC_IMGS})
+        out, fetch = self.item(tab, PRODUCT_DATA, sku="12000035460442808")
+        self.assertEqual(fetch.call_count, 1)              # the variants come from the same answer
+        self.assertEqual(tab.goto.call_args.args[:2], (f"https://aliexpress.ru/item/{ITEM}.html?sku_id=12000035460442808", "ali"))
+        self.assertEqual(out, "\n".join([
+            "PD 60 Вт USB C кабель", f"id {ITEM} · sku 12000035460442808 · 88 ₽", "выбрано: Цвет: as the pictures show; Длина: 1m",
+            "доставка:", "  9–12 ноября в пункт выдачи — 20 ₽", "  15–19 ноября почтой — бесплатно",
+            "скидка 51%: 88–147 ₽ вместо 180–300 ₽ (диапазон — по всем вариантам)",
+            "рейтинг 4.8, отзывов 1657, 18 906 купили · бренд OLOPKY",
+            "варианты (свойства\tsku\tцена\tостаток):", *VARIANT_ROWS,
+            "фото (shop_images): " + " ".join(PHOTOS[:10]),
+            "видео: https://video.aliexpress-media.com/v1.mp4",
+            "картинки в описании (shop_images): " + " ".join(DESC_IMGS[:8]),
+            "отзывы: ali_reviews",
+            "характеристики: Название бренда: OLOPKY; Происхождение: Китай",
+            "описание продавца:\nОписание\nкабель\nдля зарядки"]))
+
+    def test_combo_only_without_variants_or_details(self):
+        tab = pdp(body="Кабель\n500 ₽\nВ комбо-корзину", title="Кабель", price="500 ₽", props=(), search="", in_stock=False, combo=True)
+        out, fetch = self.item(tab, {"data": None}, f"https://aliexpress.ru/item/{ITEM}.html?spm=a2g0o", list_variants=False)
+        self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(tab.goto.call_args.args[0], f"https://aliexpress.ru/item/{ITEM}.html")
+        self.assertEqual(out, f"Кабель\nid {ITEM} · sku  · 500 ₽ · только комбо-корзина (купить можно от 2 товаров из комбо)\n"
+                              "выбрано: \nдоставка: не нашёл на странице\nрейтинг —, отзывов 0, покупок —\nотзывы: ali_reviews")
+
+    def test_out_of_stock(self):
+        out, _ = self.item(pdp(in_stock=False), {"data": {}})
+        self.assertEqual(out.splitlines()[1], f"id {ITEM} · sku 12000035460442808 · 88 ₽ · НЕТ В НАЛИЧИИ")
+
+    def test_description_is_cut_unless_full(self):
+        tab = pdp(content={"chars": "", "desc": "а" * 2600 + "КОНЕЦ", "imgs": []})
+        self.assertEqual(self.item(tab, {"data": {}})[0].split("описание продавца:\n")[1], "а" * 2500)
+        tab = pdp(content={"chars": "", "desc": "а" * 2600 + "КОНЕЦ", "imgs": []})
+        self.assertEqual(self.item(tab, {"data": {}}, full=True)[0].split("описание продавца:\n")[1], "а" * 2600 + "КОНЕЦ")
+
+    def test_no_item_id_in_the_link(self):
+        with self.assertRaisesRegex(ValueError, "не нашёл id товара"):
+            ali.item("https://aliexpress.ru/store/1102")
+
+
+class VariantTests(unittest.TestCase):
+    def setUp(self):
+        with patch.object(ali, "_fetch", return_value=PRODUCT_DATA) as fetch:
+            self.variants = ali._skus(MagicMock(), ITEM)        # no product data given: it asks the API itself
+        self.assertEqual(fetch.call_args.args[1], f"/aer-jsonapi/v1/bx/pdp/web/productData?productId={ITEM}&sourceId=0&sku_id=0")
+
+    def test_variants_from_the_product_api(self):
+        self.assertEqual(["  " + "\t".join([v["label"], v["sku"], v["price"], str(v["stock"] or "нет")]) for v in self.variants],
+                         VARIANT_ROWS)
+
+    def test_one_variant_by_name_or_display_name_in_any_case(self):
+        self.assertEqual(ali._sku_for(self.variants, {"ЦВЕТ": " черный "}), "12000035597315109")
+        self.assertEqual(ali._sku_for(self.variants, {"Цвет": "As the pictures show", "длина": "2M"}), "12000036024713698")
+
+    def test_several_variants_fit(self):
+        with self.assertRaises(ValueError) as e:
+            ali._sku_for(self.variants, {"Цвет": "as the pictures show"})
+        self.assertEqual(str(e.exception), "подходит несколько для {'Цвет': 'as the pictures show'}; варианты: "
+                                           "Цвет: as the pictures show; Длина: 1m | Цвет: as the pictures show; Длина: 2 м")
+
+    def test_no_variant_fits(self):
+        with self.assertRaises(ValueError) as e:
+            ali._sku_for(self.variants, {"Цвет": "red"})
+        self.assertEqual(str(e.exception), "нет такого варианта для {'Цвет': 'red'}; варианты: "
+                                           "Цвет: as the pictures show; Длина: 1m | Цвет: Черный; Длина: 2 м | "
+                                           "Цвет: as the pictures show; Длина: 2 м | ")
+
+
 if __name__ == "__main__":
     unittest.main()
