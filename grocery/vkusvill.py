@@ -17,6 +17,7 @@ from cdp import site_tab
 from shoplog import log
 
 from .composition import nutrition_from_text
+from .ids import NUMBER, first_group
 
 MCP = "https://mcp.vkusvill.ru/mcp"
 SITE = "https://vkusvill.ru"
@@ -182,10 +183,7 @@ def _site_card(c):
 
 
 def _id(id_or_url):
-    m = re.search(r"-(\d+)/?(?:\?|$)", str(id_or_url)) or re.fullmatch(r"\s*(\d+)\s*", str(id_or_url))
-    if not m:
-        raise ValueError("нужен id товара ВкусВилла или ссылка https://vkusvill.ru/goods/<название>-<id>/")
-    return m.group(1)
+    return first_group(id_or_url, "нужен id товара ВкусВилла или ссылка https://vkusvill.ru/goods/<название>-<id>/", r"-(\d+)/?(?:\?|$)", NUMBER)
 
 
 def product(id_or_url):

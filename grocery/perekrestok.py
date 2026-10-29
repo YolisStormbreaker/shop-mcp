@@ -14,6 +14,8 @@ import urllib.parse
 from cdp import tab_for
 from shoplog import log
 
+from .ids import first_group
+
 BLOCKED = "⚠️ Перекрёсток не отдал данные (проверка на бота или сайт не загрузился): shop-chrome show, открыть perekrestok.ru, повторить."
 CHECKED = ("⚠️ Перекрёсток показал проверку на бота (ServicePipe): попроси пользователя выполнить shop-chrome show, пройти её во "
            "вкладке perekrestok.ru, потом shop-chrome hide. Она включается после долгой серии запросов с одного IP.")
@@ -123,10 +125,8 @@ def _rub(k):
 
 
 def _plu(id_or_url):
-    m = re.search(r"-(\d+)/?(?:\?|$|/reviews)", str(id_or_url)) or re.fullmatch(r"\s*(?:plu)?(\d+)\s*", str(id_or_url))
-    if not m:
-        raise ValueError("нужен plu Перекрёстка или ссылка https://www.perekrestok.ru/cat/<раздел>/p/<название>-<plu>")
-    return m.group(1)
+    return first_group(id_or_url, "нужен plu Перекрёстка или ссылка https://www.perekrestok.ru/cat/<раздел>/p/<название>-<plu>",
+                       r"-(\d+)/?(?:\?|$|/reviews)", r"^\s*(?:plu)?(\d+)\s*\Z")
 
 
 def _url(p):

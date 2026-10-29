@@ -17,6 +17,7 @@ from cdp import site_tab
 from shoplog import log
 
 from .composition import nutrition_from_text
+from .ids import NUMBER, first_group
 
 SITE = "https://lenta.com"
 BLOCKED = "⚠️ Лента не отдала данные (проверка на бота или сайт не загрузился): shop-chrome show, открыть lenta.com, повторить."
@@ -157,10 +158,7 @@ def _facets(d):
 
 
 def _id(id_or_url):
-    m = re.search(r"-(\d+)/?(?:\?|$)", str(id_or_url)) or re.fullmatch(r"\s*(\d+)\s*", str(id_or_url))
-    if not m:
-        raise ValueError("нужен id товара Ленты или ссылка https://lenta.com/product/<название>-<id>/")
-    return m.group(1)
+    return first_group(id_or_url, "нужен id товара Ленты или ссылка https://lenta.com/product/<название>-<id>/", r"-(\d+)/?(?:\?|$)", NUMBER)
 
 
 def product(id_or_url):

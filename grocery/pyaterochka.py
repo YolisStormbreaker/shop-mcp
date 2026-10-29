@@ -13,6 +13,8 @@ import urllib.parse
 from cdp import tab_for
 from shoplog import log
 
+from .ids import NUMBER, first_group
+
 API = "https://5d.5ka.ru/api/catalog"
 REVIEWS = "https://gw-fb5.x5.ru/api/product-review/v1"
 BLOCKED = "⚠️ Пятёрочка не отдала данные (проверка на бота?): shop-chrome show, открыть 5ka.ru, повторить."
@@ -174,10 +176,7 @@ def _search_rows(products, sort):
 
 
 def _plu(id_or_url):
-    m = re.search(r"--(\d+)/?", str(id_or_url)) or re.search(r"/product/(\d+)", str(id_or_url)) or re.fullmatch(r"\s*(\d+)\s*", str(id_or_url))
-    if not m:
-        raise ValueError("нужен plu Пятёрочки или ссылка https://5ka.ru/product/<название>--<plu>/")
-    return m.group(1)
+    return first_group(id_or_url, "нужен plu Пятёрочки или ссылка https://5ka.ru/product/<название>--<plu>/", r"--(\d+)/?", r"/product/(\d+)", NUMBER)
 
 
 def product(id_or_url):
