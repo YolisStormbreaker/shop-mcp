@@ -241,7 +241,9 @@ def _stars(count):
 def _extra(note, attrs, rv):
     rc = (rv.get("content") or {}) if isinstance(rv, dict) else {}
     extra = [note] if note else []
-    extra.append("характеристики: " + "; ".join(f"{k}: {v}" for k, v in attrs.items() if k not in SKIP))
+    chars = "; ".join(f"{k}: {v}" for k, v in attrs.items() if k not in SKIP)
+    if chars:
+        extra.append("характеристики: " + chars)
     if rc.get("reviews_count"):
         extra.append(f"отзывов с текстом {rc['reviews_count']} (grocery_reviews), звёзды: " + _stars(rc))
     return extra + ["доставка: срок и цена — только в корзине на сайте после выбора адреса"]

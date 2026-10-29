@@ -167,7 +167,7 @@ class ProductTests(unittest.TestCase):
         self.assertEqual(got, {
             "id": "5", "name": "", "brand": "", "size": "", "price": 49.9, "old": None, "available": False,
             "url": "https://5ka.ru/product/5/", "rating": None, "reviews": None, "ean": None, "photos": [], "description": "",
-            "composition": "", "nutrition": {}, "composition_extra": "", "extra": [DEFAULT, "характеристики: ", DELIVERY]})
+            "composition": "", "nutrition": {}, "composition_extra": "", "extra": [DEFAULT, DELIVERY]})
 
     def test_promotion_without_a_regular_price(self):
         got, _ = self.product({"plu": 5, "prices": [{"placement_type": "promotional_primary", "value": "40"}]}, None)
