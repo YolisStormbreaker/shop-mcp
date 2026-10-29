@@ -262,6 +262,7 @@ DEC = "[...document.querySelectorAll('button[automation-id=goods-card-delete-btn
 INC = "[...document.querySelectorAll('button[automation-id=goods-card-add-btn]')].find(b => !b.closest('lu-product-card, lu-sidebar-cart-item'))"
 ADD = "document.querySelector('div.add-to-cart button.lui-button')"
 HEART = "document.querySelector('button.product-page-favorite-btn')"
+UNCHECKED = "{}: Лента не отдала корзину, и не видно, что получилось — проверь grocery_cart, прежде чем повторять"
 CARD_JS = r"""(pid => { try { const s = JSON.parse(document.getElementById('ng-state').textContent);
   const m = Object.entries(s).find(([k]) => new RegExp('/catalog/items/' + pid + '($|[?|])').test(k));
   const c = m && (m[1].b || m[1].body || m[1]); return c ? {name: (c.display || {}).name || c.name, fav: !!(c.features || {}).isFavorite, count: c.count} : null } catch (e) { return null } })"""
@@ -273,11 +274,16 @@ def _goods(cart_lookup):
     return {str(g.get("GoodsItemId")).lstrip("0") or "0": g for g in cl.get("Goods") or []}, cl
 
 
+def _lookup(got):
+    """_goods of the page's cartLookup; None when it did not come, which is not an empty cart."""
+    return None if got.get("c") is None else _goods(got["c"])
+
+
 def _load(tab, pid):
     """Full load of the product page: the cart (cartLookup, sent on every load) and the card from ng-state."""
     got = capture(tab, "lenta", f"{SITE}/product/x-{pid}/", {"c": ["/api/rest/cartLookup"]}, timeout=20)
     time.sleep(1.5)
-    return _goods(got.get("c")), tab.js(f"{CARD_JS}({json.dumps(pid)})")
+    return _lookup(got), tab.js(f"{CARD_JS}({json.dumps(pid)})")
 
 
 def _press(tab, js, what="m", url="/api/rest/cartItemModify"):
@@ -304,7 +310,10 @@ def cart():
         got = capture(tab, "lenta", SITE + "/", {"c": ["/api/rest/cartLookup"]}, timeout=20)
     finally:
         tab.close()
-    goods, cl = _goods(got.get("c"))
+    lookup = _lookup(got)
+    if lookup is None:
+        return BLOCKED
+    goods, cl = lookup
     if not goods:
         return "корзина Ленты пуста"
     rows = [f"{i}\t{g.get('Quantity')}\t{g.get('Price')}\t{g.get('PriceTotal') or ''}\t{g.get('Name') or ''}" for i, g in goods.items()]
@@ -317,36 +326,49 @@ def add_to_cart(id_or_url, quantity=1):
     pid = _id(id_or_url)
     tab = _tab()
     try:
-        (goods, _), card = _load(tab, pid)
+        lookup, card = _load(tab, pid)
         if not card:
             return f"Лента: товар {pid} не открылся"
-        have = _quantity(goods, pid)
+        if lookup is None:
+            return BLOCKED
+        have = _quantity(lookup[0], pid)
         missing = _presses(tab, [INC if have else ADD] + [INC] * (max(1, min(int(quantity), 30)) - 1))
         if missing:
             return f"Лента: кнопки «{'+' if missing == INC else 'В корзину'}» на странице {card['name']} нет (нет в наличии?)"
-        (goods, cl), _ = _load(tab, pid)
+        lookup, _ = _load(tab, pid)
     finally:
         tab.close()
+    return _added(card["name"], lookup, pid, have)
+
+
+def _added(name, lookup, pid, have):
+    if lookup is None:
+        return UNCHECKED.format(name)
+    goods, cl = lookup
     if _quantity(goods, pid) <= have:
-        return f"Лента не положила {card['name']} в корзину"
+        return f"Лента не положила {name} в корзину"
     g = goods[pid]
-    return f"в корзине Ленты: {card['name']} — {g.get('Quantity')} шт × {g.get('Price')} ₽; итого корзины {cl.get('TotalCost')} ₽"
+    return f"в корзине Ленты: {name} — {g.get('Quantity')} шт × {g.get('Price')} ₽; итого корзины {cl.get('TotalCost')} ₽"
 
 
 def remove_from_cart(id_or_url):
     pid = _id(id_or_url)
     tab = _tab()
     try:
-        (goods, _), card = _load(tab, pid)
+        lookup, card = _load(tab, pid)
         name = (card or {}).get("name") or pid
-        n = int(_quantity(goods, pid))
+        if lookup is None:
+            return BLOCKED
+        n = int(_quantity(lookup[0], pid))
         if not n:
             return f"{name} в корзине Ленты нет"
         _presses(tab, [DEC] * min(n, 30))      # «−» takes one unit; at one unit it removes the line
-        (goods, _), _ = _load(tab, pid)
+        lookup, _ = _load(tab, pid)
     finally:
         tab.close()
-    return f"не удалось убрать {name} из корзины Ленты" if pid in goods else f"убрано из корзины Ленты: {name}"
+    if lookup is None:
+        return UNCHECKED.format(name)
+    return f"не удалось убрать {name} из корзины Ленты" if pid in lookup[0] else f"убрано из корзины Ленты: {name}"
 
 
 def _favorite_ids(tab):

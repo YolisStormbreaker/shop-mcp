@@ -239,6 +239,7 @@ class LentaCartLookupTests(unittest.TestCase):
 PAGE = "https://lenta.com/product/x-84812/"
 MODIFY = "/api/rest/cartItemModify"
 BUTTONS = {lenta.ADD: "В корзину", lenta.INC: "+", lenta.DEC: "−", lenta.HEART: "♥"}
+UNCHECKED = "Кефир 2,5%: Лента не отдала корзину, и не видно, что получилось — проверь grocery_cart, прежде чем повторять"
 OTHER = {"GoodsItemId": "052602", "Quantity": 2, "Price": 250, "PriceTotal": 500, "Name": "Хлеб"}
 
 
@@ -313,7 +314,7 @@ class LentaCartTests(unittest.TestCase):
         self.assertEqual(shop.run(lenta.cart), "корзина Ленты пуста")
 
     def test_cart_that_did_not_come(self):
-        self.assertEqual(Shop(lookup=(False,)).run(lenta.cart), "корзина Ленты пуста")
+        self.assertEqual(Shop(lookup=(False,)).run(lenta.cart), lenta.BLOCKED)
 
 
 class LentaAddToCartTests(unittest.TestCase):
@@ -356,8 +357,13 @@ class LentaAddToCartTests(unittest.TestCase):
         self.assertEqual(shop.sent, [PAGE, ("+", MODIFY), PAGE])
 
     def test_cart_that_did_not_come(self):
+        shop = Shop(qty=1, lookup=(False,))
+        self.assertEqual(shop.run(lenta.add_to_cart, "84812"), lenta.BLOCKED)
+        self.assertEqual(shop.sent, [PAGE])
+
+    def test_cart_that_did_not_come_back(self):
         shop = Shop(lookup=(True, False))
-        self.assertEqual(shop.run(lenta.add_to_cart, "84812", 2), "Лента не положила Кефир 2,5% в корзину")
+        self.assertEqual(shop.run(lenta.add_to_cart, "84812", 2), UNCHECKED)
         self.assertEqual(shop.sent, [PAGE, ("В корзину", MODIFY), ("+", MODIFY), PAGE])
 
 
@@ -396,12 +402,12 @@ class LentaRemoveFromCartTests(unittest.TestCase):
 
     def test_cart_that_did_not_come(self):
         shop = Shop(qty=1, lookup=(False,))
-        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), "Кефир 2,5% в корзине Ленты нет")
+        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), lenta.BLOCKED)
         self.assertEqual(shop.sent, [PAGE])
 
     def test_cart_that_did_not_come_back(self):
         shop = Shop(qty=1, lookup=(True, False))
-        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), "убрано из корзины Ленты: Кефир 2,5%")
+        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), UNCHECKED)
         self.assertEqual(shop.sent, [PAGE, ("−", MODIFY), PAGE])
 
 
