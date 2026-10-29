@@ -142,22 +142,20 @@ def _search_row(n, x):
             f"{x['shop']}\t{x['reviews']}\t{x['delivery']}\t{marks}\t{x['url']}")
 
 
+def _absolute(url):
+    return "https://market.yandex.ru" + url if url.startswith("/") else url
+
+
 def item(url, full=False):
-    if url.startswith("/"):
-        url = "https://market.yandex.ru" + url
+    url = _absolute(url)
     if "market.yandex.ru" not in url:
         return "нужна ссылка на товар Яндекс Маркета (https://market.yandex.ru/card/...)"
-    tab = tab_for("market.yandex.ru")
-    try:
-        tab.goto(url, "ym", wait_js=f"{_new_page(tab)} && (!!document.querySelector('h1') || {CAPTCHA_JS})")
-        if _captcha(tab, f"item {url}"):
-            return BLOCKED
-        r = tab.js(ITEM_JS)
-    finally:
-        tab.close()
-    lines = [f"{r['title']} — {r['price'] or 'нет цены'}" + (" с Яндекс Пэй" if r["pay"] else "")
-             + (f" (до скидок {r['old']})" if r["old"] else ""),
-             url.split("?")[0]]
+    r = _read(url, "item", "!!document.querySelector('h1')", lambda tab: tab.js(ITEM_JS))
+    return BLOCKED if r is None else _card(r, url, full)
+
+
+def _card(r, url, full):
+    lines = [_price_line(r), url.split("?")[0]]
     if r["cross"]:
         lines.append("⚠️ из-за рубежа")
     lines += [f"{k}: {v}" for k, v in (("sku", r["sku"]), ("бренд", r["vendor"]), ("рейтинг", r["rating"]),
@@ -171,6 +169,11 @@ def item(url, full=False):
         lines.append("характеристики: " + "; ".join(r["specs"]))
     lines.append("\n" + (r["description"] if full else r["description"][:2500]))
     return "\n".join(lines)
+
+
+def _price_line(r):
+    return (f"{r['title']} — {r['price'] or 'нет цены'}" + (" с Яндекс Пэй" if r["pay"] else "")
+            + (f" (до скидок {r['old']})" if r["old"] else ""))
 
 
 # The reviews page ignores sort and page parameters in the URL. Sorting is a chip with options
