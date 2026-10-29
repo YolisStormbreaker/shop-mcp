@@ -39,10 +39,15 @@ def size_of(text):
     return n * v, unit
 
 
+def _size(p):
+    """The size in the product's name, else its size field: the name says «930 мл» where a site's own
+    weight field says 958 г (Перекрёсток), and per litre is what people compare."""
+    return size_of(p.get("name") or "") or size_of(p.get("size") or "")
+
+
 def unit_price(p):
-    """«123 ₽/кг» from the product's price and the size in its name, else its size field: the name says
-    «930 мл» where a site's own weight field says 958 г (Перекрёсток), and per litre is what people compare."""
-    s = size_of(p.get("name") or "") or size_of(p.get("size") or "")
+    """«123 ₽/кг» from the product's price and its size (see _size)."""
+    s = _size(p)
     if not s or not p.get("price") or not s[0]:
         return ""
     return f"{p['price'] / s[0]:.0f} ₽/{s[1]}"
@@ -122,12 +127,21 @@ def _same(a, b):
     ponytail: a word-overlap rule, not a matcher; it misses renamed lines and may join near-twins."""
     if a.get("ean") and b.get("ean"):
         return a["ean"] == b["ean"]
-    sa = size_of(a.get("name") or "") or size_of(a.get("size") or "")
-    sb = size_of(b.get("name") or "") or size_of(b.get("size") or "")
-    if not sa or not sb or sa[1] != sb[1] or abs(sa[0] - sb[0]) > 0.02 * max(sa[0], sb[0]) or _percents(a.get("name")) != _percents(b.get("name")):
-        return False
-    if a.get("brand") and b.get("brand") and a["brand"].lower() != b["brand"].lower():
-        return False
+    return _same_size(a, b) and _percents(a.get("name")) == _percents(b.get("name")) and _same_brand(a, b) and _same_words(a, b)
+
+
+def _same_size(a, b):
+    """Both sizes known, in one unit, within 2% of each other."""
+    sa, sb = _size(a), _size(b)
+    return bool(sa and sb) and sa[1] == sb[1] and abs(sa[0] - sb[0]) <= 0.02 * max(sa[0], sb[0])
+
+
+def _same_brand(a, b):
+    """Brands match, or a site does not say."""
+    return not (a.get("brand") and b.get("brand")) or a["brand"].lower() == b["brand"].lower()
+
+
+def _same_words(a, b):
     wa, wb = _words(a.get("name")), _words(b.get("name"))
     return bool(wa and wb) and len(wa & wb) / len(wa | wb) >= 0.75
 
