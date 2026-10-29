@@ -134,7 +134,7 @@ PRODUCTS = [
     {"id": "p1", "slug": "moloko-bez-laktozy-1-l", "name": "Молоко без лактозы 1 л", "price": 14500, "oldPrice": 16900, "isAvailable": True},
     {"id": "p2", "name": "Коктейль молочный", "price": 9900},
     "not a product",
-    {"id": "p6", "name": "Сыр, 45% молока", "price": 30050, "quantity": 2},
+    {"id": "p6", "name": "Сыр, 45% молока", "price": 30050, "quantity": 1},
     {"id": "p7", "price": 100}]
 
 
