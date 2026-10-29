@@ -341,7 +341,7 @@ def _cart_text(page):
     foot = total.get("footer", {})
     head = total.get("header", {}).get("info", "")
     total_text = foot.get("price") or "не посчитан: ни один товар не отмечен к оформлению"
-    return (f"корзина Ozon: {head}, итого {total_text}\nsku\tшт\tцена\tназвание\tгруппа\n" + "\n".join(rows))
+    return (f"корзина Ozon{': ' + head if head else ''}, итого {total_text}\nsku\tшт\tцена\tназвание\tгруппа\n" + "\n".join(rows))
 
 
 def cart():

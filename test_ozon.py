@@ -384,12 +384,12 @@ class CartTests(unittest.TestCase):
 
     def test_nothing_selected_has_no_total(self):
         out, *_ = self.call(ozon.cart, answer=page({"cartSplit-1": {"cartItems": []}, "total-2": {"summary": {"footer": {}}}}))
-        self.assertEqual(out, "корзина Ozon: , итого не посчитан: ни один товар не отмечен к оформлению\n"
+        self.assertEqual(out, "корзина Ozon, итого не посчитан: ни один товар не отмечен к оформлению\n"
                               "sku\tшт\tцена\tназвание\tгруппа\n")
 
     def test_no_total_widget(self):
         out, *_ = self.call(ozon.cart, answer=page({"cartSplit-1": {"cartItems": [cart_line([LONG], ["1 ₽"], 3)]}}))
-        self.assertEqual(out.splitlines(), ["корзина Ozon: , итого не посчитан: ни один товар не отмечен к оформлению",
+        self.assertEqual(out.splitlines(), ["корзина Ozon, итого не посчитан: ни один товар не отмечен к оформлению",
                                             "sku\tшт\tцена\tназвание\tгруппа", f"\t3\t1 ₽\t{LONG[:110]}\t"])
 
     def test_empty_cart(self):
