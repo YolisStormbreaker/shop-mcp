@@ -35,7 +35,8 @@ ITEM_JS = r"""
   const q = (sel, root = document) => t(root?.querySelector(sel)?.innerText);
   const main = document.querySelector('[data-auto="main"]');
   let zone = {};
-  try { zone = JSON.parse(document.querySelector('[data-zone-name="cartButton"][data-zone-data]')?.getAttribute('data-zone-data') || '{}'); } catch (e) {}
+  // the offer's sku and cross-border flag: the cart button's zone no longer has them (2026-10)
+  try { zone = JSON.parse(main?.querySelector('[data-zone-name="productSnippet"][data-zone-data]')?.getAttribute('data-zone-data') || '{}'); } catch (e) {}
   return {
     title: q('h1'), vendor: q('[data-auto="product-card-vendor"]'), rating: q('[data-auto="product-rating"]'),
     price: q('[data-auto="snippet-price-current"]', main), old: q('[data-auto="snippet-price-old"]', main),
