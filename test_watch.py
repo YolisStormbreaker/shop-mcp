@@ -132,6 +132,12 @@ class MainTests(unittest.TestCase):
         self.assertEqual(got, [line(1, 3400, 3000, 400, "Orange Pi Zero 3", "память не указана")])
         self.assertEqual(self.remembered(), [1])
 
+    def test_a_failed_delivery_lookup_is_asked_again_next_run(self):
+        # not marked seen: a listing whose lookup failed once would otherwise never be reported
+        listings = [listed(1, "Orange Pi Zero 3"), listed(2, "Orange Pi Zero 3"), listed(3, "Orange Pi Zero 3")]
+        got, _, _ = self.main([page(listings), page([]), [{"error": "timeout"}, None, NO_LINE]])
+        self.assertEqual((got, self.remembered()), ([], [3]))   # 3 answered: it has no delivery line
+
     def test_nothing_new(self):
         self.remember(1)
         got, tab, _ = self.main([page([listed(1, "Orange Pi Zero 3")]), page([listed(1, "Orange Pi Zero 3")])])

@@ -74,6 +74,8 @@ def main():
             break
         if (s or {}).get("reserved"):
             continue  # not marked seen: may come back if the deal falls through
+        if not s or s.get("error"):
+            continue  # the lookup failed: not marked seen, asked again next run
         seen.add(x["id"])
         _, cheapest = avito._ship_cell(s)
         price = int(x["price"]) if str(x["price"]).isdigit() else None
