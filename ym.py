@@ -65,14 +65,24 @@ def _captcha(tab, what):
     return False
 
 
-def _read(url, what, ready, read):
-    """read(tab) once the Market tab shows url (ready: JS condition of a loaded page); None behind a captcha."""
+def _in_tab(work):
+    """work(tab) in the Market tab, held for this call only."""
     tab = tab_for("market.yandex.ru")
     try:
-        tab.goto(url, "ym", wait_js=f"{_new_page(tab)} && ({ready} || {CAPTCHA_JS})")
-        return None if _captcha(tab, f"{what} {url}") else read(tab)
+        return work(tab)
     finally:
         tab.close()
+
+
+def _load(tab, url, what, ready, read):
+    """read(tab) once the tab shows url (ready: JS condition of a loaded page); None behind a captcha."""
+    tab.goto(url, "ym", wait_js=f"{_new_page(tab)} && ({ready} || {CAPTCHA_JS})")
+    return None if _captcha(tab, f"{what} {url}") else read(tab)
+
+
+def _read(url, what, ready, read):
+    """_load in the Market tab, held for this call only."""
+    return _in_tab(lambda tab: _load(tab, url, what, ready, read))
 
 
 def search(query, price_min=None, price_max=None, sort="default", page=1, limit=30):
@@ -318,8 +328,9 @@ NOT_ON_SCREEN = ("вкладка Яндекс Маркета не на экра�
 
 
 def _open_cart(tab):
-    tab.goto(CART_URL, "ym", wait_js=f"{_new_page(tab)} && (!!document.querySelector('input[type=checkbox]') || /пуст/i.test(document.body.innerText) || {CAPTCHA_JS})")
-    return None if _captcha(tab, "cart") else tab.js(ROWS_JS)
+    """The cart's rows, None behind a captcha."""
+    return _load(tab, CART_URL, "cart", "!!document.querySelector('input[type=checkbox]') || /пуст/i.test(document.body.innerText)",
+                 lambda t: t.js(ROWS_JS))
 
 
 def _cart_text(rows):
@@ -330,11 +341,7 @@ def _cart_text(rows):
 
 
 def cart():
-    tab = tab_for("market.yandex.ru")
-    try:
-        rows = _open_cart(tab)
-    finally:
-        tab.close()
+    rows = _in_tab(_open_cart)
     return BLOCKED if rows is None else _cart_text(rows)
 
 
