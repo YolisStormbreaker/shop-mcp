@@ -148,7 +148,7 @@ def item(url, full=False):
 def _item(p):
     """The card page's texts -> the fields of the card."""
     z = p["zone"]
-    return {**p, "rating": re.sub(r"\s*·$", "", p["rating"]), "description": p["description"].removesuffix("Всё описание"),
+    return {**p, "rating": re.sub(r"\s*·$", "", p["rating"]), "description": p["description"].removesuffix("Всё описание").rstrip(),
             "delivery": [_delivery(v) for v in p["delivery"]], "specs": _specs(p["specs"]), "photos": _gallery(p["photos"]),
             "sku": z.get("marketSku") or "", "cross": z.get("isCrossBorder") == "true"}
 
@@ -188,7 +188,8 @@ def _card(r, url, full):
     lines.append("отзывы: ym_reviews")
     if r["specs"]:
         lines.append("характеристики: " + "; ".join(r["specs"]))
-    lines.append("\n" + (r["description"] if full else r["description"][:2500]))
+    if r["description"]:
+        lines.append("\n" + (r["description"] if full else r["description"][:2500]))
     return "\n".join(lines)
 
 

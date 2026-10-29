@@ -118,7 +118,7 @@ class YmItemTests(unittest.TestCase):
         tab.close.assert_called_once()
 
     def test_full_description(self):
-        self.assertTrue(call(ym.item, FULL_ITEM, CARD, full=True)[0].endswith("\n\n" + DESCRIPTION))
+        self.assertTrue(call(ym.item, FULL_ITEM, CARD, full=True)[0].endswith("\n\n" + DESCRIPTION.rstrip()))  # no space left by «Всё описание»
 
     def test_delivery_without_a_price_keeps_its_first_line(self):
         got = call(ym.item, {**BARE_ITEM, "delivery": ["Самовывоз\nиз магазина"]}, CARD)[0]
@@ -126,7 +126,7 @@ class YmItemTests(unittest.TestCase):
 
     def test_bare_card_by_relative_link(self):
         got, tab, _, _ = call(ym.item, BARE_ITEM, "/card/kabel-b/102")
-        self.assertEqual(got, "Кабель B — нет цены\nhttps://market.yandex.ru/card/kabel-b/102\nмагазин: 4.8 оценок\nотзывы: ym_reviews\n\n")
+        self.assertEqual(got, "Кабель B — нет цены\nhttps://market.yandex.ru/card/kabel-b/102\nмагазин: 4.8 оценок\nотзывы: ym_reviews")
         self.assertEqual(tab.goto.call_args.args[0], "https://market.yandex.ru/card/kabel-b/102")
 
     def test_not_a_market_link(self):
