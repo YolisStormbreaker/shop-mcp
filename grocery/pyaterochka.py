@@ -293,14 +293,18 @@ def _qty(tab, plu):
     return next((i["qty"] for i in tab.js(CART_JS)["items"] if i["plu"] == str(plu)), 0)
 
 
-def _press(tab, qa, plu=None):
-    """Click the product's own button; with plu, wait until the site's cart shows a new quantity."""
-    before = _qty(tab, plu) if plu else None
+ADD, PLUS, MINUS, BIN = ("product-detail-add-to-cart-button", "cart-button-increment-button", "cart-button-decrement-button",
+                         "cart-button-remove-button")
+
+
+def _press(tab, qa, plu):
+    """Click the product's own button and wait (up to 6 s) until the site's cart shows a new quantity."""
+    before = _qty(tab, plu)
     if not tab.js(f"(() => {{ const b = {MAIN % qa}; if (!b) return false; b.click(); return true }})()"):
         return False
     for _ in range(12):
         time.sleep(0.5)
-        if plu is None or _qty(tab, plu) != before:
+        if _qty(tab, plu) != before:
             break
     return True
 
@@ -319,17 +323,29 @@ def _settled(tab, plu):
     return _qty(tab, plu)
 
 
+def _add_buttons(start, quantity):
+    """The presses that add quantity (1..30): the add button when it is not in the cart yet, «+» for the rest."""
+    return ([PLUS] if start else [ADD]) + [PLUS] * (max(1, min(int(quantity), 30)) - 1)
+
+
+def _asks_address(tab, plu, buttons):
+    """Press the buttons in turn while they are there; True when the site asks for a delivery address instead."""
+    for qa in buttons:
+        if not _press(tab, qa, plu):
+            return False
+        if tab.js("!!document.querySelector('[data-qa=\"delivery-modal\"]')"):
+            return True
+    return False
+
+
 def add_to_cart(id_or_url, quantity=1):
     plu = _plu(id_or_url)
     tab = _tab()
     try:
         name = _open(tab, plu)
         start = _qty(tab, plu)
-        for i in range(max(1, min(int(quantity), 30))):
-            if not _press(tab, "product-detail-add-to-cart-button" if i == 0 and not start else "cart-button-increment-button", plu):
-                break
-            if tab.js("!!document.querySelector('[data-qa=\"delivery-modal\"]')"):
-                return "Пятёрочка просит адрес доставки: выберите его на 5ka.ru (shop-chrome show), потом повторите"
+        if _asks_address(tab, plu, _add_buttons(start, quantity)):
+            return "Пятёрочка просит адрес доставки: выберите его на 5ka.ru (shop-chrome show), потом повторите"
         n, cart = _settled(tab, plu), tab.js(CART_JS)
     finally:
         tab.close()
@@ -338,16 +354,20 @@ def add_to_cart(id_or_url, quantity=1):
     return f"в корзине Пятёрочки: {name} — {n:g} шт; корзина {cart.get('total')} ₽"
 
 
+def _take_out(tab, plu):
+    """Up to 30 presses until the site's cart has none: «−» above one unit, the bin (remove) button at the last one."""
+    for _ in range(30):
+        if not _qty(tab, plu) or not (_press(tab, MINUS, plu) or _press(tab, BIN, plu)):
+            break
+
+
 def remove_from_cart(id_or_url):
     plu = _plu(id_or_url)
     tab = _tab()
     try:
         name = _open(tab, plu)
         for _ in range(2):                     # a second round if the server kept some
-            for _ in range(30):
-                # «−» is the decrement button above one unit and a remove (bin) button at the last one
-                if not _qty(tab, plu) or not (_press(tab, "cart-button-decrement-button", plu) or _press(tab, "cart-button-remove-button", plu)):
-                    break
+            _take_out(tab, plu)
             left = _settled(tab, plu)
             if not left:
                 break
@@ -364,6 +384,10 @@ def cart():
         c = tab.js(CART_JS)
     finally:
         tab.close()
+    return _cart_text(c)
+
+
+def _cart_text(c):
     if not c["items"]:
         return "корзина Пятёрочки пуста"
     return (f"корзина Пятёрочки: итого {c.get('total')} ₽\nplu\tкол-во\tцена ₽\tсумма ₽\tназвание\n"
