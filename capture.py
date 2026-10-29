@@ -25,67 +25,93 @@ def capture(tab, site, url, patterns, timeout=20, rewrite=None, js=None):
     js: run this in the page instead of navigating to url — e.g. the site's own router, so a single-page
     app fetches the next screen's data without a full page load (Samokat's bot check counts page loads).
     """
+    _wait_turn(site)
+    ws = tab.ws
+    _send(ws, "Network.enable")
+    if rewrite:
+        tab.call("Fetch.enable", patterns=[{"urlPattern": rewrite[0], "requestStage": "Request"}])  # before navigate
+    if js:
+        _send(ws, "Runtime.evaluate", expression=js)
+    else:
+        _send(ws, "Page.navigate", url=url)
+    pending, out, deadline = {}, {}, time.time() + timeout
+    try:
+        while time.time() < deadline and len(out) < len(patterns):
+            _on(ws, _recv(ws), patterns, rewrite, pending, out)
+        return out
+    finally:
+        if rewrite:
+            _send(ws, "Fetch.disable")
+        _send(ws, "Network.disable")
+
+
+def _wait_turn(site):
     gap = cdp.MIN_GAP - (time.time() - cdp._last_nav.get(site, 0))
     if gap > 0:
         time.sleep(gap)
     cdp._last_nav[site] = time.time()
-    ws = tab.ws
 
-    def send(method, **params):
-        i = next(cdp._ids)
-        ws.send(json.dumps({"id": i, "method": method, "params": params}))
-        return i
 
-    def resume(p):
-        """Every paused request must be continued, or the page hangs."""
-        if not rewrite:  # paused by an earlier call just before its Fetch.disable took effect
-            send("Fetch.continueRequest", requestId=p["requestId"])
-            return
-        old = p["request"]["url"]
-        new, body = rewrite[1](old), None
-        if isinstance(new, tuple):
-            new, body = new
-        change = {"url": new} if new != old else {}
-        if body is not None:
-            change["postData"] = base64.b64encode(body.encode()).decode()
-        send("Fetch.continueRequest", requestId=p["requestId"], **change)
+def _send(ws, method, **params):
+    i = next(cdp._ids)
+    ws.send(json.dumps({"id": i, "method": method, "params": params}))
+    return i
 
-    send("Network.enable")
-    if rewrite:
-        tab.call("Fetch.enable", patterns=[{"urlPattern": rewrite[0], "requestStage": "Request"}])  # before navigate
-    if js:
-        send("Runtime.evaluate", expression=js)
-    else:
-        send("Page.navigate", url=url)
-    pending, out, deadline = {}, {}, time.time() + timeout
+
+def _recv(ws):
     try:
-        while time.time() < deadline and len(out) < len(patterns):
-            try:
-                m = json.loads(ws.recv(timeout=0.5))
-            except TimeoutError:
-                continue
-            p = m.get("params", {})
-            if m.get("method") == "Fetch.requestPaused":
-                resume(p)
-            elif m.get("method") == "Network.responseReceived":
-                for name, parts in patterns.items():
-                    if name not in out and name not in pending.values() and all(
-                            re.search(s[3:], p["response"]["url"]) if s.startswith("re:") else s in p["response"]["url"] for s in parts):
-                        pending[p["requestId"]] = name
-            elif m.get("method") == "Network.loadingFinished" and p.get("requestId") in pending:
-                i = send("Network.getResponseBody", requestId=p["requestId"])
-                while True:
-                    r = json.loads(ws.recv(timeout=10))
-                    if r.get("method") == "Fetch.requestPaused":
-                        resume(r["params"])
-                    elif r.get("id") == i:
-                        try:
-                            out[pending[p["requestId"]]] = json.loads(r["result"]["body"])
-                        except (KeyError, ValueError):
-                            pass
-                        break
-        return out
-    finally:
-        if rewrite:
-            send("Fetch.disable")
-        send("Network.disable")
+        return json.loads(ws.recv(timeout=0.5))
+    except TimeoutError:
+        return {}
+
+
+def _on(ws, m, patterns, rewrite, pending, out):
+    """One message from the browser: a paused request goes on, a matching response is claimed (pending:
+    requestId → name), a claimed one that finished loading has its body read into out."""
+    p = m.get("params", {})
+    if m.get("method") == "Fetch.requestPaused":
+        _send(ws, "Fetch.continueRequest", **_continue(p, rewrite))
+    elif m.get("method") == "Network.responseReceived":
+        if name := _claim(p["response"]["url"], patterns, set(out) | set(pending.values())):
+            pending[p["requestId"]] = name
+    elif m.get("method") == "Network.loadingFinished" and p.get("requestId") in pending:
+        r = _body(ws, p["requestId"], rewrite)
+        try:
+            out[pending[p["requestId"]]] = json.loads(r["result"]["body"])
+        except (KeyError, ValueError):
+            pass
+
+
+def _body(ws, request_id, rewrite):
+    """The browser's answer to Network.getResponseBody; requests paused meanwhile go on."""
+    i = _send(ws, "Network.getResponseBody", requestId=request_id)
+    while True:
+        r = json.loads(ws.recv(timeout=10))
+        if r.get("method") == "Fetch.requestPaused":
+            _send(ws, "Fetch.continueRequest", **_continue(r["params"], rewrite))
+        elif r.get("id") == i:
+            return r
+
+
+def _matches(url, parts):
+    return all(re.search(s[3:], url) if s.startswith("re:") else s in url for s in parts)
+
+
+def _claim(url, patterns, taken):
+    """The name a response at url is read for: of the names not taken whose parts it all contains, the last."""
+    return next((name for name in reversed(patterns) if name not in taken and _matches(url, patterns[name])), None)
+
+
+def _continue(p, rewrite):
+    """Fetch.continueRequest parameters for a paused request. Every paused request must be continued,
+    or the page hangs."""
+    if not rewrite:  # paused by an earlier call just before its Fetch.disable took effect
+        return {"requestId": p["requestId"]}
+    old = p["request"]["url"]
+    new, body = rewrite[1](old), None
+    if isinstance(new, tuple):
+        new, body = new
+    change = {"url": new} if new != old else {}
+    if body is not None:
+        change["postData"] = base64.b64encode(body.encode()).decode()
+    return {"requestId": p["requestId"], **change}
