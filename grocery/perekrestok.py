@@ -333,11 +333,14 @@ def cart():
     items = d.get("items") or []
     if not items:
         return "корзина Перекрёстка пуста"
-    rows = [f"{(i.get('product') or {}).get('masterData', {}).get('plu', '')}\t{i.get('quantity', '')}\t{_rub(i.get('price'))}\t{_rub(i.get('cost'))}\t"
-            f"{(i.get('product') or {}).get('title', '')}\t{'' if (i.get('product') or {}).get('balanceState') != 'sold-out' else 'нет в наличии'}"
-            for i in items]
     return ("корзина Перекрёстка" + (f", итого {_rub(d['totalCost'])} ₽" if d.get("totalCost") else "")
-            + "\nplu\tшт\tцена ₽\tсумма ₽\tназвание\tналичие\n" + "\n".join(rows))
+            + "\nplu\tшт\tцена ₽\tсумма ₽\tназвание\tналичие\n" + "\n".join(_cart_row(i) for i in items))
+
+
+def _cart_row(i):
+    p = i.get("product") or {}
+    return (f"{p.get('masterData', {}).get('plu', '')}\t{i.get('quantity', '')}\t{_rub(i.get('price'))}\t{_rub(i.get('cost'))}\t"
+            f"{p.get('title', '')}\t{'' if p.get('balanceState') != 'sold-out' else 'нет в наличии'}")
 
 
 def _product_id(tab, plu):
