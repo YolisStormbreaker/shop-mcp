@@ -142,5 +142,101 @@ class SearchTests(unittest.TestCase):
             ozon.search("usb", sort="cheap")
 
 
+SKU = 1002731400
+GALLERY = [f"https://ir.ozone.ru/s3/multimedia-1-a/{n}.jpg" for n in range(1, 12)]
+CARD = page({
+    "webProductHeading-1": {"title": "Кабель Тест USB-C, 1 м"},
+    "webPrice-2": {"cardPrice": "149 ₽", "price": "165 ₽", "originalPrice": "340 ₽", "pricePerUnit": "149 ₽",
+                   "measurePerUnit": "за 1 шт", "isAvailable": False},
+    "webSale-3": {"offer": {"isAvailable": True}},
+    "webReviewProductScore-4": {"totalScore": 4.9, "reviewsCount": 336097},
+    "webCurrentSeller-5": {"sellerCell": {"centerBlock": {"title": {"text": "Тест-Шоп"}},
+                                          "rightBlock": {"action": {"params": {"sellerId": "123456"}}}}},
+    "paginator-6": {"nextPage": f"/product/{SKU}/?layout_container=pdpPage2column&layout_page_index=2&sh=k1"},
+    "webPriceDecreasedCompact-7": {"title": "Стало дешевле"},
+    "webGallery-8": {"images": [{"src": u} for u in GALLERY] + [{"alt": "без картинки"}]}})
+CARD2 = page({
+    "webDescription-1": {
+        "richAnnotation": "<p>Кабель &quot;Тест&quot; для зарядки.</p><br/><ul><li>Длина 1&nbsp;м</li><li>Ток 3 А &amp; быстро</li></ul>",
+        "richAnnotationJson": {"content": [{"img": {"src": "https://ir.ozone.ru/s3/rich-1/9.jpg"}},
+                                           {"img": {"src": GALLERY[0]}},                       # already among the photos
+                                           {"img": {"src": "https://cdn1.ozone.ru/s3/rich-2/10.png"}},
+                                           {"img": {"src": "https://cdn1.ozone.ru/s3/rich-2/10.png"}}]},
+        "characteristics": [{"title": "Комплектация", "content": "кабель\nинструкция\n"}, {"title": "Пусто", "content": ""}]},
+    "webCharacteristics-2": {"characteristics": [
+        {"title": "Общие", "short": [{"key": "Type", "name": "Тип", "values": [{"text": "Кабель"}]},
+                                     {"key": "Sku", "name": "Артикул", "values": [{"text": str(SKU)}]}],
+         "long": [{"key": "Color", "name": "Цвет", "values": [{"text": "Черный"}, {"text": "Белый"}]}]}]}})
+DATES = {"buttons": [{"text": "В корзину"}, {"text": "Доставим послезавтра"}]}
+SELLER = page({"cellList-1": {"title": "О магазине"},
+               "textBlock-2": {"body": [{"text": "ООО «Тест»<br>ОГРН 1234567890123<br>Работает с Ozon с 2020"}]},
+               "textBlock-3": {"body": [{"text": "другое<br>юрлицо"}]}})
+LOWER = page({"webPriceDecreasedFullView-1": {"lines": [
+    {"textRs": [{"type": "text", "content": "Цена сейчас"}, {"type": "icon", "content": "arrow"}, {"type": "text", "content": "165 ₽"}],
+     "iconText": "12%"},
+    {"textRs": [{"type": "text", "content": "Средняя за месяц"}, {"type": "text", "content": "188 ₽"}]}]}})
+
+
+class ItemTests(unittest.TestCase):
+    def item(self, pages, dates=None, sku_or_url=SKU, **kw):
+        tab = MagicMock()
+        with patch.object(ozon, "_tab", return_value=tab), patch.object(ozon, "_page", side_effect=lambda t, url: pages[url]), \
+                patch.object(ozon, "_fetch", return_value=dates or {}) as fetch:
+            out = ozon.item(sku_or_url, **kw)
+        tab.close.assert_called_once()
+        self.assertEqual(fetch.call_args.args[1:], (f"/api/composer-api.bx/_action/pdpGetButtonTexts?product_id={ozon._sku(sku_or_url)}",
+                                                    "POST", {"pageType": "pdp"}))
+        return out
+
+    def test_full_card(self):
+        out = self.item({f"/product/{SKU}/": CARD, f"/product/{SKU}/?layout_container=pdpPage2column&layout_page_index=2&sh=k1": CARD2,
+                         "/modal/shop-in-shop-info?seller_id=123456": SELLER,
+                         f"/modal/web_pdp_lower_price?product_id={SKU}": LOWER}, DATES)
+        self.assertEqual(out, "\n".join([
+            "Кабель Тест USB-C, 1 м", f"https://www.ozon.ru/product/{SKU}/",
+            "цена: 149 ₽ с картой Ozon, 165 ₽ без неё, без скидки 340 ₽ (−51%), 149 ₽ за 1 шт",
+            "в наличии: да",
+            "привезут: Доставим послезавтра",
+            "рейтинг: 4.9, отзывов 336097",
+            "продавец: Тест-Шоп · ООО «Тест» · ОГРН 1234567890123 · Работает с Ozon с 2020",
+            "стало дешевле: Цена сейчас 165 ₽ (−12%); Средняя за месяц 188 ₽ — "
+            "Ozon сравнивает цену без банков-партнёров со средней за прошлый месяц",
+            "фото (shop_images): " + " ".join(GALLERY[:10]),
+            "картинки из описания (shop_images; на них часто комплектация и размеры): "
+            "https://ir.ozone.ru/s3/rich-1/9.jpg https://cdn1.ozone.ru/s3/rich-2/10.png",
+            "отзывы с фото и видео: ozon_reviews",
+            "характеристики:\n  Тип: Кабель\n  Цвет: Черный, Белый",
+            'описание:\nКабель "Тест" для зарядки.\nДлина 1 м\nТок 3 А & быстро',
+            "Комплектация:\n  кабель\n  инструкция"]))
+
+    def test_bare_card(self):
+        out = self.item({"/product/42424242/": page(),
+                         "/product/42424242/?layout_container=pdpPage2column&layout_page_index=2": page()}, sku_or_url="42424242")
+        self.assertEqual(out, "?\nhttps://www.ozon.ru/product/42424242/\n"
+                              "цена: ? с картой Ozon, ? без неё\nв наличии: ⛔ нет\nпривезут: ?\nрейтинг: ?, отзывов ?\n"
+                              "продавец: ? (юрлицо не нашёл)\nотзывы с фото и видео: ozon_reviews\nхарактеристики:\n  (нет)")
+
+    def test_foreign_seller_from_a_product_url(self):
+        card = page({"webPrice-1": {"price": "500 ₽", "originalPrice": "400 ₽", "isAvailable": True},
+                     "webCurrentSeller-2": {"sellerCell": {"centerBlock": {"title": {"text": "Test Store"}}}, "sellerId": "777"}})
+        seller = page({"textBlock-1": {"text": "Shenzhen Test Technology Co., Ltd.<br>Китай, Шэньчжэнь"}})
+        out = self.item({"/product/123456789/": card, "/product/123456789/?layout_container=pdpPage2column&layout_page_index=2": page(),
+                         "/modal/shop-in-shop-info?seller_id=777": seller},
+                        sku_or_url="https://www.ozon.ru/product/kabel-test-123456789/?at=abc").splitlines()
+        self.assertEqual(out[2:4], ["цена: 500 ₽ с картой Ozon, 500 ₽ без неё", "в наличии: да"])
+        self.assertEqual(out[6], "продавец: Test Store · Shenzhen Test Technology Co., Ltd. · Китай, Шэньчжэнь · ⚠️ из-за рубежа")
+
+    def test_description_is_cut_unless_full(self):
+        pages = {"/product/42424242/": page(),
+                 "/product/42424242/?layout_container=pdpPage2column&layout_page_index=2":
+                     page({"webDescription-1": {"richAnnotation": "а" * 2600 + "КОНЕЦ"}})}
+        self.assertEqual(self.item(pages, sku_or_url="42424242").split("описание:\n")[1], "а" * 2500)
+        self.assertEqual(self.item(pages, sku_or_url="42424242", full=True).split("описание:\n")[1], "а" * 2600 + "КОНЕЦ")
+
+    def test_no_sku_in_the_link(self):
+        with self.assertRaisesRegex(ValueError, "не нашёл sku"):
+            ozon.item("https://www.ozon.ru/category/kabeli/")
+
+
 if __name__ == "__main__":
     unittest.main()
