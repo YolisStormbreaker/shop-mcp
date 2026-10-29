@@ -276,8 +276,12 @@ def add_to_cart(id_or_url, quantity=1):
         tab.close()
     if d is None:
         return BLOCKED
-    ok = any(str(i.get("productSku")) == sku for i in _items(d))
+    ok = _in_cart(d, sku)
     return f"{'добавлено' if ok else '⚠️ Золотое яблоко не подтвердило добавление'}: артикул {sku}\n" + _cart_text(d)
+
+
+def _in_cart(d, sku):
+    return any(str(i.get("productSku")) == sku for i in _items(d))
 
 
 def remove_from_cart(id_or_url):
