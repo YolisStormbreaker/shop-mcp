@@ -30,8 +30,10 @@ FIND_API = """(() => {
   }
   return false
 })()"""
-SORT = {"popular": ("relevance", "desc"), "price": ("price", "asc"), "price_desc": ("price", "desc"),
-        "discount": ("discount", "desc"), "rating": ("rating", "desc")}
+SORT = {"popular": {}, "price": {"orderBy": "price", "orderDirection": "asc"}, "price_desc": {"orderBy": "price", "orderDirection": "desc"},
+        "discount": {"orderBy": "discount", "orderDirection": "desc"}, "rating": {"orderBy": "rating", "orderDirection": "desc"}}
+FORM = {"disableBubbleUp": True, "sortByAlpha": True}     # the search form's own options
+DIET = "osobennosti"                                      # the facet of «Без лактозы», «Без сахара»…
 
 
 def _tab():
@@ -125,7 +127,7 @@ def _listed(p):
 
 def _facets(tab, query):
     """{title: (feature key, value)} of the search's own filters: «Без лактозы» → ("osobennosti", "bez-laktozy")…"""
-    form = _cached(tab, "post", "/catalog/search/form", {"filter": {"textQuery": query}, "disableBubbleUp": True, "sortByAlpha": True}) or {}
+    form = _cached(tab, "post", "/catalog/search/form", {"filter": {"textQuery": query}, **FORM}) or {}
     out = {}
     for f in form.get("searchFeatures") or []:
         if f.get("key") in ("brand",):
@@ -139,33 +141,35 @@ def search(query, tag=None, sort="popular", page=1, limit=30):
     tab = _tab()
     try:
         facets, total = _facets(tab, query)
-        flt, note = {"textQuery": query}, ""
-        if tag:
-            hit = next((v for t, v in facets.items() if tag.lower() in t.lower()), None)
-            if hit:
-                flt["features"] = [{"key": hit[0], "value": hit[1]}]
-            else:
-                note = f"фильтра «{tag}» у Перекрёстка для этого запроса нет — искал «{query} {tag}» текстом"
-                flt["textQuery"] = f"{query} {tag}"
-        order, direction = SORT[sort]
-        body = {"page": page, "perPage": min(max(limit, 12), 48), "filter": flt, "withBestProductReviews": False}
-        if sort != "popular":
-            body.update(orderBy=order, orderDirection=direction)
-        d = _call(tab, "post", "/catalog/product/feed", body)
-        if tag and flt.get("features"):
-            total = (_call(tab, "post", "/catalog/search/form", {"filter": flt, "disableBubbleUp": True, "sortByAlpha": True}) or {}).get("productCount")
+        flt, note = _filter(facets, query, tag)
+        d = _call(tab, "post", "/catalog/product/feed",
+                  {"page": page, "perPage": min(max(limit, 12), 48), "filter": flt, "withBestProductReviews": False, **SORT[sort]})
+        if "features" in flt:      # the facet's own count
+            total = (_call(tab, "post", "/catalog/search/form", {"filter": flt, **FORM}) or {}).get("productCount")
     finally:
         tab.close()
     if not isinstance(d, dict) or "items" not in d:
         return BLOCKED
-    pag = d.get("paginator") or {}
-    if pag.get("nextPageExists"):
+    if _more(d):
         note += ("\n" if note else "") + f"есть следующая страница: page={page + 1}"
-    q = {"search": query, **({"orderBy": order, "orderDirection": direction} if sort != "popular" else {}), **({"page": page} if page > 1 else {})}
-    diet = [t for t in facets if facets[t][0] == "osobennosti"]
-    kinds = [t for t in facets if facets[t][0] != "osobennosti"]
-    return {"items": [_listed(p) for p in d["items"]][:limit], "total": total, "note": note,
-            "facets": diet + kinds[:25], "url": f"{SITE}/cat/search?" + urllib.parse.urlencode(q)}
+    q = {"search": query, **SORT[sort], **({"page": page} if page > 1 else {})}
+    return {"items": [_listed(p) for p in d["items"]][:limit], "total": total, "note": note, "facets": _titles(facets),
+            "url": f"{SITE}/cat/search?" + urllib.parse.urlencode(q)}
+
+
+def _filter(facets, query, tag):
+    """The feed's filter and a note: the search's own facet whose title has tag in it, or else tag added to the text."""
+    if not tag:
+        return {"textQuery": query}, ""
+    hit = next((v for t, v in facets.items() if tag.lower() in t.lower()), None)
+    if hit:
+        return {"textQuery": query, "features": [{"key": hit[0], "value": hit[1]}]}, ""
+    return {"textQuery": f"{query} {tag}"}, f"фильтра «{tag}» у Перекрёстка для этого запроса нет — искал «{query} {tag}» текстом"
+
+
+def _titles(facets):
+    """Diet filters first, then up to 25 kinds of product."""
+    return [t for t, (key, _) in facets.items() if key == DIET] + [t for t, (key, _) in facets.items() if key != DIET][:25]
 
 
 def _items(p):
