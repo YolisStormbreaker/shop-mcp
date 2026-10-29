@@ -146,20 +146,15 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(got, {"x": 1})
         self.assertEqual(sent[-1], ("Network.disable", {}))
 
-    # Pinned as found: the bugs below are fixed in later commits.
-    def test_messages_that_arrive_while_a_body_is_read_are_dropped(self):
+    def test_messages_that_arrive_while_a_body_is_read_are_handled_too(self):
         got, _, _ = run([response("r1", "https://api.test/x"), finished("r1"), response("r2", "https://api.test/y"), body("1"),
                          finished("r2"), body("2")], {"x": ["/x"], "y": ["/y"]}, timeout=10)
-        self.assertEqual(got, {"x": 1})
+        self.assertEqual(got, {"x": 1, "y": 2})
 
-    def test_body_that_never_comes_raises_after_disabling_fetch_and_network(self):
-        ws = FakeWs([response("r1", "https://api.test/x"), finished("r1")])
-        tab = MagicMock(ws=ws)
-        with patch.object(C, "time"), patch.dict(cdp._last_nav, clear=True), self.assertRaises(TimeoutError):
-            C.time.time.side_effect = itertools.count(1000.0, 1.0)
-            C.capture(tab, "shop", URL, {"x": ["/x"]}, rewrite=("*", str))
-        self.assertEqual([s["method"] for s in ws.sent[-2:]], ["Fetch.disable", "Network.disable"])
-
+    def test_body_that_never_comes_leaves_the_name_missing(self):
+        got, sent, _ = run([response("r1", "https://api.test/x"), finished("r1")], {"x": ["/x"]}, rewrite=("*", str))
+        self.assertEqual(got, {})
+        self.assertEqual(sent[-2:], [("Fetch.disable", {}), ("Network.disable", {})])
 
 if __name__ == "__main__":
     unittest.main()

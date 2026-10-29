@@ -66,8 +66,9 @@ def _recv(ws):
 
 
 def _on(ws, m, patterns, rewrite, pending, out):
-    """One message from the browser: a paused request goes on, a matching response is claimed (pending:
-    requestId → name), a claimed one that finished loading has its body read into out."""
+    """One message from the browser: a paused request goes on, a matching response is claimed, the body of a
+    claimed one that finished loading is asked for and read into out. pending maps the requestId of a claimed
+    response, then the id of our Network.getResponseBody command, to its name."""
     p = m.get("params", {})
     if m.get("method") == "Fetch.requestPaused":
         _send(ws, "Fetch.continueRequest", **_continue(p, rewrite))
@@ -75,22 +76,12 @@ def _on(ws, m, patterns, rewrite, pending, out):
         if name := _claim(p["response"]["url"], patterns, set(out) | set(pending.values())):
             pending[p["requestId"]] = name
     elif m.get("method") == "Network.loadingFinished" and p.get("requestId") in pending:
-        r = _body(ws, p["requestId"], rewrite)
+        pending[_send(ws, "Network.getResponseBody", requestId=p["requestId"])] = pending[p["requestId"]]
+    elif m.get("id") in pending:
         try:
-            out[pending[p["requestId"]]] = json.loads(r["result"]["body"])
+            out[pending[m["id"]]] = json.loads(m["result"]["body"])
         except (KeyError, ValueError):
             pass
-
-
-def _body(ws, request_id, rewrite):
-    """The browser's answer to Network.getResponseBody; requests paused meanwhile go on."""
-    i = _send(ws, "Network.getResponseBody", requestId=request_id)
-    while True:
-        r = json.loads(ws.recv(timeout=10))
-        if r.get("method") == "Fetch.requestPaused":
-            _send(ws, "Fetch.continueRequest", **_continue(r["params"], rewrite))
-        elif r.get("id") == i:
-            return r
 
 
 def _matches(url, parts):
