@@ -332,7 +332,7 @@ def _cart_text(items):
         return "корзина Wildberries пуста"
     rows = [f"{i.get('cod1S')}\t{i.get('id')}\t{i.get('quantity')}\t{i.get('priceWithCouponAndSpp') or i.get('price')}\t"
             f"{'✓' if i.get('includeInOrder') else ''}\t{i.get('brandName', '')}\t{i.get('goodsName', '')}\t"
-            f"{'' if str(i.get('sizeName')) in ('', '0') else i.get('sizeName')}\t{'' if i.get('canBeOrdered', True) else 'нельзя заказать'}"
+            f"{'' if str(i.get('sizeName') or 0) == '0' else i.get('sizeName')}\t{'' if i.get('canBeOrdered', True) else 'нельзя заказать'}"
             for i in items]
     return ("корзина Wildberries (✓ — выбрано к оформлению; цена за штуку без WB Кошелька)\n"
             "артикул\tchrt\tшт\tцена ₽\t✓\tбренд\tназвание\tразмер\tзаметки\n" + "\n".join(rows))

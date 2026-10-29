@@ -340,8 +340,8 @@ class CartViewTests(CartTests):
         self.assertClosed()
 
     def test_line_without_size_name(self):
-        self.assertEqual(wb._cart_text([{"cod1S": 1, "id": 2, "quantity": 1, "price": 5}]),
-                         CART_HEAD + "1\t2\t1\t5\t\t\t\tNone\t")
+        self.answers(view({"cod1S": 1, "id": 2, "quantity": 1, "price": 5}, {"cod1S": 3, "id": 4, "quantity": 1, "price": 6, "sizeName": 0}))
+        self.assertEqual(wb.cart(), CART_HEAD + "1\t2\t1\t5\t\t\t\t\t\n3\t4\t1\t6\t\t\t\t\t")
 
 
 class AddToCartTests(CartTests):
