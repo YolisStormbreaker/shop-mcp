@@ -419,14 +419,16 @@ class AddToCartTests(CartTests):
         self.assertEqual(wb.add_to_cart("abc"), "нужен артикул WB или ссылка на товар")
         self.tab_for.assert_not_called()
 
-    def test_product_without_sizes_raises(self):
-        for p in ({"id": 101, "name": "x", "sizes": []}, {"id": 101, "name": "x"}):
-            with self.subTest(p):
+    def test_product_without_sizes(self):
+        for p, size in (({"id": 101, "name": "x", "sizes": []}, None), ({"id": 101, "name": "x"}, None),
+                        ({"id": 101, "name": "x", "sizes": []}, "M")):
+            with self.subTest(p=p, size=size):
+                self.capture.reset_mock()
                 self.tab_for.reset_mock()
                 self.tab.close.reset_mock()
-                with self.assertRaises(IndexError):
-                    self.add(detail(101, p), [], "101")
-                self.tab.close.assert_called_once()
+                got, opened = self.add(detail(101, p), [], "101", size=size)
+                self.assertEqual(got, "у товара нет размеров, которые можно заказать: в корзину не положить")
+                self.assertEqual(self.sent(), opened)
 
     def test_quantity_below_one_is_sent(self):
         self.add(detail(101, P1), [view(), {"sync": {"state": 0}}, view(L1)], "101", quantity=0)

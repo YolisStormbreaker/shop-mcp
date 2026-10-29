@@ -377,6 +377,8 @@ def add_to_cart(id_or_url, size=None, quantity=1):
 
 def _size(sizes, size):
     """(the size to add, None) or (None, why not): with no size asked for, the only one; else the one of that name or original name."""
+    if not sizes:
+        return None, "у товара нет размеров, которые можно заказать: в корзину не положить"
     names = ", ".join(str(x.get("origName") or x.get("name")) for x in sizes)
     if size is None:
         return (None, "у товара несколько размеров, укажи size: " + names) if len(sizes) > 1 else (sizes[0], None)
