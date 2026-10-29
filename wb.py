@@ -62,7 +62,7 @@ def _search_url(query, price_min, price_max, sort):
 def _pager(page):
     """The site loads page N (100 items each) only while the list is scrolled, which a background tab
     never does; a page=N link still asks for page 1. So its own page-1 request is sent as page N."""
-    return ("*__internal/search/exactmatch*resultset=catalog*", lambda u: _paged(u, page)) if page > 1 else None
+    return ("*/exactmatch/*resultset=catalog*", lambda u: _paged(u, page)) if page > 1 else None
 
 
 def _paged(u, page):

@@ -2,6 +2,7 @@
 and the public CDN/feedback JSON (_get), all patched.  Today is fixed to 29 Oct 2026.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_wb"""
 import datetime
+import fnmatch
 import types
 import unittest
 from unittest.mock import MagicMock, patch
@@ -29,6 +30,10 @@ HEAD = ("товар: https://www.wildberries.ru/catalog/<id>/detail.aspx; «пр
         "цена без скидки WB Кошелька: сайт показывает цену с ней, она на несколько процентов ниже\n"
         "#\tid\tцена ₽\tбез скидки\tназвание\tбренд\tрейтинг\tотзывов\tпродавец\tпривезут\n")
 SEARCH = "https://www.wildberries.ru/catalog/0/search.aspx?search=usb+c"
+# the shape of the catalog request the search page sent on 2026-10-29 (values made up)
+CATALOG = ("https://www.wildberries.ru/__internal/u-search/exactmatch/ru/common/v18/search?ab_daily_autotest=x&appType=1&curr=rub"
+           "&dest=-1&hide_vflags=0&inheritFilters=false&lang=ru&locale=ru&query=usb%20c&resultset=catalog&sort=popular&spp=30"
+           "&suppressSpellcheck=false")
 
 BASE = "https://basket-01.wbbasket.ru/vol1/part101"
 DESC = "Описание. " * 300
@@ -104,7 +109,7 @@ class SearchTests(WbTest):
         got = self.search([], 250, page=2, price_max=500)
         self.assertTrue(got.startswith(f"Wildberries · 250 найдено · страница 2 из 3 (по 100) · {SEARCH}&sort=popular&priceU=0%3B50000\n"))
         glob, fn = self.capture.call_args.kwargs["rewrite"]
-        self.assertEqual(glob, "*__internal/search/exactmatch*resultset=catalog*")
+        self.assertTrue(fnmatch.fnmatchcase(CATALOG, glob))
         self.assertEqual(fn("https://x/search?query=a&page=1&resultset=catalog"), "https://x/search?query=a&page=2&resultset=catalog")
         self.assertEqual(fn("https://x/search?query=a&resultset=catalog"), "https://x/search?query=a&resultset=catalog&page=2")
 
