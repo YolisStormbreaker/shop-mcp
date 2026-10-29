@@ -136,6 +136,10 @@ class SearchTests(unittest.TestCase):
             f"2\t4500\t\t\tOrange Pi Zero 3\t{tail(2)}",
             "цена доставки — только у первых 1 объявлений с доставкой (shipping=1)"])
 
+    def test_no_capped_note_when_the_rest_have_no_link(self):
+        out, _, _, _ = search([page([listed(1), {**listed(2), "url": ""}]), [ship(390)]], shipping=1)
+        self.assertNotIn("только у первых", out)
+
     def test_no_delivery_prices(self):
         out, tab, _, _ = search([page([listed(1)])], shipping=0)
         self.assertEqual(tab.js.call_count, 1)

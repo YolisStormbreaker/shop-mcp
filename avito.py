@@ -155,7 +155,7 @@ def search(query, region="sankt-peterburg", price_min=None, price_max=None,
             if got and (got[-1] or {}).get("blocked"):
                 log.warning("avito shipping: 439 after %d of %d items, search %s", len(got) - 1, len(idx), r["url"])
                 note = "\n⚠️ Авито включил проверку безопасности — цену доставки узнали не для всех; подождать 10–30 минут."
-            elif len([x for x in items if x["delivery"]]) > len(idx):
+            elif len([x for x in items if x["delivery"] and x["url"]]) > len(idx):   # the ones we would look up
                 note = f"\nцена доставки — только у первых {len(idx)} объявлений с доставкой (shipping={shipping})"
     finally:
         tab.close()
