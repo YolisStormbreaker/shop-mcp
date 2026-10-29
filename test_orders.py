@@ -13,6 +13,7 @@ import orders
 import ozon
 
 NOW = time.mktime((2026, 10, 29, 12, 0, 0, 0, 0, -1))
+FEB_2026 = time.mktime((2026, 2, 1, 0, 0, 0, 0, 0, -1))
 HEAD = "заказ\tдата / статус\tсумма\tтовар\tвариант\tцена\tссылка"
 CAPPED = (" (достиг предела новых загрузок за вызов; просмотренные закэшированы — "
           "повтори тот же вызов, чтобы искать дальше)")
@@ -26,7 +27,7 @@ class CacheInTempDir(unittest.TestCase):
         self.log, self.sleep = MagicMock(), MagicMock()
         for p in (patch.object(orders, "CACHE", self.file), patch.object(orders, "log", self.log),
                   patch.object(orders.time, "time", return_value=NOW), patch.object(orders.time, "sleep", self.sleep),
-                  patch.object(ali, "_last_call", 0.0)):
+                  patch.object(ali, "_last_call", NOW - 1.0)):          # the last request to Ali a second ago
             p.start()
             self.addCleanup(p.stop)
 
@@ -159,9 +160,9 @@ class OzonOrdersTests(CacheInTempDir):
                                      A1, F25))
 
     def test_limit_stops_reading(self):
-        out, urls = self.ozon_orders(query="зарядка", limit=1)
-        self.assertEqual(out, answer("Ozon: заказы с «зарядка» в названии — найдено 1, просмотрено заказов 2", A2))
-        self.assertEqual(urls[-1], "/my/orderdetails/?order=" + A2)
+        out, urls = self.ozon_orders(query="кабель | зарядка", limit=1)
+        self.assertEqual(out, answer("Ozon: заказы с «кабель | зарядка» в названии — найдено 1, просмотрено заказов 1", A1))
+        self.assertEqual(urls[-1], "/my/orderdetails/?order=" + A1)
 
     def test_nothing_found(self):
         out, _ = self.ozon_orders(query="паяльник")
@@ -190,7 +191,7 @@ class OzonOrdersTests(CacheInTempDir):
             return dict(o, at=at) if at else o
         self.seed({"ozon:live": {"at": NOW - 60, "years": [2026], "active": [[A1, "В пути"], [A2, "Можно забирать"]]},
                    "ozon:list:2026": {"at": NOW - 60, "ids": [[F26, "Получен"], [F25, "Получен"]]},
-                   "ozon:" + A1: saved(A1, NOW - 3600),                         # on its way, read an hour ago
+                   "ozon:" + A1: saved(A1, NOW - orders.ACTIVE_TTL),             # on its way, read exactly a day ago
                    "ozon:" + A2: saved(A2, NOW - orders.ACTIVE_TTL - 1),         # on its way, read over a day ago
                    "ozon:" + F26: saved(F26, NOW - 60),                          # read on its way, finished since
                    "ozon:" + F25: saved(F25)})                                   # read when finished
@@ -205,11 +206,11 @@ class OzonOrdersTests(CacheInTempDir):
 
     def test_saved_lists_are_refreshed_from_the_top(self):
         K1, K2, K3, N1 = "20260011-0001", "20260012-0001", "20260013-0001", "20260014-0001"
-        self.seed({"ozon:live": {"at": NOW - orders.LIVE_TTL - 1, "years": [2026], "active": []},
+        self.seed({"ozon:live": {"at": NOW - orders.LIVE_TTL, "years": [2026], "active": []},
                    # saved after January of the next year: final, not read again
-                   "ozon:list:2025": {"at": time.mktime((2026, 2, 2, 0, 0, 0, 0, 0, -1)), "ids": [[F25, "Получен"]]},
-                   # saved in January: late December orders may still arrive
-                   "ozon:list:2024": {"at": time.mktime((2025, 1, 31, 0, 0, 0, 0, 0, -1)), "ids": [[K3, "Получен"]]},
+                   "ozon:list:2025": {"at": FEB_2026 + 1, "ids": [[F25, "Получен"]]},
+                   # saved by the end of January: late December orders may still arrive
+                   "ozon:list:2024": {"at": time.mktime((2025, 2, 1, 0, 0, 0, 0, 0, -1)), "ids": [[K3, "Получен"]]},
                    "ozon:list:2026": {"at": NOW - 3600, "ids": [[K1, "Получен"], [K2, "Получен"], [K3, "Получен"]]},
                    **{"ozon:" + k: {"id": k, "total": "", "products": []} for k in (K1, K2, K3, F25, A1)}})
         archive = "/my/orderlist?selectedTab=archive"
@@ -224,7 +225,7 @@ class OzonOrdersTests(CacheInTempDir):
                                 archive + "&selectedYear=2024", "/my/orderdetails/?order=" + N1])
         c = self.cached()
         self.assertEqual(c["ozon:list:2026"]["ids"], [[N1, "Получен"], [K1, "Получен"], [K2, "Получен"], [K3, "Получен"]])
-        self.assertEqual(c["ozon:list:2025"]["at"], time.mktime((2026, 2, 2, 0, 0, 0, 0, 0, -1)))
+        self.assertEqual(c["ozon:list:2025"]["at"], FEB_2026 + 1)
         self.assertEqual(c["ozon:list:2024"], {"at": NOW, "ids": [[K3, "Получен"]]})
         self.assertEqual(c["ozon:live"], {"at": NOW, "years": [2026, 2025, 2024], "active": [[A1, "В пути"]]})
         self.assertIn("просмотрено заказов 6", out)
@@ -294,7 +295,7 @@ class AliOrdersTests(CacheInTempDir):
         self.assertEqual(out, "\n".join(["AliExpress: заказы — найдено 4, просмотрено заказов 4", HEAD] + ALI_ROWS))
         self.assertEqual(pages, [("active", 1), ("active", 2), ("archive", 1)])
         self.assertEqual(read, [B1, B2, B3, B4])
-        self.assertEqual(self.sleep.call_args_list, [call(1.5)] * 3)     # 1.5 s between order pages
+        self.assertEqual(self.sleep.call_args_list, [call(0.5)] + [call(1.5)] * 3)     # 1.5 s between requests
         self.assertEqual(ali._last_call, NOW)
         self.log.info.assert_called_once_with("ali_orders %r: %d found, %d scanned, %d fetched", None, 4, 4, 4)
         c = self.cached()
@@ -315,12 +316,12 @@ class AliOrdersTests(CacheInTempDir):
         self.assertEqual((out, pages, read), (first, [], [B4]))
 
     def test_query_limit_and_cap(self):
-        out, _, read = self.ali_orders(query="жало | флюс", limit=1)
-        self.assertEqual(out, "\n".join(["AliExpress: заказы с «жало | флюс» в названии — найдено 1, просмотрено заказов 2",
-                                         HEAD, ALI_ROWS[1]]))
-        self.assertEqual(read, [B1, B2])
+        out, _, read = self.ali_orders(query="паяльник | жало", limit=1)
+        self.assertEqual(out, "\n".join(["AliExpress: заказы с «паяльник | жало» в названии — найдено 1, "
+                                         "просмотрено заказов 1", HEAD, ALI_ROWS[0]]))
+        self.assertEqual(read, [B1])
         out, _, read = self.ali_orders(query="флюс", max_new=0)
-        self.assertEqual(out, "AliExpress: заказы с «флюс» в названии — найдено 0, просмотрено заказов 2" + CAPPED
+        self.assertEqual(out, "AliExpress: заказы с «флюс» в названии — найдено 0, просмотрено заказов 1" + CAPPED
                          + "\n(ничего)")
         self.assertEqual(read, [])
 
@@ -336,7 +337,7 @@ class AliOrdersTests(CacheInTempDir):
     def test_saved_archive_is_refreshed_from_the_top(self):
         K1, K2, K3, N1 = "8000000000000011", "8000000000000012", "8000000000000013", "8000000000000014"
         known = [[k, "Завершён", "1 ₽", []] for k in (K1, K2, K3)]
-        self.seed({"ali:live": {"at": NOW - orders.LIVE_TTL - 1, "active": []}, "ali:list:archive": {"at": 0, "ids": known},
+        self.seed({"ali:live": {"at": NOW - orders.LIVE_TTL, "active": []}, "ali:list:archive": {"at": 0, "ids": known},
                    **{"ali:" + k: {"id": k, "date": "", "products": [{"title": "старый"}]} for k in (K1, K2, K3)}})
         lists = {("active", 1): None,           # the site answered nothing
                  ("archive", 1): ali_page(ali_order(N1, "2 ₽", "1005014", status="Завершён"),
