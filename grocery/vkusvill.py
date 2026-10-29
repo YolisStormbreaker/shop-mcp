@@ -322,12 +322,12 @@ def _click(tab, el, pid, before):
 
 
 def _add_buttons(pid, start, quantity):
-    """The elements to click for quantity (1..30): the product's add button when it is not in the cart yet, its «+» for
+    """The elements to click for quantity (1..30, one for less than 1): the product's add button when it is not in the cart yet, its «+» for
     the rest."""
     add = f".js-delivery__basket--add[data-id='{pid}'], .js-delivery__basket--add[data-xmlid='{pid}']"
     # «+» has no data of its own: it sits next to the product's add button, in the same CartButton block
     plus = f"({_el(add)}?.closest('.CartButton, [class*=CartButton]:not([class*=CartButton__])') || document).querySelector('.Q_Up')"
-    return ([plus] if start else [_el(add)]) + [plus] * (max(1, min(int(quantity), 30)) - 1)
+    return ([plus] if start else [_el(add)]) + [plus] * (min(int(quantity), 30) - 1)
 
 
 def add_to_cart(id_or_url, quantity=1):

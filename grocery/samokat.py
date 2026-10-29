@@ -252,10 +252,12 @@ def _photos(c):
     return [m["url"].split("?")[0] for m in c.get("media") or [] if m.get("url")]
 
 
+CART_ARGS_JS = "(Object.values(window.__shopStore.getState().api.queries).find(e => e.endpointName === 'cart') || {}).originalArgs || null"
+
+
 def _cart(tab):
     """(the cart's products by id, the whole answer), asked with the page's own cart-query arguments when it has them."""
-    args = (tab.js("(Object.values(window.__shopStore.getState().api.queries).find(e => e.endpointName === 'cart') || {}).originalArgs || null")
-            or {"showcaseId": "SC", "buyout": False})
+    args = tab.js(CART_ARGS_JS) or {"showcaseId": "SC", "buyout": False}
     d = _call(tab, "cart", args) or {}
     return {str(x.get("id")): x for x in d.get("products") or []}, d
 

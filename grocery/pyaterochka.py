@@ -324,8 +324,8 @@ def _settled(tab, plu):
 
 
 def _add_buttons(start, quantity):
-    """The presses that add quantity (1..30): the add button when it is not in the cart yet, «+» for the rest."""
-    return ([PLUS] if start else [ADD]) + [PLUS] * (max(1, min(int(quantity), 30)) - 1)
+    """The presses that add quantity (1..30, one for less than 1): the add button when it is not in the cart yet, «+» for the rest."""
+    return ([PLUS] if start else [ADD]) + [PLUS] * (min(int(quantity), 30) - 1)
 
 
 def _asks_address(tab, plu, buttons):

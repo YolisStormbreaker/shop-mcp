@@ -288,7 +288,7 @@ class Site:
     favorites. A click or a favorites request changes the site unless it ignores that one."""
     def __init__(self, qty=0, absent=(), ignored=(), favs=()):
         self.qty, self.absent, self.ignored, self.favs = qty, set(absent), set(ignored), list(favs)
-        self.page, self.clicks, self.gotos, self.posts = None, [], [], []
+        self.page, self.clicks, self.tries, self.gotos, self.posts = None, [], [], [], []
         self.tab = MagicMock()
         self.tab.js.side_effect = self.js
         self.tab.goto.side_effect = self.goto
@@ -323,6 +323,7 @@ class Site:
         button = "+" if ".Q_Up" in expr else "−" if ".Q_Down" in expr else "add"
         assert {"+": "basket--add[data-id='158']", "−": "basket--row[data-product-id='158'] .Q_Down",
                 "add": "basket--add[data-id='158']"}[button] in expr, expr     # the product's own button, not another's
+        self.tries.append(button)
         if button not in self.buttons():
             return False
         self.clicks.append(button)
@@ -371,9 +372,10 @@ class VkusvillAddToCartTests(unittest.TestCase):
         got, clicks, _, _ = change(vkusvill.add_to_cart, Site(absent=["add"]), "158", 2)
         self.assertEqual((got, clicks), (NOT_ADDED, []))
 
-    def test_no_plus_on_top_of_the_cart(self):
-        got, clicks, _, _ = change(vkusvill.add_to_cart, Site(qty=1, absent=["+"]), "158")
-        self.assertEqual((got, clicks), (NOT_ADDED, []))
+    def test_no_plus_on_top_of_the_cart_stops_the_presses(self):
+        site = Site(qty=1, absent=["+"])
+        got, clicks, _, _ = change(vkusvill.add_to_cart, site, "158", 3)
+        self.assertEqual((got, clicks, site.tries), (NOT_ADDED, [], ["+"]))
 
     def test_not_an_id(self):
         with patch.object(vkusvill, "_tab") as tab, self.assertRaises(ValueError):

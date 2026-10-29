@@ -388,6 +388,13 @@ class AddToCartTests(unittest.TestCase):
         got, clicks, _ = change(pyaterochka.add_to_cart, Shop(ignored=[ADD]), "97001", 2)
         self.assertEqual((got, clicks), (NOT_ADDED, [ADD]))
 
+    def test_each_press_waits_until_the_cart_changes_at_most_six_seconds(self):
+        for shop, waits in ((Shop(), [0.5, 0.5]), (Shop(ignored=[ADD]), [0.5] * 12)):
+            with self.subTest(waits=len(waits)), patch.object(pyaterochka, "_tab", return_value=shop), \
+                    patch.object(pyaterochka.time, "sleep") as sleep:
+                pyaterochka.add_to_cart("97001", 2)
+            self.assertEqual(sleep.call_args_list, [call(s) for s in [2] + waits + [3, 2]])   # hydration, presses, the reload
+
     def test_no_plus_on_top_of_the_cart(self):
         got, clicks, _ = change(pyaterochka.add_to_cart, Shop(qty=1, absent=[PLUS]), "97001", 2)
         self.assertEqual((got, clicks), (NOT_ADDED, []))
