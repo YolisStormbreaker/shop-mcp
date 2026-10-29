@@ -103,56 +103,82 @@ def _gone(rest, mx):
     return mx == 0 or bool(re.search(r"не остал|нет в наличии|закончил", rest or "", re.I))
 
 
+FACETS = list(DEF) + ["без глютена", "без лактозы", "мало жира", "много белка"]
+SITE_SORT = {"price": "cat_search__CATALOG_3", "price_desc": "cat_search__CATALOG_10", "rating": "cat_search__CATALOG_5"}
+
+
+def _search_url(q):
+    return SITE + "/search/?" + urllib.parse.urlencode(q)
+
+
 def search(query, tag=None, sort="popular", page=1, limit=30):
-    note = ""
     if tag and tag.lower() in DEF:
-        # a site filter: the site's own search page (24 per page), with stock for the user's address
-        q = {"type": "products", "q": query, f"F[DEF_{DEF[tag.lower()]}]": 1, "sf4": "Y",
-             "sort": {"price": "cat_search__CATALOG_3", "price_desc": "cat_search__CATALOG_10", "rating": "cat_search__CATALOG_5"}.get(sort, "cat_search__CATALOG_15")}
-        if page > 1:
-            q.update(rf4="Y", PAGEN_1=page)
-        url = SITE + "/search/?" + urllib.parse.urlencode(q)
-        tab = _tab()
-        try:
-            cards = tab.js(f"""(async (url) => {{ const doc = new DOMParser().parseFromString(await (await fetch(url, {{credentials: 'include'}})).text(), 'text/html');
-              const t = s => (s || '').replace(/\\s+/g, ' ').trim();
-              return [...doc.querySelectorAll('.ProductCard[data-id]')].map(c => ({{id: c.dataset.id, name: t(c.querySelector('.js-product-v-tizer__title-text')?.textContent),
-                size: t(c.querySelector('.ProductCard__linkWeight')?.textContent), price: +t(c.querySelector('.js-datalayer-catalog-list-price')?.textContent).replace(/[^\\d.]/g, ''),
-                old: +t(c.querySelector('.js-datalayer-catalog-list-price-old')?.textContent).replace(/[^\\d.]/g, ''), rest: t(c.querySelector('.ProductCard__Rest')?.textContent),
-                max: +(c.querySelector('.js-delivery__basket--add')?.dataset.max ?? -1), rating: t(c.querySelector('.ProductCard__ratingText')?.textContent),
-                href: c.querySelector('a[href*="/goods/"]')?.getAttribute('href') || ''}})) }})({json.dumps(url)})""", timeout=40) or []
-        finally:
-            tab.close()
-        items = [{"id": c["id"], "name": c["name"], "brand": "", "size": c["size"], "price": c["price"] or None,
-                  "old": c["old"] if c["old"] and c["old"] > (c["price"] or 0) else None, "available": not _gone(c["rest"], c["max"]),
-                  "url": SITE + c["href"] if c["href"].startswith("/") else c["href"], "rating": c["rating"] or None, "reviews": None, "ean": None}
-                 for c in cards]
-        return {"items": items[:limit], "total": None, "note": f"фильтр ВкусВилла «{tag}», наличие — для адреса пользователя",
-                "facets": list(DEF) + ["без глютена", "без лактозы", "мало жира", "много белка"], "url": url}
+        return _filtered(query, tag, sort, page, limit)
+    note = ""
     if tag:
         note = f"«{tag}» — фильтр разделов сайта, а не поиска: искал «{query} {tag}» текстом"
         query = f"{query} {tag}".strip()
+    items, total = _found(query, sort, page, limit)
+    url = _search_url({"type": "products", "q": query})
+    # stock at the user's address: one look at the site's own search page (first 24 hits)
+    if _restock(items, _site(url)):
+        note += ("\n" if note else "") + "наличие — для адреса пользователя (по первым 24 товарам сайта)"
+    return {"items": items[:limit], "total": total, "note": note.strip(), "facets": list(FACETS), "url": url}
+
+
+def _found(query, sort, page, limit):
+    """The catalog API's hits for this page of `limit` (it gives 10 a call) and its total."""
     n = math.ceil(min(limit, 40) / 10)
     items, total = [], None
     for pg in range((page - 1) * n + 1, page * n + 1):
         d = _mcp("vkusvill_products_search", {"q": query, "page": pg, "limit": 10, "sort": SORT[sort], "vvonly": 0})
         items += [_listed(p) for p in d.get("items") or []]
-        total = (d.get("meta") or {}).get("total")
-        if not (d.get("meta") or {}).get("has_more"):
+        meta = d.get("meta") or {}
+        total = meta.get("total")
+        if not meta.get("has_more"):
             break
     if sort == "discount":
         items.sort(key=lambda x: (x["price"] or 0) / (x["old"] or x["price"] or 1))
-    # stock at the user's address: one look at the site's own search page (first 24 hits)
-    st = _site(SITE + "/search/?" + urllib.parse.urlencode({"type": "products", "q": query}))
-    if st:
-        rest = {i: (r, m) for i, r, m in st["cards"]}
-        for x in items:
-            if x["id"] in rest:
-                x["available"] = not _gone(*rest[x["id"]])
-        note += ("\n" if note else "") + "наличие — для адреса пользователя (по первым 24 товарам сайта)"
-    return {"items": items[:limit], "total": total, "note": note.strip(),
-            "facets": list(DEF) + ["без глютена", "без лактозы", "мало жира", "много белка"],
-            "url": SITE + "/search/?" + urllib.parse.urlencode({"type": "products", "q": query})}
+    return items, total
+
+
+def _restock(items, st):
+    """Marks the items the site's search page shows as gone; False when the page did not load."""
+    if not st:
+        return False
+    rest = {i: (r, m) for i, r, m in st["cards"]}
+    for x in items:
+        if x["id"] in rest:
+            x["available"] = not _gone(*rest[x["id"]])
+    return True
+
+
+def _filtered(query, tag, sort, page, limit):
+    # a site filter: the site's own search page (24 per page), with stock for the user's address
+    q = {"type": "products", "q": query, f"F[DEF_{DEF[tag.lower()]}]": 1, "sf4": "Y", "sort": SITE_SORT.get(sort, "cat_search__CATALOG_15")}
+    if page > 1:
+        q.update(rf4="Y", PAGEN_1=page)
+    url = _search_url(q)
+    tab = _tab()
+    try:
+        cards = tab.js(f"""(async (url) => {{ const doc = new DOMParser().parseFromString(await (await fetch(url, {{credentials: 'include'}})).text(), 'text/html');
+          const t = s => (s || '').replace(/\\s+/g, ' ').trim();
+          return [...doc.querySelectorAll('.ProductCard[data-id]')].map(c => ({{id: c.dataset.id, name: t(c.querySelector('.js-product-v-tizer__title-text')?.textContent),
+            size: t(c.querySelector('.ProductCard__linkWeight')?.textContent), price: +t(c.querySelector('.js-datalayer-catalog-list-price')?.textContent).replace(/[^\\d.]/g, ''),
+            old: +t(c.querySelector('.js-datalayer-catalog-list-price-old')?.textContent).replace(/[^\\d.]/g, ''), rest: t(c.querySelector('.ProductCard__Rest')?.textContent),
+            max: +(c.querySelector('.js-delivery__basket--add')?.dataset.max ?? -1), rating: t(c.querySelector('.ProductCard__ratingText')?.textContent),
+            href: c.querySelector('a[href*="/goods/"]')?.getAttribute('href') || ''}})) }})({json.dumps(url)})""", timeout=40) or []
+    finally:
+        tab.close()
+    return {"items": [_site_card(c) for c in cards][:limit], "total": None,
+            "note": f"фильтр ВкусВилла «{tag}», наличие — для адреса пользователя", "facets": list(FACETS), "url": url}
+
+
+def _site_card(c):
+    """One card of the site's search page, as the catalog API's hits are listed."""
+    return {"id": c["id"], "name": c["name"], "brand": "", "size": c["size"], "price": c["price"] or None,
+            "old": c["old"] if c["old"] and c["old"] > (c["price"] or 0) else None, "available": not _gone(c["rest"], c["max"]),
+            "url": SITE + c["href"] if c["href"].startswith("/") else c["href"], "rating": c["rating"] or None, "reviews": None, "ean": None}
 
 
 def _id(id_or_url):
