@@ -289,12 +289,13 @@ SYNC = "*cart-storage-api/api/basket/sync*"
 
 def _once(fn):
     """Rewrite only the first matching request: a page may sync more than once per load."""
-    done = []
+    done = False
 
     def wrap(u):
+        nonlocal done
         if done:
             return u
-        done.append(1)
+        done = True
         return fn(u)
     return wrap
 
