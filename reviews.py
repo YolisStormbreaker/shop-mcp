@@ -38,7 +38,8 @@ def ozon_waiting(limit=30):
                 for it in w.get("items", []):
                     items.append((it.get("sku", ""), it.get("productName", {}).get("text", ""),
                                   it.get("aspectName", {}).get("text", "")))
-            url = next((w.get("nextPage") for w in ozon._widgets(page, "paginator") if w.get("nextPage")), None)
+            # page 1 names the next page in a paginator widget, every later page at the top of the response
+            url = next((w.get("nextPage") for w in ozon._widgets(page, "paginator") if w.get("nextPage")), None) or page.get("nextPage")
             if len(items) >= limit or not url:
                 break
     finally:

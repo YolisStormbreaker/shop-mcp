@@ -43,6 +43,15 @@ class OzonWaitingTests(unittest.TestCase):
         self.assertEqual(urls, ["/my/waiting-reviews", "/my/waiting-reviews?page=2"])
         self.assertEqual(self.waiting(limit=3)[0], out)          # exactly the limit and no more pages
 
+    def test_later_pages_name_the_next_one_at_the_top_level(self):
+        # live 2026-10-29: page 1 names page 2 in a paginator widget, every later page at the top of the response
+        pages = {**WAITING, "/my/waiting-reviews?page=2": {**WAITING["/my/waiting-reviews?page=2"], "nextPage": "/my/waiting-reviews?page=3"},
+                 "/my/waiting-reviews?page=3": page({"webProductsForReview-1": {"items": [{"sku": 100004, "productName": {"text": "Чехол"}}]}})}
+        out, urls = self.waiting(pages, limit=100)
+        self.assertEqual(urls, ["/my/waiting-reviews", "/my/waiting-reviews?page=2", "/my/waiting-reviews?page=3"])
+        self.assertEqual(out.splitlines()[0], "Ozon: ждут отзыва — 4")
+        self.assertEqual(out.splitlines()[-1], "100004\tЧехол\t")
+
     def test_limit_reached_with_more_pages(self):
         out, urls = self.waiting(limit=2)
         self.assertEqual(out, "\n".join(["Ozon: ждут отзыва — 2 (есть ещё)", "sku\tтовар\tвариант"] + WAITING_ROWS[:2]))
