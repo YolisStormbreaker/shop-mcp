@@ -32,13 +32,18 @@ def _split_top(text, seps=",;"):
             depth += 1
         elif ch in ")]":
             depth = max(0, depth - 1)
-        if ch in seps and depth == 0 and not (ch == "," and 0 < i < len(text) - 1 and text[i - 1].isdigit() and text[i + 1].isdigit()):
+        if ch in seps and depth == 0 and not _decimal_comma(text, i):
             out.append("".join(cur))
             cur = []
         else:
             cur.append(ch)
     out.append("".join(cur))
     return [s.strip(" .\n\t") for s in out if s.strip(" .\n\t")]
+
+
+def _decimal_comma(text, i):
+    """The comma of «3,2»."""
+    return text[i] == "," and 0 < i < len(text) - 1 and text[i - 1].isdigit() and text[i + 1].isdigit()
 
 
 def parse(text):
