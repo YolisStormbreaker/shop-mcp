@@ -1,5 +1,6 @@
-"""Золотое яблоко: the site's JSON (search, product card, delivery, reviews) -> the tools' text.
+"""Золотое яблоко: the site's JSON (search, product card, delivery, reviews, cart) -> the tools' text.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_goldapple"""
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -213,6 +214,121 @@ class GoldAppleReviewsTests(unittest.TestCase):
         self.assertEqual(goldapple.reviews("кушон"), "нужен артикул или ссылка на товар Золотого яблока")
         self.assertEqual(goldapple.reviews("19000163536", sort="best"), "sort: одно из useful, new, high, low")
 
+
+CUSHION = {"productSku": "19000163536", "qty": 2, "specialPriceAmountClean": 4300, "oldPriceAmountClean": 6140, "isSelected": True,
+           "brand": "Brand A", "productName": "Кушон", "prodname": "кушон", "variant": "7.5 г 0.5, Porcelain"}
+SHAMPOO = {"productSku": 19000000001, "qty": 1, "specialPriceAmountClean": 500, "oldPriceAmountClean": 500, "isSelected": False,
+           "brand": "Brand B", "prodname": "Шампунь"}
+GA_CART = {"data": {"rawCart": {"items": [CUSHION, SHAMPOO, {}]}}}
+GA_CART_HEAD = ("корзина Золотого яблока (✓ — выбрано к оформлению; цена — за все штуки строки)\n"
+                "артикул\tшт\tцена ₽\tбез скидки\t✓\tбренд\tназвание\tвариант\n")
+GA_CART_TEXT = (GA_CART_HEAD + "19000163536\t2\t4300\t6140\t✓\tBrand A\tКушон\t7.5 г 0.5, Porcelain\n"
+                "19000000001\t1\t500\t\t\tBrand B\tШампунь\t\n"
+                "None\tNone\tNone\t\t\t\t\t")
+SHAMPOO_CART = {"data": {"rawCart": {"items": [SHAMPOO]}}}
+SHAMPOO_TEXT = GA_CART_HEAD + "19000000001\t1\t500\t\t\tBrand B\tШампунь\t"
+GA_STATE = ("GET", "/front/api/cart/v3/state?locale=ru&includeDeliveryThreshold=false", None)
+
+
+class GoldAppleCartTests(unittest.TestCase):
+    """The cart tools with the site mocked: the answer, and every request that would go to Золотое яблоко (bodies as sent)."""
+
+    def call(self, fn, *args, answers=()):
+        tab = MagicMock()
+        with patch.object(goldapple, "_ga_tab", return_value=tab) as ga_tab, patch.object(goldapple, "_api", side_effect=list(answers)) as api:
+            got = fn(*args)
+        for c in api.call_args_list:
+            self.assertIs(c.args[0], tab)
+        sent = [(c.args[1], c.args[2], None if len(c.args) < 4 else json.dumps(c.args[3])) for c in api.call_args_list]
+        self.assertEqual(tab.close.call_count, ga_tab.call_count)
+        tab.js.assert_not_called()
+        tab.goto.assert_not_called()
+        return got, sent, tab, ga_tab
+
+    def test_cart(self):
+        got, sent, tab, _ = self.call(goldapple.cart, answers=[GA_CART])
+        self.assertEqual(got, GA_CART_TEXT)
+        self.assertEqual(sent, [GA_STATE])
+        tab.close.assert_called_once()
+
+    def test_a_line_without_a_special_price(self):
+        line = {"productSku": "19000000002", "qty": 1, "specialPriceAmountClean": None, "oldPriceAmountClean": 990, "brand": "Brand C",
+                "productName": "Крем", "variant": "50 мл"}
+        self.assertEqual(self.call(goldapple.cart, answers=[{"data": {"rawCart": {"items": [line]}}}])[0],
+                         GA_CART_HEAD + "19000000002\t1\t990\t990\t\tBrand C\tКрем\t50 мл")
+
+    def test_empty_cart(self):
+        for d in ({"data": {"rawCart": {"items": []}}}, {"data": {"rawCart": None}}, {}):
+            self.assertEqual(self.call(goldapple.cart, answers=[d])[0], "корзина Золотого яблока пуста")
+
+    def test_cart_blocked(self):
+        got, _, tab, _ = self.call(goldapple.cart, answers=[None])
+        self.assertEqual(got, goldapple.BLOCKED)
+        tab.close.assert_called_once()
+
+    def test_add(self):
+        got, sent, tab, _ = self.call(goldapple.add_to_cart, "https://goldapple.ru/19000163536-cushion", "2", answers=[{}, GA_CART])
+        self.assertEqual(got, "добавлено: артикул 19000163536\n" + GA_CART_TEXT)
+        self.assertEqual(sent, [("POST", "/front/api/cart/v3/items-by-sku?locale=ru",
+                                 '{"products": [{"sku": "19000163536", "quantity": 2, "analyticsDetailParams": {"itemId": "19000163536"}}], '
+                                 '"meta": {"source": "pdp/product"}, "includeDeliveryThreshold": false}'), GA_STATE])
+        tab.close.assert_called_once()
+
+    def test_add_one_by_default_and_a_numeric_id(self):
+        got, sent, _, _ = self.call(goldapple.add_to_cart, 19000000001, answers=[None, SHAMPOO_CART])
+        self.assertEqual(got, "добавлено: артикул 19000000001\n" + SHAMPOO_TEXT)
+        self.assertEqual(sent[0][2], '{"products": [{"sku": "19000000001", "quantity": 1, "analyticsDetailParams": {"itemId": "19000000001"}}], '
+                                     '"meta": {"source": "pdp/product"}, "includeDeliveryThreshold": false}')
+
+    def test_add_not_confirmed(self):
+        got, _, _, _ = self.call(goldapple.add_to_cart, "19000000002", answers=[{}, GA_CART])
+        self.assertEqual(got, "⚠️ Золотое яблоко не подтвердило добавление: артикул 19000000002\n" + GA_CART_TEXT)
+
+    def test_add_then_the_cart_is_blocked(self):
+        got, sent, tab, _ = self.call(goldapple.add_to_cart, "19000163536", answers=[{}, None])
+        self.assertEqual(got, goldapple.BLOCKED)
+        self.assertEqual([s[:2] for s in sent], [("POST", "/front/api/cart/v3/items-by-sku?locale=ru"), GA_STATE[:2]])
+        tab.close.assert_called_once()
+
+    def test_add_needs_an_id_or_a_link(self):
+        got, _, _, ga_tab = self.call(goldapple.add_to_cart, "кушон")
+        self.assertEqual(got, "нужен артикул варианта (из goldapple_item) или ссылка на товар")
+        ga_tab.assert_not_called()
+
+    def test_remove(self):
+        got, sent, tab, _ = self.call(goldapple.remove_from_cart, " /19000163536-cushion ", answers=[GA_CART, {}, SHAMPOO_CART])
+        self.assertEqual(got, "удалено: артикул 19000163536\n" + SHAMPOO_TEXT)
+        self.assertEqual(sent, [GA_STATE, ("DELETE", "/front/api/cart/v3/items?locale=ru&includeDeliveryThreshold=false&itemSkus=19000163536", None),
+                                GA_STATE])
+        tab.close.assert_called_once()
+
+    def test_remove_a_line_whose_id_the_site_gives_as_a_number(self):
+        got, sent, _, _ = self.call(goldapple.remove_from_cart, "19000000001", answers=[SHAMPOO_CART, None, {"data": {"rawCart": {"items": []}}}])
+        self.assertEqual(got, "удалено: артикул 19000000001\nкорзина Золотого яблока пуста")
+        self.assertEqual(sent[1][1], "/front/api/cart/v3/items?locale=ru&includeDeliveryThreshold=false&itemSkus=19000000001")
+
+    def test_remove_not_confirmed(self):
+        got, _, _, _ = self.call(goldapple.remove_from_cart, "19000163536", answers=[GA_CART, {}, GA_CART])
+        self.assertEqual(got, "⚠️ Золотое яблоко не подтвердило удаление: артикул 19000163536\n" + GA_CART_TEXT)
+
+    def test_remove_what_is_not_in_the_cart(self):
+        got, sent, tab, _ = self.call(goldapple.remove_from_cart, "19000000002", answers=[GA_CART])
+        self.assertEqual(got, "такого артикула в корзине нет\n" + GA_CART_TEXT)
+        self.assertEqual(sent, [GA_STATE])
+        tab.close.assert_called_once()
+
+    def test_remove_blocked(self):
+        got, sent, tab, _ = self.call(goldapple.remove_from_cart, "19000163536", answers=[None])
+        self.assertEqual((got, sent), (goldapple.BLOCKED, [GA_STATE]))
+        tab.close.assert_called_once()
+        got, sent, tab, _ = self.call(goldapple.remove_from_cart, "19000163536", answers=[GA_CART, {}, None])
+        self.assertEqual((got, len(sent)), (goldapple.BLOCKED, 3))
+        tab.close.assert_called_once()
+
+    def test_remove_needs_an_id_or_a_link(self):
+        got, _, _, ga_tab = self.call(goldapple.remove_from_cart, "кушон")
+        self.assertEqual(got, "нужен артикул из goldapple_cart")
+        ga_tab.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
