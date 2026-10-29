@@ -193,9 +193,16 @@ def item(sku_or_url, full=False):
         parts = [" ".join(t.get("content", "") for t in x.get("textRs") or [] if t.get("type") == "text")
                  + (f" (−{x['iconText']})" if x.get("iconText") else "") for x in w.get("lines", [])]
         out.append("стало дешевле: " + "; ".join(parts) + " — Ozon сравнивает цену без банков-партнёров со средней за прошлый месяц")
+    descs = _widgets(page2, "webDescription-")
     photos = [i.get("src") for g in _widgets(page, "webGallery-") for i in g.get("images", []) if i.get("src")]
     if photos:
         out.append("фото (shop_images): " + " ".join(photos[:10]))
+    # rich descriptions keep their own pictures, often with the kit and sizes (upstream, 2026-10-19)
+    pics = dict.fromkeys(re.findall(r'https://(?:ir|cdn\d*)\.ozone\.ru/[^"\s\\]+?\.(?:jpe?g|png|webp)',
+                                    json.dumps(descs)))
+    pics = [u for u in pics if u not in photos]
+    if pics:
+        out.append("картинки из описания (shop_images; на них часто комплектация и размеры): " + " ".join(pics[:10]))
     out.append("отзывы с фото и видео: ozon_reviews")
     chars = []
     for w in _widgets(page2, "webCharacteristics-"):
@@ -205,9 +212,14 @@ def item(sku_or_url, full=False):
                     if c.get("key") != "Sku":
                         chars.append(f"  {c.get('name')}: {', '.join(v.get('text', '') for v in c.get('values', []))}")
     out.append("характеристики:\n" + ("\n".join(chars) if chars else "  (нет)"))
-    desc = _html_text(next(iter(_widgets(page2, "webDescription-")), {}).get("richAnnotation", ""))
+    desc = _html_text(next(iter(descs), {}).get("richAnnotation", ""))
     if desc:
         out.append("описание:\n" + (desc if full else desc[:2500]))
+    # sellers' own blocks next to the description, e.g. «Комплектация» (upstream, 2026-10-19: Multifix card)
+    for w in descs:
+        for c in w.get("characteristics", []):
+            if c.get("title") and c.get("content"):
+                out.append(f"{c['title']}:\n  " + c["content"].strip().replace("\n", "\n  "))
     return "\n".join(out)
 
 

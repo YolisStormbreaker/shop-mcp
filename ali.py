@@ -30,7 +30,15 @@ def _fetch(tab, path, body=None, method="POST", retried=False):
     opts = {"method": method, "credentials": "include", "headers": {"Content-Type": "application/json"}}
     if body is not None:
         opts["body"] = json.dumps(body)
-    r = tab.js(f"fetch({json.dumps(path)}, {json.dumps(opts)}).then(async r => ({{s: r.status, b: await r.text()}}))")
+    # Ali wraps fetch(): while its slider check (baxia-dialog) is open, the request waits for a
+    # human and never settles.  Seen 2026-10-22 after a burst of review requests; a reload kept it.
+    r = tab.js(f"Promise.race([fetch({json.dumps(path)}, {json.dumps(opts)}).then(async r => ({{s: r.status, b: await r.text()}})),"
+               " new Promise(res => setTimeout(() => res(null), 25000))])", timeout=40)
+    if r is None:
+        if tab.js("!!document.querySelector('.baxia-dialog-content')"):
+            raise RuntimeError("⚠️ AliExpress показал проверку на бота (слайдер) и держит запросы: shop-chrome show, "
+                               "пройти её во вкладке aliexpress.ru, shop-chrome hide")
+        raise RuntimeError(f"AliExpress не ответил за 25 с на {path}")
     try:
         return json.loads(r["b"])
     except ValueError:
