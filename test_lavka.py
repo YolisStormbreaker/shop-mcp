@@ -157,6 +157,10 @@ class LavkaSearchTests(unittest.TestCase):
     def test_fact_list_did_not_answer(self):
         self.assertEqual(search({("v1/products/list/by-attribute", "regular"): None}, "", tag="веган")[0], lavka.BLOCKED)
 
+    def test_fact_list_answered_empty_is_empty_not_blocked(self):
+        got, _ = search({("v1/products/list/by-attribute", "regular"): {}}, "", tag="веган")
+        self.assertEqual((got["items"], got["total"]), ([], 0))
+
     def test_unknown_tag_is_searched_as_text_and_sorted(self):
         expected = {"price": [K3, K2, K1, K4, K5], "price_desc": [K4, K1, K2, K3, K5], "discount": [K5, K4, K1, K3, K2],
                     "rating": [K2, K1, K3, K4, K5]}

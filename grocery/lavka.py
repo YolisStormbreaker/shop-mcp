@@ -129,7 +129,7 @@ def _found(tab, query, how, limit):
     """Both depots' hits, or a fact's list when there is no query; None when the site did not answer."""
     if how and how[0] == "fact" and not query:
         d = _post(tab, "v1/products/list/by-attribute", {"attribute": {"type": "fact", "value": how[1]}, "limit": max(limit, 20)})
-        return [_listed(p, "regular") for p in d.get("products") or []] if d else None
+        return None if d is None else [_listed(p, "regular") for p in d.get("products") or []]
     items = _search_depot(tab, query, "regular", limit)
     if items is not None:
         items += _search_depot(tab, query, "supermarket", limit) or []
