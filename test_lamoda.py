@@ -150,6 +150,15 @@ class LamodaItemTests(unittest.TestCase):
     def test_full_description(self):
         self.assertTrue(self.item(ITEM, full=True)[0].endswith("\n\n" + DESCRIPTION))
 
+    def test_a_marketplace_seller_is_named_from_the_owner(self):
+        # the site's seller.title for a partner is the link text «подробнее»; the name is in product.owner
+        partner = {**ITEM, "seller": {"title": "подробнее", "id": "426"},
+                   "owner": {"id": "426", "shop_name": "ТМ Тест", "company_name": 'ООО "Тест"'}}
+        got, _, _, _ = self.item(partner)
+        self.assertIn('sku: MP002XW0ABCD · продавец: ТМ Тест (ООО "Тест") · можно вернуть', got.splitlines())
+        got, _, _, _ = self.item({**partner, "owner": {"company_name": 'ООО "Тест"'}})
+        self.assertIn('sku: MP002XW0ABCD · продавец: ООО "Тест" · можно вернуть', got.splitlines())
+
     def test_bare_card_by_relative_link(self):
         got, tab, _, _ = self.item(BARE_ITEM, " /p/ab123xy45678/sharf/?utm_source=x ")
         self.assertEqual(tab.goto.call_args.args[0], "https://www.lamoda.ru/p/ab123xy45678/sharf/?utm_source=x")

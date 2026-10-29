@@ -129,8 +129,16 @@ def _item_head(p):
 
 
 def _seller(p):
-    return f"sku: {p.get('sku')} · продавец: {(p.get('seller') or {}).get('title') or ''} · " + \
-        ("можно вернуть" if p.get("is_returnable") else "⚠️ без возврата")
+    return f"sku: {p.get('sku')} · продавец: {_seller_name(p)} · " + ("можно вернуть" if p.get("is_returnable") else "⚠️ без возврата")
+
+
+def _seller_name(p):
+    """A partner's seller.title is the link text «подробнее»; its shop and legal names are in product.owner."""
+    o = p.get("owner") or {}
+    shop, company = o.get("shop_name") or "", o.get("company_name") or ""
+    if shop or company:
+        return f"{shop} ({company})" if shop and company else shop or company
+    return (p.get("seller") or {}).get("title") or ""
 
 
 def _item_sizes(p):
