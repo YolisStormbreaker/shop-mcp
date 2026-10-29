@@ -362,6 +362,7 @@ def add_to_cart(url):
 
 
 def _add(tab, url):
+    tab.call("Page.bringToFront")      # the clicks need the visible tab: in a shown window this makes it so
     before = _open_cart(tab)
     if before is None:
         return BLOCKED
@@ -391,6 +392,7 @@ def remove_from_cart(sku):
 
 
 def _remove(tab, sku):
+    tab.call("Page.bringToFront")
     rows = _open_cart(tab)
     if rows is None:
         return BLOCKED

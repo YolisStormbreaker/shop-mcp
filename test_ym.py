@@ -303,6 +303,7 @@ CART_READY = "!!document.querySelector('input[type=checkbox]') || /пуст/i.te
 ITEM_READY = "!!document.querySelector('h1')"
 OPEN = page(ym.CART_URL, CART_READY) + [("js", "rows")]
 TAB, CLOSE = [("tab_for", "market.yandex.ru")], [("close",)]
+FRONT = [("call", "Page.bringToFront", {})]   # cart changes are clicks: this tab comes to the front of the shown window
 ITEM_PAGE = "https://market.yandex.ru/card/zaryadka-b/1002"
 BUY = [("click", '[data-auto="main"] [data-auto="cartButton"]')]
 MOUSE = [("call", "Input.dispatchMouseEvent", {"type": t, "x": 640.5, "y": 360.0, "button": "left", "clickCount": 1})
@@ -344,7 +345,7 @@ class YmAddToCartTests(unittest.TestCase):
     def test_adds_the_offer_by_a_relative_link(self):
         got, steps, _ = drive(ym.add_to_cart, Market([[ROW_A], [ROW_A, {**ROW_B, "qty": "1"}]]), "/card/zaryadka-b/1002")
         self.assertEqual(got, "добавлено: sku 1002\n" + cart_text(LINE_A, "1002\t1\t1200₽\t\tЗарядка B 1 200 ₽"))
-        self.assertEqual(steps, TAB + OPEN + page(ITEM_PAGE, ITEM_READY) + BUY + [("sleep", 2)] + OPEN + CLOSE)
+        self.assertEqual(steps, TAB + FRONT + OPEN + page(ITEM_PAGE, ITEM_READY) + BUY + [("sleep", 2)] + OPEN + CLOSE)
 
     def test_one_more_piece_counts_as_added(self):
         got = drive(ym.add_to_cart, Market([[ROW_A, ROW_B], [{**ROW_A, "qty": "2"}, ROW_B]]), ITEM_PAGE)[0]
@@ -357,7 +358,7 @@ class YmAddToCartTests(unittest.TestCase):
     def test_hidden_tab(self):
         got, steps, _ = drive(ym.add_to_cart, Market([[ROW_A]], visible=False, clicked=False), ITEM_PAGE)
         self.assertEqual(got, "не добавлено: " + ym.NOT_ON_SCREEN)
-        self.assertEqual(steps, TAB + OPEN + page(ITEM_PAGE, ITEM_READY) + BUY + [("visible",)] + CLOSE)
+        self.assertEqual(steps, TAB + FRONT + OPEN + page(ITEM_PAGE, ITEM_READY) + BUY + [("visible",)] + CLOSE)
 
     def test_no_button(self):
         got = drive(ym.add_to_cart, Market([[ROW_A]], clicked=False), ITEM_PAGE)[0]
@@ -376,34 +377,34 @@ class YmAddToCartTests(unittest.TestCase):
             with self.subTest(page=n):
                 got, log, _ = drive(ym.add_to_cart, Market([[ROW_A]], captcha={n}), ITEM_PAGE)
                 self.assertEqual(got, ym.BLOCKED)
-                self.assertEqual(log, TAB + steps + CLOSE)
+                self.assertEqual(log, TAB + FRONT + steps + CLOSE)
 
 class YmRemoveFromCartTests(unittest.TestCase):
     def test_takes_off_every_piece(self):
         market = Market([[ROW_A, ROW_B], [ROW_A, {**ROW_B, "qty": "1"}], [ROW_A]])
         got, steps, _ = drive(ym.remove_from_cart, market, 1002)
         self.assertEqual(got, "удалено: sku 1002\n" + cart_text(LINE_A))
-        self.assertEqual(steps, TAB + OPEN + [("visible",)] + minus_click("1002") * 2 + OPEN + CLOSE)
+        self.assertEqual(steps, TAB + FRONT + OPEN + [("visible",)] + minus_click("1002") * 2 + OPEN + CLOSE)
 
     def test_a_line_without_a_quantity_takes_one_click(self):
         got, steps, _ = drive(ym.remove_from_cart, Market([[ROW_A, {**ROW_B, "qty": ""}], [ROW_A]]), "1002")
         self.assertEqual(got, "удалено: sku 1002\n" + cart_text(LINE_A))
-        self.assertEqual(steps, TAB + OPEN + [("visible",)] + minus_click("1002") + OPEN + CLOSE)
+        self.assertEqual(steps, TAB + FRONT + OPEN + [("visible",)] + minus_click("1002") + OPEN + CLOSE)
 
     def test_no_minus_button(self):
         got, steps, _ = drive(ym.remove_from_cart, Market([[ROW_A, ROW_B]], minus=(None,)), " 1002 ")
         self.assertEqual(got, "⚠️ Маркет не подтвердил удаление: sku 1002\n" + cart_text(LINE_A, LINE_B))
-        self.assertEqual(steps, TAB + OPEN + [("visible",), ("minus", "1002")] + OPEN + CLOSE)
+        self.assertEqual(steps, TAB + FRONT + OPEN + [("visible",), ("minus", "1002")] + OPEN + CLOSE)
 
     def test_unknown_sku_is_not_clicked(self):
         got, steps, _ = drive(ym.remove_from_cart, Market([[ROW_A]]), "999")
         self.assertEqual(got, "такого sku в корзине нет\n" + cart_text(LINE_A))
-        self.assertEqual(steps, TAB + OPEN + CLOSE)
+        self.assertEqual(steps, TAB + FRONT + OPEN + CLOSE)
 
     def test_hidden_tab(self):
         got, steps, _ = drive(ym.remove_from_cart, Market([[ROW_A, ROW_B]], visible=False), "1002")
         self.assertEqual(got, "не удалено: " + ym.NOT_ON_SCREEN)
-        self.assertEqual(steps, TAB + OPEN + [("visible",)] + CLOSE)
+        self.assertEqual(steps, TAB + FRONT + OPEN + [("visible",)] + CLOSE)
 
     def test_captcha(self):
         steps_to = {1: page(ym.CART_URL, CART_READY, captcha=True),
@@ -412,7 +413,7 @@ class YmRemoveFromCartTests(unittest.TestCase):
             with self.subTest(page=n):
                 got, log, _ = drive(ym.remove_from_cart, Market([[ROW_A]], captcha={n}), "1001")
                 self.assertEqual(got, ym.BLOCKED)
-                self.assertEqual(log, TAB + steps + CLOSE)
+                self.assertEqual(log, TAB + FRONT + steps + CLOSE)
 
 
 class OtherSitesTests(unittest.TestCase):
