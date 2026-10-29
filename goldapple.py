@@ -43,24 +43,32 @@ def search(query, price_min=None, price_max=None, sort="relevance", page=1, limi
     if d is None:
         log.warning("goldapple search %s: no search-products response", url)
         return BLOCKED
+    return _search_table(d, url, page, limit)
+
+
+def _search_table(d, url, page, limit):
     data = d.get("data") or {}
-    rows = []
-    for i, p in enumerate((data.get("products") or [])[:limit]):
-        actual, old = _rub(p.get("price"), "actual"), _rub(p.get("price"), "old")
-        units = (p.get("attributes") or {}).get("units") or {}
-        volume = f"{units.get('currentUnitValue')} {units.get('name')}" if units.get("currentUnitValue") else ""
-        if units.get("count", 0) > 1:
-            volume += f" (вариантов: {units['count']})"
-        rv = p.get("reviews") or {}
-        rows.append(f"{i+1}\t{p.get('itemId')}\t{actual}\t{old if old and old != actual else ''}\t{p.get('brand', '')}\t"
-                    f"{p.get('name', '')}\t{p.get('productType', '')}\t{volume}\t{rv.get('rating') or ''}\t"
-                    f"{rv.get('reviewsCount') or ''}\t{'' if p.get('inStock') else 'нет в наличии'}\t{p.get('url', '')}")
+    rows = [_search_row(i + 1, p) for i, p in enumerate((data.get("products") or [])[:limit])]
     count = data.get("count") or len(rows)
     found = f"{count}+" if count >= 2000 else str(count)  # the site caps the count at 2000
     head = (f"Золотое яблоко · {found} найдено · страница {page} (по {PAGE}) · {url}\n"
             "ссылки относительно https://goldapple.ru; цены и наличие — для города из профиля\n"
             "#\tартикул\tцена ₽\tбез скидки\tбренд\tназвание\tтип\tобъём\tрейтинг\tотзывов\tналичие\tссылка")
     return head + "\n" + ("\n".join(rows) if rows else "(пусто)")
+
+
+def _search_row(n, p):
+    actual, old = _rub(p.get("price"), "actual"), _rub(p.get("price"), "old")
+    rv = p.get("reviews") or {}
+    return (f"{n}\t{p.get('itemId')}\t{actual}\t{old if old and old != actual else ''}\t{p.get('brand', '')}\t"
+            f"{p.get('name', '')}\t{p.get('productType', '')}\t{_volume(p)}\t{rv.get('rating') or ''}\t"
+            f"{rv.get('reviewsCount') or ''}\t{'' if p.get('inStock') else 'нет в наличии'}\t{p.get('url', '')}")
+
+
+def _volume(p):
+    units = (p.get("attributes") or {}).get("units") or {}
+    volume = f"{units.get('currentUnitValue')} {units.get('name')}" if units.get("currentUnitValue") else ""
+    return volume + (f" (вариантов: {units['count']})" if units.get("count", 0) > 1 else "")
 
 
 def _img(o, screen="fullhd"):
