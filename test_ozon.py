@@ -1,4 +1,4 @@
-"""Ozon read paths: the site's composer JSON (widgetStates) -> the text the tools return.
+"""Ozon: the site's composer JSON (widgetStates) -> the text the tools return, and what the cart tools send.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_ozon"""
 import calendar
 import json
@@ -332,6 +332,105 @@ class ReviewsTests(unittest.TestCase):
         with patch.object(ozon, "_tab") as tab:
             self.assertEqual(ozon.reviews(SKU, sort="new"),
                              "sort: одно из useful, high, low (сортировки по дате на Ozon нет: useful — «новые и полезные»)")
+        tab.assert_not_called()
+
+
+def cart_line(titles, prices, qty=None, post_body=None):
+    """One cart line: the texts of its title and price columns, its quantity control and its delete button's request."""
+    controls = {"quantity": {"current": qty}} if qty is not None else {}
+    if post_body is not None:
+        controls["deleteButton"] = {"common": {"action": {"params": {"postBody": post_body}}}}
+    return {"product": {"titleColumn": [{"type": "textAtom", "textAtom": {"text": t}} for t in titles],
+                        "priceColumn": [{"type": "priceV2", "priceV2": {"price": [{"text": t} for t in prices]}}]},
+            "controls": controls}
+
+
+def deletes(*items):
+    """The delete button's postBody: the sku list is JSON inside JSON."""
+    return json.dumps({"name": "deleteItems", "params": json.dumps({"items": list(items)})})
+
+
+LONG = "Кабель " + "очень длинный " * 10
+CART = page({
+    "cartSplit-1": {"header": {"title": "Доставка Ozon", "subtitle": {"text": "завтра"}}, "cartItems": [
+        cart_line(["Оригинал", "Осталось 15 шт.", "hoco Кабель USB Type-A/USB Type-C, 1 м", "Цвет: черный"],
+                  ["−56%", "149 ₽", "340 ₽"], 2, deletes(str(SKU))),
+        cart_line([LONG], ["1 234 ₽"], 1, deletes())]},              # no sku in the button's request
+    "cartSplit-2": {"cartItems": [
+        cart_line(["Короткое"], ["нет в наличии"], post_body="не JSON"),       # no quantity, title or price
+        cart_line(["Продавец Тест-Шоп из Китая"], ["990 ₽"], 1)]},            # no delete button
+    "total-3": {"summary": {"header": {"info": "4 товара · 1,2 кг"}, "footer": {"price": "2 373 ₽"}}}})
+CART_ROWS = ("sku\tшт\tцена\tназвание\tгруппа\n"
+             f"{SKU}\t2\t149 ₽\thoco Кабель USB Type-A/USB Type-C, 1 м\tДоставка Ozon\n"
+             f"\t1\t1 234 ₽\t{LONG[:110]}\tДоставка Ozon\n"
+             "\t\t\t\t\n"
+             "\t1\t990 ₽\tПродавец Тест-Шоп из Китая\t")
+
+
+class CartTests(unittest.TestCase):
+    def call(self, fn, *args, answer=None):
+        tab = MagicMock()
+        with patch.object(ozon, "_tab", return_value=tab), patch.object(ozon, "_page", return_value=answer) as get, \
+                patch.object(ozon, "_fetch", return_value=answer) as fetch:
+            out = fn(*args)
+        tab.close.assert_called_once()
+        return out, tab, get, fetch
+
+    def test_cart_lines_and_total(self):
+        out, tab, get, fetch = self.call(ozon.cart, answer=CART)
+        get.assert_called_once_with(tab, "/cart")
+        fetch.assert_not_called()
+        self.assertEqual(out, "корзина Ozon: 4 товара · 1,2 кг, итого 2 373 ₽\n" + CART_ROWS)
+
+    def test_nothing_selected_has_no_total(self):
+        out, *_ = self.call(ozon.cart, answer=page({"cartSplit-1": {"cartItems": []}, "total-2": {"summary": {"footer": {}}}}))
+        self.assertEqual(out, "корзина Ozon: , итого не посчитан: ни один товар не отмечен к оформлению\n"
+                              "sku\tшт\tцена\tназвание\tгруппа\n")
+
+    def test_no_total_widget(self):
+        out, *_ = self.call(ozon.cart, answer=page({"cartSplit-1": {"cartItems": [cart_line([LONG], ["1 ₽"], 3)]}}))
+        self.assertEqual(out.splitlines(), ["корзина Ozon: , итого не посчитан: ни один товар не отмечен к оформлению",
+                                            "sku\tшт\tцена\tназвание\tгруппа", f"\t3\t1 ₽\t{LONG[:110]}\t"])
+
+    def test_empty_cart(self):
+        out, *_ = self.call(ozon.cart, answer=page({"emptyCart-1": {}, "total-2": {"summary": {"footer": {"price": "0 ₽"}}}}))
+        self.assertEqual(out, "корзина Ozon пуста")
+
+    def test_add_by_link(self):
+        out, tab, get, fetch = self.call(ozon.add_to_cart, f"https://www.ozon.ru/product/kabel-{SKU}/?at=x",
+                                         answer={"success": True, "cart": {"cartItems": [{"id": 111, "qty": 1}, {"id": SKU, "qty": 3}]}})
+        fetch.assert_called_once_with(tab, "/api/composer-api.bx/_action/addToCart", "POST", [{"id": SKU, "quantity": 1}])
+        get.assert_not_called()
+        self.assertEqual(out, f"добавлено: sku {SKU}, в корзине этого товара 3 шт.")
+
+    def test_add_without_the_line_in_the_answer(self):
+        out, tab, _, fetch = self.call(ozon.add_to_cart, str(SKU), 2, answer={"success": True})
+        self.assertEqual(fetch.call_args.args[3], [{"id": SKU, "quantity": 2}])
+        self.assertEqual(out, f"добавлено: sku {SKU}, в корзине этого товара ? шт.")
+
+    def test_site_refuses_to_add(self):
+        out, *_ = self.call(ozon.add_to_cart, SKU, answer={"success": False, "message": "Товар закончился", "details": "д" * 300})
+        self.assertEqual(out, f"Ozon не добавил {SKU}: " + '{"success": false, "message": "Товар закончился", "details": "' + "д" * 238)
+
+    def test_remove_sends_the_sku_and_shows_the_cart_left(self):
+        left = page({"cartSplit-1": {"cartItems": [cart_line([LONG], ["1 ₽"], 1, deletes("42424242"))]},
+                     "total-2": {"summary": {"header": {"info": "1 товар"}, "footer": {"price": "1 ₽"}}}})
+        out, tab, get, fetch = self.call(ozon.remove_from_cart, f"https://www.ozon.ru/product/kabel-{SKU}/", answer=left)
+        fetch.assert_called_once_with(tab, "/api/entrypoint-api.bx/page/json/v2?url=%2Fcart", "POST",
+                                      {"name": "deleteItems", "params": '{"items": ["1002731400"]}'})
+        get.assert_not_called()
+        self.assertEqual(out, "удалено. корзина Ozon: 1 товар, итого 1 ₽\nsku\tшт\tцена\tназвание\tгруппа\n"
+                              f"42424242\t1\t1 ₽\t{LONG[:110]}\t")
+
+    def test_remove_the_last_line(self):
+        out, *_ = self.call(ozon.remove_from_cart, SKU, answer=page({"emptyCart-1": {}}))
+        self.assertEqual(out, "удалено. корзина Ozon пуста")
+
+    def test_no_sku_in_the_link(self):
+        with patch.object(ozon, "_tab") as tab:
+            for fn in (ozon.add_to_cart, ozon.remove_from_cart):
+                with self.assertRaisesRegex(ValueError, "не нашёл sku"):
+                    fn("https://www.ozon.ru/category/kabeli/")
         tab.assert_not_called()
 
 
