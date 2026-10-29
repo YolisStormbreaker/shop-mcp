@@ -119,10 +119,15 @@ def _open(nm, patterns):
                       f".find(n => /\\/vol\\d+\\/part\\d+\\/{nm}\\//.test(n)) || '').split('/{nm}/')[0]")
     finally:
         tab.close()
-    p = next((x for x in (d.get("detail") or {}).get("products", []) if str(x.get("id")) == nm), None)
+    p = _product(d, nm)
     if p and p.get("root"):
         _imt[nm] = p["root"]
     return d, p, f"{base}/{nm}" if base else ""
+
+
+def _product(d, nm):
+    """Product nm from the detail answer the page got; None if it is not there."""
+    return next((x for x in (d.get("detail") or {}).get("products", []) if str(x.get("id")) == nm), None)
 
 
 def _day(ts):
@@ -348,33 +353,46 @@ def add_to_cart(id_or_url, size=None, quantity=1):
         return "нужен артикул WB или ссылка на товар"
     tab = tab_for("wildberries.ru")
     try:
-        d = capture(tab, "wb", f"https://www.wildberries.ru/catalog/{nm}/detail.aspx", {"detail": ["/cards/v4/detail", f"nm={nm}"]})
-        p = next((x for x in (d.get("detail") or {}).get("products", []) if str(x.get("id")) == nm), None)
+        p = _product(capture(tab, "wb", f"https://www.wildberries.ru/catalog/{nm}/detail.aspx",
+                             {"detail": ["/cards/v4/detail", f"nm={nm}"]}), nm)
         if not p:
             return BLOCKED
-        sizes = p.get("sizes") or []
-        names = [str(x.get("origName") or x.get("name")) for x in sizes]
-        if size is None and len(sizes) > 1:
-            return "у товара несколько размеров, укажи size: " + ", ".join(names)
-        s = sizes[0] if size is None else next((x for x in sizes if str(size).strip().lower() in
-                                                (str(x.get("name")).lower(), str(x.get("origName")).lower())), None)
-        if not s:
-            return f"нет размера «{size}»; есть: " + ", ".join(names)
+        s, why = _size(p.get("sizes") or [], size)
+        if why:
+            return why
         chrt = s["optionId"]
         items = _cart(tab)
         if items is None:
             return BLOCKED
-        if any(i.get("id") == chrt for i in items):
+        if _has(items, chrt):
             return "уже в корзине, ничего не менял\n" + _cart_text(items)
-        items = _cart(tab, [{"chrt_id": chrt, "quantity": int(quantity), "cod_1s": int(nm), "client_ts": int(time.time()),
-                             "op_type": 1, "target_url": "", "meta_json": None, "analytics_json": None}])
+        items = _cart(tab, [_add_op(nm, chrt, quantity)])
     finally:
         tab.close()
     if items is None:
         return BLOCKED
-    ok = any(i.get("id") == chrt for i in items)
-    return (f"{'добавлено' if ok else '⚠️ Wildberries не подтвердил добавление'}: {p.get('name', '')}, {quantity} шт\n"
+    return (f"{'добавлено' if _has(items, chrt) else '⚠️ Wildberries не подтвердил добавление'}: {p.get('name', '')}, {quantity} шт\n"
             + _cart_text(items))
+
+
+def _size(sizes, size):
+    """(the size to add, None) or (None, why not): with no size asked for, the only one; else the one of that name or original name."""
+    names = ", ".join(str(x.get("origName") or x.get("name")) for x in sizes)
+    if size is None:
+        return (None, "у товара несколько размеров, укажи size: " + names) if len(sizes) > 1 else (sizes[0], None)
+    want = str(size).strip().lower()
+    s = next((x for x in sizes if want in (str(x.get("name")).lower(), str(x.get("origName")).lower())), None)
+    return (s, None) if s else (None, f"нет размера «{size}»; есть: " + names)
+
+
+def _has(items, chrt):
+    return any(i.get("id") == chrt for i in items)
+
+
+def _add_op(nm, chrt, quantity):
+    """The sync operation that puts quantity of size chrt of product nm in the cart (op_type 1)."""
+    return {"chrt_id": chrt, "quantity": int(quantity), "cod_1s": int(nm), "client_ts": int(time.time()),
+            "op_type": 1, "target_url": "", "meta_json": None, "analytics_json": None}
 
 
 # Removing is done the way the site does it: drop the line from the browser's cart and queue a
