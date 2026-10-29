@@ -203,7 +203,16 @@ def _about(card, full):
     return (["характеристики: " + "; ".join(specs)] if specs else []) + ["\n" + (desc if full else desc[:2500])]
 
 
-REVIEW_SORTS = ("useful", "new", "high", "low")
+def _votes(f):
+    """(pluses, minuses): how many found the review useful and not"""
+    v = f.get("votes") or {}
+    return v.get("pluses", 0), v.get("minuses", 0)
+
+
+REVIEW_SORTS = {"useful": lambda f: (_votes(f)[0] - _votes(f)[1], f.get("createdDate", "")),
+                "new": lambda f: f.get("createdDate", ""),
+                "high": lambda f: (f.get("productValuation", 0), f.get("createdDate", "")),
+                "low": lambda f: (-f.get("productValuation", 0), f.get("createdDate", ""))}
 
 
 def _media(f):
@@ -226,7 +235,7 @@ def _media(f):
 def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=20):
     nm = _nm(id_or_url)
     if not nm:
-        return "нужен артикул WB или ссылка вида https://www.wildberries.ru/catalog/<id>/detail.aspx"
+        return NEED_ID
     if sort not in REVIEW_SORTS:
         return f"sort: одно из {', '.join(REVIEW_SORTS)}"
     if nm not in _imt:
@@ -235,32 +244,38 @@ def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=20):
         return BLOCKED
     imt = _imt[nm]
     host = _get(f"https://feedback-bt.wildberries.ru/feedback/api/v2/host?imt={imt}")[0]
-    d = _get(f"{host}/feedbacks/v2/{imt}")
-    fb = d.get("feedbacks") or []
-    if with_media:
-        fb = [f for f in fb if f.get("photos") or f.get("video")]
-    key = {"useful": lambda f: ((f.get("votes") or {}).get("pluses", 0) - (f.get("votes") or {}).get("minuses", 0), f.get("createdDate", "")),
-           "new": lambda f: f.get("createdDate", ""),
-           "high": lambda f: (f.get("productValuation", 0), f.get("createdDate", "")),
-           "low": lambda f: (-f.get("productValuation", 0), f.get("createdDate", ""))}[sort]
-    fb.sort(key=key, reverse=True)
-    pages = max(1, -(-len(fb) // limit))
-    dist = d.get("valuationDistributionPercent") or {}
-    head = (f"Wildberries · артикул {nm} (карточка {imt}): рейтинг {d.get('valuation') or '—'}, отзывов {d.get('feedbackCount', 0)} "
-            f"(с текстом {d.get('feedbackCountWithText', 0)}, с фото {d.get('feedbackCountWithPhoto', 0)}, с видео {d.get('feedbackCountWithVideo', 0)}) · "
-            + " ".join(f"{k}★ {dist[k]}%" for k in sorted(dist, reverse=True)) + "\n"
+    return _reviews_text(nm, imt, _get(f"{host}/feedbacks/v2/{imt}"), sort, with_media, page, limit)
+
+
+def _reviews_text(nm, imt, d, sort, with_media, page, limit):
+    fb = sorted((f for f in d.get("feedbacks") or [] if not with_media or f.get("photos") or f.get("video")),
+                key=REVIEW_SORTS[sort], reverse=True)
+    rows = [_review(f) for f in fb[(page - 1) * limit: page * limit]]
+    return (_reviews_head(nm, imt, d) + "\n"
             f"WB отдаёт до ~1000 отзывов с текстом, сортировка и страницы — по ним: {len(fb)}{' с фото или видео' if with_media else ''}, "
-            f"страница {page} из {pages} по {limit}, сортировка {sort}. Отзывы на все цвета и размеры карточки.\n"
-            "дата\t★\tполезно +/−\tцвет, размер\tавтор\tтекст\tфото (shop_images), видео")
-    rows = []
-    for f in fb[(page - 1) * limit: page * limit]:
-        votes = f.get("votes") or {}
-        variant = ", ".join(x for x in (f.get("color"), f.get("size")) if x and x != "0")
-        text = " | ".join(x for x in (f"+ {f['pros']}" if f.get("pros") else "", f"− {f['cons']}" if f.get("cons") else "",
-                                      f.get("text") or "", f"ответ продавца: {f['answer'].get('text', '')[:300]}" if f.get("answer") else "") if x)
-        rows.append(f"{(f.get('createdDate') or '')[:10]}\t{f.get('productValuation')}\t+{votes.get('pluses', 0)}/−{votes.get('minuses', 0)}\t"
-                    f"{variant}\t{(f.get('wbUserDetails') or {}).get('name', '')}\t{' '.join(text.split())}\t{' '.join(_media(f))}")
-    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
+            f"страница {page} из {max(1, -(-len(fb) // limit))} по {limit}, сортировка {sort}. Отзывы на все цвета и размеры карточки.\n"
+            "дата\t★\tполезно +/−\tцвет, размер\tавтор\tтекст\tфото (shop_images), видео\n"
+            + ("\n".join(rows) if rows else "(отзывов нет)"))
+
+
+def _reviews_head(nm, imt, d):
+    dist = d.get("valuationDistributionPercent") or {}
+    return (f"Wildberries · артикул {nm} (карточка {imt}): рейтинг {d.get('valuation') or '—'}, отзывов {d.get('feedbackCount', 0)} "
+            f"(с текстом {d.get('feedbackCountWithText', 0)}, с фото {d.get('feedbackCountWithPhoto', 0)}, с видео {d.get('feedbackCountWithVideo', 0)}) · "
+            + " ".join(f"{k}★ {dist[k]}%" for k in sorted(dist, reverse=True)))
+
+
+def _review(f):
+    pluses, minuses = _votes(f)
+    variant = ", ".join(x for x in (f.get("color"), f.get("size")) if x and x != "0")
+    return (f"{(f.get('createdDate') or '')[:10]}\t{f.get('productValuation')}\t+{pluses}/−{minuses}\t"
+            f"{variant}\t{(f.get('wbUserDetails') or {}).get('name', '')}\t{' '.join(_review_text(f).split())}\t{' '.join(_media(f))}")
+
+
+def _review_text(f):
+    """+ pros | − cons | text | the seller's answer"""
+    return " | ".join(x for x in (f"+ {f['pros']}" if f.get("pros") else "", f"− {f['cons']}" if f.get("cons") else "",
+                                  f.get("text") or "", f"ответ продавца: {f['answer'].get('text', '')[:300]}" if f.get("answer") else "") if x)
 
 
 CART = "https://www.wildberries.ru/lk/basket"
