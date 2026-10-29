@@ -1,5 +1,7 @@
-"""Самокат read paths: the site's tab, its endpoint answers -> search results and the product card.
-No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_samokat"""
+"""Самокат: the site's tab, its endpoint answers -> search results and the product card; the cart, with the quantity
+add_to_cart and remove_from_cart would hand the site's own cart sync.  No requests to shops.
+Run: .venv/bin/python -B -m unittest -v test_samokat"""
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -293,6 +295,129 @@ class SamokatUuidTests(unittest.TestCase):
     def test_unknown_slug(self):
         self.assertEqual(self.uuid(None, "nope")[0], (None, "nope"))
         self.assertEqual(self.uuid({"id": "u1"}, "nope")[0], ("u1", "nope"))
+
+
+UUID = CARD["id"]
+ARGS_JS = "(Object.values(window.__shopStore.getState().api.queries).find(e => e.endpointName === 'cart') || {}).originalArgs || null"
+WATER = {"id": "u2", "quantity": 1, "price": 4990}
+
+
+class Cart:
+    """The site's cart behind the fake page: the «cart» endpoint answers what it holds, SET_JS (the site's own cart sync)
+    sets one product's quantity unless the site refuses. `args` are the cart query's own arguments the page keeps."""
+    def __init__(self, qty=0, card=CARD, args=None, refuses=False):
+        self.qty, self.card, self.args, self.refuses = qty, card, args, refuses
+        self.calls, self.sent = [], []
+        self.tab = MagicMock()
+        self.tab.js.side_effect = self.js
+
+    def js(self, expr, timeout=None):
+        if expr == ARGS_JS:
+            return self.args
+        assert expr.startswith(samokat.SET_JS + "(") and timeout == 40, expr
+        pid, qty = json.loads("[" + expr[len(samokat.SET_JS) + 1:-1] + "]")
+        self.sent.append((pid, qty))
+        if not self.refuses:
+            self.qty = qty
+        return True
+
+    def call(self, tab, name, args):
+        assert tab is self.tab
+        self.calls.append((name, args))
+        if name == "productByIdOrSlug":
+            return self.card
+        assert name == "cart", name
+        mine = [{"id": UUID, "quantity": self.qty, "price": 11500, "product": {"slug": "kefir-2-5-930-g", "name": "Кефир 2,5%, 930 г"}}]
+        return {"totalPrice": 11500 * self.qty + 4990, "products": [WATER] + (mine if self.qty else [])}
+
+
+def change(fn, cart, *args):
+    """fn(*args) with the fake cart: (answer, (product id, quantity) handed to the cart sync, endpoint calls)."""
+    with patch.object(samokat, "_tab", return_value=cart.tab), patch.object(samokat, "_call", side_effect=cart.call):
+        got = fn(*args)
+    cart.tab.close.assert_called_once()
+    return got, cart.sent, cart.calls
+
+
+LOOKUP = ("productByIdOrSlug", {"showcaseId": "SC", "productIdOrSlug": "kefir-2-5-930-g"})
+CART = ("cart", {"showcaseId": "SC", "buyout": False})
+KEFIR = "Кефир 2,5%, 930 г"
+
+
+class SamokatAddToCartTests(unittest.TestCase):
+    def test_add_by_link(self):
+        got, sent, calls = change(samokat.add_to_cart, Cart(), "https://samokat.ru/product/kefir-2-5-930-g", 2)
+        self.assertEqual((sent, calls), ([(UUID, 2)], [LOOKUP, CART, CART]))
+        self.assertEqual(got, f"в корзине Самоката: {KEFIR} — 2 шт")
+
+    def test_add_by_uuid_on_top_of_the_cart_with_the_pages_own_cart_args(self):
+        args = {"showcaseId": "sc-7", "buyout": False}
+        got, sent, calls = change(samokat.add_to_cart, Cart(qty=1, args=args), UUID)
+        self.assertEqual((sent, calls), ([(UUID, 2)], [("cart", args)] * 2))
+        self.assertEqual(got, f"в корзине Самоката: {UUID} — 2 шт")
+
+    def test_quantity_is_one_to_thirty(self):
+        for quantity, sent in ((0, 1), (-1, 1), ("3", 3), (99, 30)):
+            with self.subTest(quantity):
+                got, sent_, _ = change(samokat.add_to_cart, Cart(), UUID, quantity)
+                self.assertEqual((sent_, got), ([(UUID, sent)], f"в корзине Самоката: {UUID} — {sent} шт"))
+
+    def test_unknown_product(self):
+        got, sent, calls = change(samokat.add_to_cart, Cart(card=None), "nope")
+        self.assertEqual((got, sent, calls), ("Самокат: товар nope не найден на витрине для адреса пользователя", [],
+                                              [("productByIdOrSlug", {"showcaseId": "SC", "productIdOrSlug": "nope"})]))
+
+    def test_the_site_refuses(self):
+        got, sent, _ = change(samokat.add_to_cart, Cart(refuses=True), "kefir-2-5-930-g")
+        self.assertEqual((got, sent), (f"Самокат не положил «{KEFIR}» в корзину (нет на складе?)", [(UUID, 1)]))
+
+
+class SamokatRemoveFromCartTests(unittest.TestCase):
+    def test_remove(self):
+        got, sent, calls = change(samokat.remove_from_cart, Cart(qty=3), "kefir-2-5-930-g")
+        self.assertEqual((sent, calls), ([(UUID, 0)], [LOOKUP, CART, CART]))
+        self.assertEqual(got, f"убрано из корзины Самоката: {KEFIR}")
+
+    def test_not_in_the_cart(self):
+        got, sent, calls = change(samokat.remove_from_cart, Cart(), "kefir-2-5-930-g")
+        self.assertEqual((got, sent, calls), (f"«{KEFIR}» в корзине Самоката нет", [], [LOOKUP, CART]))
+
+    def test_unknown_product(self):
+        got, sent, calls = change(samokat.remove_from_cart, Cart(card=None), "nope")
+        self.assertEqual((got, sent, calls), ("«nope» в корзине Самоката нет", [],
+                                              [("productByIdOrSlug", {"showcaseId": "SC", "productIdOrSlug": "nope"})]))
+
+    def test_the_site_refuses(self):
+        got, sent, _ = change(samokat.remove_from_cart, Cart(qty=2, refuses=True), UUID)
+        self.assertEqual((got, sent), (f"не удалось убрать «{UUID}» из корзины Самоката", [(UUID, 0)]))
+
+
+class SamokatCartTests(unittest.TestCase):
+    def test_cart(self):
+        got, sent, calls = change(samokat.cart, Cart(qty=2))
+        self.assertEqual((sent, calls), ([], [CART]))
+        self.assertEqual(got, "корзина Самоката: итого 279.9 ₽\nid\tшт\tцена ₽\tназвание\n"
+                              "u2\t1\t49.9\t\n"
+                              f"kefir-2-5-930-g\t2\t115.0\t{KEFIR}")
+
+    def test_cart_with_the_pages_own_args(self):
+        args = {"showcaseId": "sc-7", "buyout": True}
+        self.assertEqual(change(samokat.cart, Cart(args=args))[2], [("cart", args)])
+
+    def test_empty_cart(self):
+        cart = Cart()
+        cart.call = lambda tab, name, args: {"totalPrice": 0, "products": []}
+        self.assertEqual(change(samokat.cart, cart)[0], "корзина Самоката пуста")
+
+    def test_cart_without_an_answer(self):
+        cart = Cart()
+        cart.call = lambda tab, name, args: None
+        self.assertEqual(change(samokat.cart, cart)[0], "корзина Самоката пуста")
+
+    def test_no_tab(self):
+        with patch.object(samokat, "_tab", return_value=None), patch.object(samokat, "_call") as call:
+            self.assertEqual([samokat.cart(), samokat.add_to_cart(UUID), samokat.remove_from_cart(UUID)], [samokat.BLOCKED] * 3)
+        call.assert_not_called()
 
 
 if __name__ == "__main__":
