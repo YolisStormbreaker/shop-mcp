@@ -135,6 +135,12 @@ class LavkaSearchTests(unittest.TestCase):
         self.assertEqual(post.call_args.args[2], search_body("кефир", 40))
         self.assertEqual(got, {"items": [K2, K1], "total": 2, "note": "тег Лавки «без лактозы»", "facets": list(lavka.TAGS), "url": URL})
 
+    def test_tags_match_whatever_case_the_site_writes_them_in(self):
+        protein = {"id": "k6", "title": "Сыр протеиновый", "currentPrice": "150", "available": True, "productTags": ["HighProtein"]}
+        got, _ = search({("search/v3/lavka", "regular"): {"cacheProducts": [protein, KEFIR]}, ("search/v3/lavka", "supermarket"): {}},
+                        "сыр", tag="много белка")
+        self.assertEqual([p["id"] for p in got["items"]], ["k6"])
+
     def test_gluten_free_is_read_from_the_allergens(self):
         got, _ = search(DEPOTS, "кефир", tag="Без глютена")
         self.assertEqual(got, {"items": [K1, K3, K4, K5], "total": 4,

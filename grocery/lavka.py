@@ -141,7 +141,8 @@ def _tagged(items, how, tag):
     if kind == "noallergen":
         return [p for p in items if val not in p["_allergens"]], \
             f"тег Лавки «{tag}» — по списку аллергенов: глютена в нём нет (сайт этого не утверждает)"
-    return [p for p in items if val in p["_tags"]], f"тег Лавки «{tag}»"
+    # the site's case varies by tag: withoutLactose but HighProtein
+    return [p for p in items if val.lower() in {t.lower() for t in p["_tags"]}], f"тег Лавки «{tag}»"
 
 
 def _pid(id_or_url):
