@@ -174,7 +174,7 @@ class VkusvillProductTests(unittest.TestCase):
         got, _ = self.product(details, {"rest": None, "max": 0, "delivery": ""}, "https://vkusvill.ru/goods/tvorog-5/?from=search")
         self.assertEqual(got, dict(row("5", "Творог", "", 50, available=False), photos=[], description="",
                                    composition="молоко, закваска", nutrition={"kcal": 160.0, "protein": 18.0, "fat": 9.0, "carbs": 2.0},
-                                   composition_extra="", extra=["скидка % по карте", "на адрес пользователя: наличие не указано"]))
+                                   composition_extra="", extra=["скидка по карте", "на адрес пользователя: наличие не указано"]))
 
     def test_not_an_id(self):
         with Calls() as c:

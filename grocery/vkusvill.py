@@ -224,7 +224,8 @@ def _discount(d):
     pr = d.get("price") or {}
     if not (pr.get("discount_info") or pr.get("discount_percent")):
         return ""
-    return f"скидка {pr.get('discount_percent') or ''}% {_clean(pr.get('discount_info'))}".strip()
+    pct = pr.get("discount_percent")
+    return f"скидка {f'{pct}% ' if pct else ''}{_clean(pr.get('discount_info'))}".strip()
 
 
 def _stock(st):
