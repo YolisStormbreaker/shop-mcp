@@ -1,5 +1,5 @@
 """Перекрёсток read paths: the site's API answers -> search results, the product card, the review list; the API
-client's retry and cache; the tab it runs in.  No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_perekrestok"""
+client's retry and cache; the tab it runs in; the cart and favorites: what they would send and say.  No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_perekrestok"""
 import copy
 import unittest
 from unittest.mock import MagicMock, patch
@@ -342,6 +342,156 @@ class LineTests(unittest.TestCase):
 
     def test_basket_without_a_state(self):
         self.assertEqual(pk._line({}, 6), (None, ""))
+
+
+# --- cart and favorites: what would be sent, against a model of the basket ---------------------------------------
+
+KEFIR = {"id": 7001, "title": "Кефир 2,5%, 930г", "masterData": {"plu": 2093082}, "priceTag": {"price": 10999}}
+BREAD = {"id": 7002, "title": "Хлеб", "masterData": {"plu": 42}, "balanceState": "sold-out"}
+
+
+class Basket:
+    """The site's basket: «+» puts one unit of a product in, deleting the line takes it out; every call answers
+    the whole basket.  answers() gives run() the paths the cart code calls."""
+    def __init__(self, kefir=0, bread=0, state=None, plus=None, delete=True):
+        self.lines, self.state, self.plus_answers, self.delete = {"7001": kefir, "7002": bread}, state or {}, plus, delete
+
+    def view(self):
+        items = [{"product": p, "quantity": self.lines[str(p["id"])], "price": 10999, "cost": 10999 * self.lines[str(p["id"])]}
+                 for p in (KEFIR, BREAD) if self.lines[str(p["id"])]]
+        return {"items": items, "totalCost": sum(i["cost"] for i in items), **self.state}
+
+    def plus(self, _):
+        if self.plus_answers:
+            return self.plus_answers.pop(0)
+        self.lines["7001"] += 1
+        return self.view()
+
+    def remove(self, _):
+        if self.delete:
+            self.lines["7001"] = 0
+        return {}
+
+    def answers(self, basket=None):
+        """basket: what GET /basket answers in turn instead of the basket itself (None there: the basket)."""
+        reads = list(basket or [])
+        return {"/catalog/product/plu2093082": KEFIR, "/basket/plu2093082/plus": self.plus, "/basket/item/7001": self.remove,
+                "/basket": lambda _: (reads.pop(0) if reads else None) or self.view()}
+
+
+PRODUCT = ("get", "/catalog/product/plu2093082", None)
+PLUS = ("put", "/basket/plu2093082/plus", None)
+BASKET = ("get", "/basket", None)
+
+
+class CartTests(unittest.TestCase):
+    def test_cart(self):
+        got, calls = run(pk.cart, {"/basket": {"totalCost": 52998, "items": [
+            {"product": KEFIR, "quantity": 2, "price": 10999, "cost": 21998}, {"product": BREAD, "quantity": 1, "price": 31000, "cost": 31000},
+            {"product": {"title": "Без plu"}, "quantity": 1}, {}]}})
+        self.assertEqual(calls, [BASKET])
+        self.assertEqual(got, "корзина Перекрёстка, итого 529.98 ₽\nplu\tшт\tцена ₽\tсумма ₽\tназвание\tналичие\n"
+                              "2093082\t2\t109.99\t219.98\tКефир 2,5%, 930г\t\n42\t1\t310.0\t310.0\tХлеб\tнет в наличии\n"
+                              "\t1\tNone\tNone\tБез plu\t\n\t\tNone\tNone\t\t")
+
+    def test_cart_without_a_total(self):
+        got, _ = run(pk.cart, {"/basket": {"items": [{"product": KEFIR, "quantity": 1, "price": 10999, "cost": 10999}]}})
+        self.assertEqual(got.split("\n")[0], "корзина Перекрёстка")
+
+    def test_empty_cart(self):
+        for answer in ({"items": []}, None, {"__error": 403}):
+            with self.subTest(answer):
+                self.assertEqual(run(pk.cart, {"/basket": answer})[0], "корзина Перекрёстка пуста")
+
+
+class AddToCartTests(unittest.TestCase):
+    def test_plus_once_per_unit(self):
+        basket = Basket()
+        got, calls = run(pk.add_to_cart, basket.answers(), f"{SITE}/cat/1589/p/kefir-2-5-930g-2093082", 2)
+        self.assertEqual(calls, [PRODUCT, PLUS, PLUS])
+        self.assertEqual(got, "в корзине Перекрёстка: Кефир 2,5%, 930г — 2 шт × 109.99 ₽ = 219.98 ₽")
+
+    def test_under_the_minimum_order(self):
+        got, _ = run(pk.add_to_cart, Basket(kefir=1, state={"state": "too_cheap", "disabledButtonTitle": "Ещё 300 ₽"}).answers(), "2093082")
+        self.assertEqual(got, "в корзине Перекрёстка: Кефир 2,5%, 930г — 2 шт × 109.99 ₽ = 219.98 ₽\nдо минимального заказа ещё 300 ₽")
+
+    def test_quantity_is_one_to_thirty_calls(self):
+        for quantity, presses in ((0, 1), (-1, 1), ("3", 3), (31, 30)):
+            with self.subTest(quantity):
+                self.assertEqual(run(pk.add_to_cart, Basket().answers(), "2093082", quantity)[1], [PRODUCT] + [PLUS] * presses)
+
+    def test_refused(self):
+        for answer, said in (({"__error": 400}, "400"), (None, "None")):
+            with self.subTest(said):
+                basket = Basket(plus=[{"items": []}, answer])
+                got, calls = run(pk.add_to_cart, basket.answers(), "2093082", 3)
+                self.assertEqual((got, calls), (f"Перекрёсток не положил Кефир 2,5%, 930г: {said}", [PRODUCT, PLUS, PLUS]))
+
+    def test_not_in_the_basket_after_all(self):
+        got, _ = run(pk.add_to_cart, Basket(plus=[{"items": []}]).answers(), "2093082")
+        self.assertEqual(got, "Перекрёсток: Кефир 2,5%, 930г в корзине не появился (нет в наличии?)")
+
+    def test_unknown_product(self):
+        for answer in ({"__error": 404}, {"title": "без id"}, None):
+            with self.subTest(answer), self.assertRaisesRegex(ValueError, "Перекрёсток: товар plu 5 не найден"):
+                run(pk.add_to_cart, {"/catalog/product/plu5": answer}, "5")
+
+
+class RemoveFromCartTests(unittest.TestCase):
+    def test_line_is_deleted(self):
+        basket = Basket(kefir=3, bread=1)
+        got, calls = run(pk.remove_from_cart, basket.answers(), "2093082")
+        self.assertEqual(calls, [PRODUCT, BASKET, ("delete", "/basket/item/7001", None), BASKET])
+        self.assertEqual((got, basket.lines), ("убрано из корзины Перекрёстка: Кефир 2,5%, 930г", {"7001": 0, "7002": 1}))
+
+    def test_not_in_the_cart(self):
+        got, calls = run(pk.remove_from_cart, Basket(bread=1).answers(), "2093082")
+        self.assertEqual((got, calls), ("Кефир 2,5%, 930г в корзине Перекрёстка нет", [PRODUCT, BASKET]))
+
+    def test_still_there(self):
+        got, _ = run(pk.remove_from_cart, Basket(kefir=1, delete=False).answers(), "2093082")
+        self.assertEqual(got, "не удалось убрать Кефир 2,5%, 930г из корзины Перекрёстка")
+
+    def test_basket_that_did_not_come(self):
+        got, calls = run(pk.remove_from_cart, Basket(kefir=1).answers([{"__error": 500}]), "2093082")
+        self.assertEqual((got, calls), ("Кефир 2,5%, 930г в корзине Перекрёстка нет", [PRODUCT, BASKET]))
+
+    def test_basket_that_did_not_come_back(self):
+        got, _ = run(pk.remove_from_cart, Basket(kefir=1, delete=False).answers([None, {"__error": 500}]), "2093082")
+        self.assertEqual(got, "убрано из корзины Перекрёстка: Кефир 2,5%, 930г")
+
+
+class FavoritesTests(unittest.TestCase):
+    def test_favorites(self):
+        got, calls = run(pk.favorites, {"/user/liked-product": {"items": [{"product": ITEMS[0]}, {"product": None}, {}, {"product": ITEMS[1]}]}})
+        self.assertEqual(calls, [("get", "/user/liked-product?page=1&perPage=100", None)])
+        self.assertEqual(got, "избранное Перекрёстка\nplu\tцена ₽\tналичие\tназвание\n2093082\t109.99\t\tКефир 2.5%\n777\tNone\tнет в наличии\tКефир 1%")
+
+    def test_no_favorites(self):
+        for answer in ({"items": [{}]}, None, {"__error": 403}):
+            with self.subTest(answer):
+                self.assertEqual(run(pk.favorites, {"/user/liked-product": answer})[0], "избранное Перекрёстка пусто")
+
+
+class FavoriteTests(unittest.TestCase):
+    def test_add_and_remove(self):
+        for remove, method, said in ((False, "post", "в избранном"), (True, "delete", "убрано из избранного")):
+            with self.subTest(method):
+                got, calls = run(pk.favorite, {"/catalog/product/plu2093082": KEFIR, "/user/liked-product/7001": None}, "2093082", remove)
+                self.assertEqual(calls, [PRODUCT, (method, "/user/liked-product/7001", None)])
+                self.assertEqual(got, f"{said} Перекрёстка: Кефир 2,5%, 930г")
+
+    def test_refused(self):
+        got, _ = run(pk.favorite, {"/catalog/product/plu2093082": KEFIR, "/user/liked-product/7001": {"__error": 500}}, "2093082")
+        self.assertEqual(got, "Перекрёсток не изменил избранное: 500")
+
+    def test_product_without_a_title(self):
+        got, _ = run(pk.favorite, {"/catalog/product/plu5": {"id": 9}, "/user/liked-product/9": {}}, "5")
+        self.assertEqual(got, "в избранном Перекрёстка: ")
+
+    def test_unknown_product(self):
+        with self.assertRaisesRegex(ValueError, "Перекрёсток: товар plu 5 не найден"):
+            run(pk.favorite, {"/catalog/product/plu5": {"__error": 404}}, "5")
 
 
 if __name__ == "__main__":
