@@ -86,7 +86,7 @@ class ProductTests(unittest.TestCase):
     def test_labels_without_text(self):
         card = {"masterData": {"plu": 7}, "priceTag": {"labels": [{}]}, "features": [{"title": "Состав", "items": [{"key": "sostav"}]}]}
         got, _ = run(pk.product, {"/catalog/product/plu7": card, "/delivery/switcher": {}}, "plu7")
-        self.assertEqual((got["composition"], got["extra"]), ("", ["акции: "]))
+        self.assertEqual((got["composition"], got["extra"]), ("", []))
 
     def test_unknown_product(self):
         self.assertEqual(run(pk.product, {"/catalog/product/plu5": {"__error": 404}}, "5")[0], "Перекрёсток: товар 5 не найден")

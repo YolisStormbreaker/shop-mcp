@@ -242,10 +242,14 @@ def _info(p):
 
 def _extra(p, delivery, info):
     pt = p.get("priceTag") or {}
-    return [x for x in (pt.get("labels") and "акции: " + "; ".join(x.get("text", "") for x in pt["labels"] if x.get("text")),
-                        _weighed(p.get("masterData") or {}, pt),
+    return [x for x in (_labels(pt), _weighed(p.get("masterData") or {}, pt),
                         p.get("medianPrice") and f"обычная цена (медиана): {_rub(p['medianPrice'])} ₽",
                         _delivery(delivery), info and "характеристики: " + "; ".join(info)) if x]
+
+
+def _labels(pt):
+    texts = [x["text"] for x in pt.get("labels") or [] if x.get("text")]
+    return texts and "акции: " + "; ".join(texts)
 
 
 def _weighed(md, pt):
