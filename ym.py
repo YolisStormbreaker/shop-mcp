@@ -4,6 +4,7 @@ Search results are server-rendered; every snippet carries its data as JSON in da
 so the page is parsed rather than an API called. Prices and delivery are for the user's region.
 """
 import json
+import re
 import time
 import urllib.parse
 
@@ -33,28 +34,17 @@ ITEM_JS = r"""
   const t = s => (s || '').replace(/\s+/g, ' ').trim();
   const q = (sel, root = document) => t(root?.querySelector(sel)?.innerText);
   const main = document.querySelector('[data-auto="main"]');
-  const lines = (document.querySelector('[data-zone-name="ProductSpecsList"]')?.innerText || '')
-    .split('\n').map(t).filter(s => s && s !== 'Все характеристики');
-  const specs = [];
-  for (let i = 0; i + 1 < lines.length; i += 2) specs.push(lines[i] + ': ' + lines[i + 1]);
-  let z = {};
-  try { z = JSON.parse(document.querySelector('[data-zone-name="cartButton"][data-zone-data]')?.getAttribute('data-zone-data') || '{}'); } catch (e) {}
+  let zone = {};
+  try { zone = JSON.parse(document.querySelector('[data-zone-name="cartButton"][data-zone-data]')?.getAttribute('data-zone-data') || '{}'); } catch (e) {}
   return {
-    title: q('h1'), vendor: q('[data-auto="product-card-vendor"]'), rating: q('[data-auto="product-rating"]').replace(/\s*·$/, ''),
+    title: q('h1'), vendor: q('[data-auto="product-card-vendor"]'), rating: q('[data-auto="product-rating"]'),
     price: q('[data-auto="snippet-price-current"]', main), old: q('[data-auto="snippet-price-old"]', main),
     pay: /Пэй/.test(main?.innerText || ''),
     shop: q('[data-auto="shop-info-title"]'), trust: q('[data-auto="trust-info-block"]'),
-    // date/type up to the price only: after the price a variant shows the user's pickup address
-    delivery: [...document.querySelectorAll('[data-zone-name="deliveryVariant"]')].map(e => {
-      const v = e.innerText.split('\n').map(t).filter(Boolean);
-      const k = v.findIndex(s => /₽$/.test(s));
-      return (k >= 0 ? v.slice(0, k + 1) : v.slice(0, 1)).join(' ');
-    }),
-    specs, sku: z.marketSku || '', cross: z.isCrossBorder === 'true',
-    description: t(document.querySelector('[data-zone-name="description"]')?.innerText).replace(/Всё описание$/, ''),
-    // gallery thumbnails come in several sizes of one picture; /orig is the full one
-    photos: [...new Set([...document.querySelectorAll('[data-zone-name="pictureGallery"] img')].map(i => i.src)
-      .filter(s => /get-mpic/.test(s)).map(s => s.replace(/\/[^/]+$/, '/orig')))],
+    delivery: [...document.querySelectorAll('[data-zone-name="deliveryVariant"]')].map(e => e.innerText),
+    specs: document.querySelector('[data-zone-name="ProductSpecsList"]')?.innerText || '', zone,
+    description: q('[data-zone-name="description"]'),
+    photos: [...document.querySelectorAll('[data-zone-name="pictureGallery"] img')].map(i => i.src),
   };
 })()
 """
@@ -151,7 +141,37 @@ def item(url, full=False):
     if "market.yandex.ru" not in url:
         return "нужна ссылка на товар Яндекс Маркета (https://market.yandex.ru/card/...)"
     r = _read(url, "item", "!!document.querySelector('h1')", lambda tab: tab.js(ITEM_JS))
-    return BLOCKED if r is None else _card(r, url, full)
+    return BLOCKED if r is None else _card(_item(r), url, full)
+
+
+def _item(p):
+    """The card page's texts -> the fields of the card."""
+    z = p["zone"]
+    return {**p, "rating": re.sub(r"\s*·$", "", p["rating"]), "description": p["description"].removesuffix("Всё описание"),
+            "delivery": [_delivery(v) for v in p["delivery"]], "specs": _specs(p["specs"]), "photos": _gallery(p["photos"]),
+            "sku": z.get("marketSku") or "", "cross": z.get("isCrossBorder") == "true"}
+
+
+def _lines(text):
+    """innerText -> its non-empty lines, spaces collapsed."""
+    return [s for s in (" ".join(x.split()) for x in text.split("\n")) if s]
+
+
+def _delivery(text):
+    """Date and type up to the price only: after the price a variant shows the user's pickup address."""
+    v = _lines(text)
+    return " ".join(v[:next((k for k, s in enumerate(v) if s.endswith("₽")), 0) + 1])
+
+
+def _specs(text):
+    """«name, value» line pairs of the spec list."""
+    lines = [s for s in _lines(text) if s != "Все характеристики"]
+    return [f"{a}: {b}" for a, b in zip(lines[::2], lines[1::2])]
+
+
+def _gallery(srcs):
+    """Gallery thumbnails come in several sizes of one picture; /orig is the full one."""
+    return list(dict.fromkeys(re.sub(r"/[^/]+$", "/orig", s) for s in srcs if "get-mpic" in s))
 
 
 def _card(r, url, full):

@@ -93,13 +93,16 @@ class YmSearchTests(unittest.TestCase):
 CARD = "https://market.yandex.ru/card/kabel-a/101"
 PHOTOS = [f"https://avatars.mds.yandex.net/get-mpic/{n}/pic{n}/orig" for n in range(12)]
 DESCRIPTION = "Описание кабеля. " * 200      # 3400 characters
-FULL_ITEM = {"title": "Кабель A", "vendor": "Бренд", "rating": "4.9 (13K)", "price": "939 ₽", "old": "1 561 ₽", "pay": True,
+FULL_ITEM = {"title": "Кабель A", "vendor": "Бренд", "rating": "4.9 (13K) ·", "price": "939 ₽", "old": "1 561 ₽", "pay": True,
              "shop": "Магазин 1", "trust": "4.8 · 3 года на Маркете",
-             "delivery": ["Завтра, по клику 0 ₽", "Послезавтра, курьер 99 ₽"],
-             "specs": ["Длина: 1.2 м", "Разъём: USB Type-C"], "sku": "5713677624", "cross": True,
-             "description": DESCRIPTION, "photos": PHOTOS}
+             "delivery": ["Завтра,\nпо клику\n0 ₽\nул. Примерная, 1", "Послезавтра,  курьер\n\n 99 ₽ "],  # then the pickup address
+             "specs": "Длина\n1.2 м\n\nРазъём\nUSB Type-C\nВсе характеристики\nбез пары",
+             "zone": {"marketSku": "5713677624", "isCrossBorder": "true"},
+             "description": DESCRIPTION + "Всё описание",
+             "photos": [f"https://avatars.mds.yandex.net/get-mpic/{n}/pic{n}/{size}" for n in range(12) for size in ("50x50", "200x200")]
+             + ["https://yastatic.net/market/icon.svg"]}
 BARE_ITEM = {"title": "Кабель B", "vendor": "", "rating": "", "price": "", "old": "", "pay": False, "shop": "", "trust": "4.8 оценок",
-             "delivery": [], "specs": [], "sku": "", "cross": False, "description": "", "photos": []}
+             "delivery": [], "specs": "", "zone": {}, "description": "", "photos": []}
 
 
 class YmItemTests(unittest.TestCase):
@@ -116,6 +119,10 @@ class YmItemTests(unittest.TestCase):
 
     def test_full_description(self):
         self.assertTrue(call(ym.item, FULL_ITEM, CARD, full=True)[0].endswith("\n\n" + DESCRIPTION))
+
+    def test_delivery_without_a_price_keeps_its_first_line(self):
+        got = call(ym.item, {**BARE_ITEM, "delivery": ["Самовывоз\nиз магазина"]}, CARD)[0]
+        self.assertIn("\nдоставка: Самовывоз\n", got)
 
     def test_bare_card_by_relative_link(self):
         got, tab, _, _ = call(ym.item, BARE_ITEM, "/card/kabel-b/102")
