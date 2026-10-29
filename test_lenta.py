@@ -348,8 +348,14 @@ class LentaAddToCartTests(unittest.TestCase):
 
     def test_plus_gone_at_the_stock_limit(self):
         shop = Shop(stock=2)
-        self.assertEqual(shop.run(lenta.add_to_cart, "84812", 3), "Лента: кнопки «+» на странице Кефир 2,5% нет (нет в наличии?)")
-        self.assertEqual(shop.sent, [PAGE, ("В корзину", MODIFY), ("+", MODIFY)])
+        self.assertEqual(shop.run(lenta.add_to_cart, "84812", 3), "в корзине Ленты: Кефир 2,5% — 2 шт × 109.99 ₽; итого корзины 719.98 ₽\n"
+                                                                     "нажато 2 из 3: потом кнопки «+» на странице не стало (больше нет в наличии?)")
+        self.assertEqual(shop.sent, [PAGE, ("В корзину", MODIFY), ("+", MODIFY), PAGE])
+
+    def test_no_plus_at_all(self):
+        shop = Shop(qty=2, stock=2)
+        self.assertEqual(shop.run(lenta.add_to_cart, "84812"), "Лента: кнопки «+» на странице Кефир 2,5% нет (нет в наличии?)")
+        self.assertEqual(shop.sent, [PAGE])
 
     def test_presses_that_changed_nothing(self):
         shop = Shop(qty=1, inert=True)

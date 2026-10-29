@@ -292,13 +292,13 @@ def _press(tab, js, what="m", url="/api/rest/cartItemModify"):
 
 
 def _presses(tab, buttons):
-    """Press each of buttons in turn; the first one that is not on the page, or None."""
-    for b in buttons:
+    """Press each of buttons in turn, up to the first one that is not on the page; how many were pressed."""
+    for i, b in enumerate(buttons):
         if not tab.js(f"!!({b})"):
-            return b
+            return i
         _press(tab, b)
         time.sleep(0.8)
-    return None
+    return len(buttons)
 
 
 def _quantity(goods, pid):
@@ -333,13 +333,15 @@ def add_to_cart(id_or_url, quantity=1):
         if lookup is None:
             return BLOCKED
         have = _quantity(lookup[0], pid)
-        missing = _presses(tab, [INC if have else ADD] + [INC] * (max(1, min(int(quantity), 30)) - 1))
-        if missing:
-            return f"Лента: кнопки «{'+' if missing == INC else 'В корзину'}» на странице {card['name']} нет (нет в наличии?)"
+        n = max(1, min(int(quantity), 30))
+        pressed = _presses(tab, [INC if have else ADD] + [INC] * (n - 1))
+        if not pressed:
+            return f"Лента: кнопки «{'+' if have else 'В корзину'}» на странице {card['name']} нет (нет в наличии?)"
         lookup, _ = _load(tab, pid)
     finally:
         tab.close()
-    return _added(card["name"], lookup, pid, have)
+    return _added(card["name"], lookup, pid, have) + (f"\nнажато {pressed} из {n}: потом кнопки «+» на странице не стало (больше нет в наличии?)"
+                                                      if pressed < n else "")
 
 
 def _added(name, lookup, pid, have):
