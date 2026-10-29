@@ -36,12 +36,16 @@ FORM = {"disableBubbleUp": True, "sortByAlpha": True}     # the search form's ow
 DIET = "osobennosti"                                      # the facet of «Без лактозы», «Без сахара»…
 
 
+# the home page's client is up, or ServicePipe's check page came instead (then wait no longer)
+HOME_READY = "!!window.__LOADABLE_LOADED_CHUNKS__ && document.readyState === 'complete' || location.pathname.includes('/xpvnsulc/')"
+
+
 def _tab():
     tab = tab_for("perekrestok.ru")
     if "perekrestok.ru" not in (tab.js("location.hostname") or "") or not tab.js(FIND_API):
         # one load of the home page; a check page left in the tab may be stale — session restore after a Chrome
         # restart brings back the old one, already passed (2026-10-13). If the home page shows the check, it is real.
-        tab.goto(SITE + "/", "perekrestok", wait_js="!!window.__LOADABLE_LOADED_CHUNKS__ && document.readyState === 'complete' || location.pathname.includes('/xpvnsulc/')")
+        tab.goto(SITE + "/", "perekrestok", wait_js=HOME_READY)
         if not tab.js(FIND_API):
             checked = _checked(tab)
             tab.close()
@@ -96,7 +100,7 @@ def _request(tab, method, path, body):
 def _renew(tab):
     """Reload the home page; True when the site's client is back, the bot check raises."""
     tab.js("delete window.__shopApi")
-    tab.goto(SITE + "/", "perekrestok", wait_js="!!window.__LOADABLE_LOADED_CHUNKS__ && document.readyState === 'complete'")
+    tab.goto(SITE + "/", "perekrestok", wait_js=HOME_READY)
     time.sleep(1.5)
     if tab.js(FIND_API):
         return True

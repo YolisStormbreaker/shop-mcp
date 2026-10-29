@@ -258,7 +258,9 @@ class CallTests(unittest.TestCase):
         tab = api_tab('{"__error": 401}', '{"ok": 1}')
         self.assertEqual(self.call(tab, "get", "/basket"), {"ok": 1})
         tab.js.assert_any_call("delete window.__shopApi")
-        tab.goto.assert_called_once_with(SITE + "/", "perekrestok", wait_js="!!window.__LOADABLE_LOADED_CHUNKS__ && document.readyState === 'complete'")
+        # the wait ends on the bot-check page too, so a check is reported at once, not after goto's 30 s
+        tab.goto.assert_called_once_with(SITE + "/", "perekrestok", wait_js="!!window.__LOADABLE_LOADED_CHUNKS__ && document.readyState === "
+                                         "'complete' || location.pathname.includes('/xpvnsulc/')")
 
     def test_still_refused_after_renewal(self):
         tab = api_tab('{"__error": 403}', '{"__error": 403}')
