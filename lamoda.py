@@ -135,10 +135,10 @@ def _seller(p):
 def _seller_name(p):
     """A partner's seller.title is the link text «подробнее»; its shop and legal names are in product.owner."""
     o = p.get("owner") or {}
-    shop, company = o.get("shop_name") or "", o.get("company_name") or ""
-    if shop or company:
-        return f"{shop} ({company})" if shop and company else shop or company
-    return (p.get("seller") or {}).get("title") or ""
+    names = [x for x in (o.get("shop_name"), o.get("company_name")) if x]
+    if not names:
+        return (p.get("seller") or {}).get("title") or ""
+    return names[0] + "".join(f" ({x})" for x in names[1:])
 
 
 def _item_sizes(p):
