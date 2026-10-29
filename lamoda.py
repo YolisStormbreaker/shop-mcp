@@ -42,14 +42,7 @@ ITEM_JS = f"""
 def search(query, price_min=None, price_max=None, sort="default", page=1, limit=30):
     if sort not in SORTS:
         return f"sort: одно из {', '.join(SORTS)}"
-    qs = {"q": query}
-    if sort != "default":
-        qs["sort"] = sort
-    if price_min or price_max:
-        qs["price"] = f"{int(price_min or 0)},{int(price_max or 10_000_000)}"
-    if page > 1:
-        qs["page"] = page
-    url = "https://www.lamoda.ru/catalogsearch/result/?" + urllib.parse.urlencode(qs)
+    url = _search_url(query, price_min, price_max, sort, page)
     tab = tab_for("lamoda.ru")
     try:
         # the tab still holds the previous page's state until the new one loads
@@ -61,8 +54,21 @@ def search(query, price_min=None, price_max=None, sort="default", page=1, limit=
             log.warning("lamoda search %s: no __NUXT__ products, page %s", url, saved)
     finally:
         tab.close()
-    if r is None:
-        return BLOCKED
+    return BLOCKED if r is None else _search_table(r, url, limit)
+
+
+def _search_url(query, price_min, price_max, sort, page):
+    qs = {"q": query}
+    if sort != "default":
+        qs["sort"] = sort
+    if price_min or price_max:
+        qs["price"] = f"{int(price_min or 0)},{int(price_max or 10_000_000)}"
+    if page > 1:
+        qs["page"] = page
+    return "https://www.lamoda.ru/catalogsearch/result/?" + urllib.parse.urlencode(qs)
+
+
+def _search_table(r, url, limit):
     products = [x["product"] for x in r["products"] if x.get("type") == "product"]   # the rest are ad banners
     rows = [_search_row(i + 1, p) for i, p in enumerate(products[:limit])]
     pg = r["pagination"]
@@ -77,14 +83,19 @@ def _rub(price):
     return int(re.sub(r"\D", "", str(price.get("price", ""))) or 0)     # "1 040" -> 1040
 
 
+def _offers(prices):
+    """(the final price, the highest, when the final one ends) from {"original": {"price": "1 040"},
+    "action": {"price": "728", "discount": {"active_to": …}}, …}"""
+    offers = [x for x in (prices or {}).values() if _rub(x)]
+    final = min(offers, key=_rub, default={})
+    return _rub(final), max(map(_rub, offers), default=0), ((final.get("discount") or {}).get("active_to") or "")[:10]
+
+
 def _search_row(n, p):
-    """p.prices: {"original": {"price": "1 040"}, "action": {"price": "728", "discount": {"active_to": …}}, …}"""
-    prices = [x for x in (p.get("prices") or {}).values() if _rub(x)]
-    final = min(prices, key=_rub, default={})
-    price, base = _rub(final), max(map(_rub, prices), default=0)
+    price, base, until = _offers(p.get("prices"))
     sizes = " ".join(s["brand_title"] for s in p.get("sizes") or [] if s.get("stock_quantity"))
     return "\t".join(map(str, [
-        n, p["sku"], price, base if base > price else "", ((final.get("discount") or {}).get("active_to") or "")[:10],
+        n, p["sku"], price, base if base > price else "", until,
         (p.get("brand") or {}).get("title", ""), p.get("title", ""), f"{p['average_rating']:.1f}" if p.get("average_rating") else "",
         (p.get("counters") or {}).get("reviews") or "", sizes, "реклама" if p.get("ad_params") else "",
         f"/p/{p['sku'].lower()}/{p.get('seo_tail', '')}/"]))
