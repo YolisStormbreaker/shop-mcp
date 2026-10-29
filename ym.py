@@ -15,6 +15,7 @@ from shoplog import dump, log
 SORTS = {"default": None, "price": "aprice", "price_desc": "dprice", "rating": "rating", "with_reviews": "opinions", "new": "ddate"}
 CAPTCHA_JS = "/showcaptcha/.test(location.href) || /^Ой/.test(document.title)"
 BLOCKED = "⚠️ Яндекс Маркет показал капчу: shop-chrome show, пройти её в браузере, повторить."
+NOT_A_CARD = "нужна ссылка на товар Яндекс Маркета (https://market.yandex.ru/card/...)"
 
 SEARCH_JS = r"""
 (() => {
@@ -151,7 +152,7 @@ def _absolute(url):
 def item(url, full=False):
     url = _absolute(url)
     if "market.yandex.ru" not in url:
-        return "нужна ссылка на товар Яндекс Маркета (https://market.yandex.ru/card/...)"
+        return NOT_A_CARD
     r = _read(url, "item", "!!document.querySelector('h1')", lambda tab: tab.js(ITEM_JS))
     return BLOCKED if r is None else _card(_item(r), url, full)
 
@@ -237,7 +238,7 @@ def reviews(url, sort="useful", with_media=False, this_variant=False):
         return f"sort: одно из {', '.join(REVIEW_SORTS)}"
     url = _reviews_url(url)
     if not url:
-        return "нужна ссылка на товар Яндекс Маркета (https://market.yandex.ru/card/...)"
+        return NOT_A_CARD
     r = _read(url, "reviews", f"{REVIEW_ITEMS}.length > 0 || /нет отзывов|Отзывов пока нет/i.test(document.body.innerText)",
               lambda tab: _sorted_reviews(tab, sort, this_variant))
     return BLOCKED if r is None else _reviews_text(r, url, sort, with_media, this_variant)
@@ -347,6 +348,8 @@ def cart():
 
 def add_to_cart(url):
     url = _absolute(url)
+    if "market.yandex.ru" not in url:  # the same rule as item(): never drive the Market tab to another site
+        return NOT_A_CARD
     return _in_tab(lambda tab: _add(tab, url))
 
 

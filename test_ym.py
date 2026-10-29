@@ -363,11 +363,10 @@ class YmAddToCartTests(unittest.TestCase):
         got = drive(ym.add_to_cart, Market([[ROW_A]], clicked=False), ITEM_PAGE)[0]
         self.assertEqual(got, "не добавлено: не нашёл кнопку «В корзину» у основного предложения")
 
-    def test_any_link_is_opened_in_the_market_tab(self):
-        ozon = "https://www.ozon.ru/product/1"
-        got, steps, _ = drive(ym.add_to_cart, Market([[ROW_A]], clicked=False), ozon)
-        self.assertEqual(got, "не добавлено: не нашёл кнопку «В корзину» у основного предложения")
-        self.assertEqual(steps, TAB + OPEN + page(ozon, ITEM_READY) + BUY + [("visible",)] + CLOSE)
+    def test_a_foreign_link_is_not_opened(self):
+        got, steps, _ = drive(ym.add_to_cart, Market([[ROW_A]]), "https://www.ozon.ru/product/1")
+        self.assertEqual(got, "нужна ссылка на товар Яндекс Маркета (https://market.yandex.ru/card/...)")
+        self.assertEqual(steps, [])
 
     def test_captcha_on_each_page(self):
         steps_to = {1: page(ym.CART_URL, CART_READY, captcha=True),
