@@ -83,8 +83,9 @@ def search(query, price_min=None, price_max=None, sort="default", page=1, limit=
     items = _read(url, "search", "!!document.querySelector('[data-zone-name=\"productSnippet\"]')", lambda tab: tab.js(SEARCH_JS))
     if items is None:
         return BLOCKED
-    rows = [_search_row(n, x) for n, x in enumerate(_unique(map(_snippet, items)), 1)]
-    promoted = sum(1 for r in rows if "продвижение" in r)
+    cards = _unique(map(_snippet, items))
+    rows = [_search_row(n, x) for n, x in enumerate(cards, 1)]
+    promoted = sum(x["ad"] for x in cards)
     head = (f"Яндекс Маркет · страница {page} · карточек: {len(rows)}, продвигаемых: {promoted}; дальше — page={page + 1} · {url}\n"
             "ссылки относительно https://market.yandex.ru; цены и доставка — для региона из профиля\n"
             "#\tsku\tс картой Я Банка ₽\tбез карты ₽\tдо скидок ₽\tназвание\tмагазин\tрейтинг · купили\tдоставка\tпометки\tссылка")

@@ -73,6 +73,11 @@ class YmSearchTests(unittest.TestCase):
         self.assertEqual(got.splitlines()[0].split(" · ")[2], "карточек: 3, продвигаемых: 2; дальше — page=2")
         self.assertEqual(got.splitlines()[3:], SEARCH_ROWS[:1])
 
+    def test_a_title_with_the_word_is_not_promoted(self):
+        book = snippet({"marketSku": "104", "title": "Книга: продвижение в соцсетях", "price": 700, "sponsored": False}, href="/card/kniga/4")
+        got = call(ym.search, SNIPPETS + [book], "usb cable")[0]
+        self.assertEqual(got.splitlines()[0].split(" · ")[2], "карточек: 4, продвигаемых: 2; дальше — page=2")
+
     def test_empty_page(self):
         got = call(ym.search, [], "usb cable")[0]
         self.assertEqual(got, "Яндекс Маркет · страница 1 · карточек: 0, продвигаемых: 0; дальше — page=2 · "
