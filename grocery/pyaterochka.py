@@ -260,14 +260,22 @@ def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=20):
         d = _get(tab, f"{REVIEWS}/product-reviews?plu_id={plu}&page={page}&page_size={limit}&sort={SORTS[sort]}") or {}
     finally:
         tab.close()
-    c = cnt.get("content") or {}
-    head = (f"Пятёрочка · plu {plu}: рейтинг {c.get('rating') or '—'} ({c.get('rating_count') or 0} оценок), отзывов с текстом {c.get('reviews_count') or 0} · "
-            + " ".join(f"{i}★ {c.get(w, 0)}" for i, w in ((5, 'five'), (4, 'four'), (3, 'three'), (2, 'two'), (1, 'one')))
-            + f"\nстраница {page} по {limit}, сортировка {sort}. Фото и имён авторов у отзывов Пятёрочки нет"
+    return _reviews_head(plu, cnt.get("content") or {}, sort, page, limit, with_media) + "\n" + _review_rows(d, page)
+
+
+def _reviews_head(plu, c, sort, page, limit, with_media):
+    return (f"Пятёрочка · plu {plu}: рейтинг {c.get('rating') or '—'} ({c.get('rating_count') or 0} оценок), отзывов с текстом {c.get('reviews_count') or 0} · "
+            + _stars(c) + f"\nстраница {page} по {limit}, сортировка {sort}. Фото и имён авторов у отзывов Пятёрочки нет"
             + (" (with_media не применим)" if with_media else "") + "\nдата\t★\tполезно +/−\tтекст")
-    rows = [f"{(x.get('date') or '')[:10]}\t{x.get('rate')}\t+{x.get('likes', 0)}/−{x.get('dislikes', 0)}\t{' '.join((x.get('text') or '').split())}"
-            for x in d.get("items") or []]
-    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)") + ("\nесть ещё: page=" + str(page + 1) if d.get("has_next_page") else "")
+
+
+def _review_rows(d, page):
+    rows = [_review(x) for x in d.get("items") or []]
+    return ("\n".join(rows) if rows else "(отзывов нет)") + ("\nесть ещё: page=" + str(page + 1) if d.get("has_next_page") else "")
+
+
+def _review(x):
+    return f"{(x.get('date') or '')[:10]}\t{x.get('rate')}\t+{x.get('likes', 0)}/−{x.get('dislikes', 0)}\t{' '.join((x.get('text') or '').split())}"
 
 
 # Cart: a draft order behind headers only the site's code adds, so we press the product page's own buttons
