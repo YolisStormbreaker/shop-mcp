@@ -204,21 +204,15 @@ REVIEW_ITEMS = "document.querySelectorAll('[data-auto=\"review-item\"]')"
 REVIEWS_JS = r"""
 (() => {
   const t = s => (s || '').replace(/\s+/g, ' ').trim();
+  const text = (e, a) => e.querySelector(`[data-auto="${a}"]`)?.innerText || '';
   return {
     summary: t(document.querySelector('[data-auto="rating-distribution-block"]')?.innerText),
     dist: t(document.querySelector('[data-auto="rating-distribution"]')?.innerText),
     reviews: [...document.querySelectorAll('[data-auto="review-item"]')].map(e => {
-      let z = {};
-      try { z = JSON.parse(e.closest('[data-zone-data]')?.getAttribute('data-zone-data') || '{}'); } catch (x) {}
-      return {
-        grade: z.grade, date: z.date || t(e.querySelector('[data-auto="created-date"]')?.innerText),
-        up: z.votesAgree || 0, down: z.votesDisagree || 0,
-        author: t(e.querySelector('[data-auto="nickname"]')?.innerText),
-        text: (e.querySelector('[data-auto="review-description"]')?.innerText || '').split('\n').map(t).filter(Boolean).join(' | '),
-        variant: (e.querySelector('[data-auto="ugc-element-offer-info"]')?.innerText || '').split('\n').map(t).filter(Boolean).join(', '),
-        photos: [...new Set([...e.querySelectorAll('img')].map(i => i.src).filter(s => /get-market-ugc/.test(s))
-          .map(s => s.replace(/(get-market-ugc\/\d+\/[^/]+).*$/, '$1/orig')))],
-      };
+      let zone = {};
+      try { zone = JSON.parse(e.closest('[data-zone-data]')?.getAttribute('data-zone-data') || '{}'); } catch (x) {}
+      return {zone, date: t(text(e, 'created-date')), author: t(text(e, 'nickname')), text: text(e, 'review-description'),
+              variant: text(e, 'ugc-element-offer-info'), photos: [...e.querySelectorAll('img')].map(i => i.src)};
     }),
   };
 })()
@@ -264,7 +258,7 @@ def _redraw(tab, js):
 
 
 def _reviews_text(r, url, sort, with_media, this_variant):
-    rows = [_review_row(x) for x in r["reviews"] if x["photos"] or not with_media]
+    rows = [_review_row(x) for x in map(_review, r["reviews"]) if x["photos"] or not with_media]
     head = (f"Яндекс Маркет · {url}\n{r['summary']}" + (f" · {r['dist']}" if r["dist"] else "") + "\n"
             f"{'только этот вариант' if this_variant else 'все варианты'}, сортировка {sort}"
             f"{', только с фото' if with_media else ''}. Видны первые 10 отзывов на сортировку: "
@@ -273,8 +267,17 @@ def _reviews_text(r, url, sort, with_media, this_variant):
     return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
 
 
+def _review(e):
+    """One review's zone data and texts -> the fields of its row."""
+    z = e["zone"]
+    return {"grade": z.get("grade", ""), "date": z.get("date") or e["date"], "up": z.get("votesAgree") or 0,
+            "down": z.get("votesDisagree") or 0, "author": e["author"], "text": " | ".join(_lines(e["text"])),
+            "variant": ", ".join(_lines(e["variant"])), "photos": list(dict.fromkeys(
+                re.sub(r"(get-market-ugc/\d+/[^/]+).*$", r"\1/orig", s) for s in e["photos"] if "get-market-ugc" in s))}
+
+
 def _review_row(x):
-    return f"{x['date']}\t{x.get('grade', '')}\t+{x['up']}/−{x['down']}\t{x['variant']}\t{x['author']}\t{x['text']}\t{' '.join(x['photos'])}"
+    return f"{x['date']}\t{x['grade']}\t+{x['up']}/−{x['down']}\t{x['variant']}\t{x['author']}\t{x['text']}\t{' '.join(x['photos'])}"
 
 
 # Cart. Reading works from a background tab; adding and removing are clicks (the site's cart calls

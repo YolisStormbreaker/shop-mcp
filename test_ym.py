@@ -142,9 +142,11 @@ class YmItemTests(unittest.TestCase):
 
 UGC = "https://avatars.mds.yandex.net/get-market-ugc/1234/abc"
 REVIEWS = {"summary": "4.9 13K оценок • 2K отзывов", "dist": "5 ★ 90% 4 ★ 6%", "reviews": [
-    {"grade": 5, "date": "17 октября 2024", "up": 7, "down": 1, "author": "Покупатель А", "text": "Достоинства: прочный | Недостатки: нет",
-     "variant": "Цвет товара: серый, Длина кабеля: 1.2 м", "photos": [UGC + "/orig"]},
-    {"grade": 3, "date": "5 мая", "up": 0, "down": 0, "author": "Покупатель Б", "text": "Комментарий: средне", "variant": "", "photos": []}]}
+    {"zone": {"grade": 5, "date": "17 октября 2024", "votesAgree": 7, "votesDisagree": 1}, "date": "17 октября", "author": "Покупатель А",
+     "text": "Достоинства:  прочный\n\nНедостатки: нет\n", "variant": "Цвет товара: серый\nДлина кабеля: 1.2 м",
+     "photos": [UGC + "/100x100?size=s", UGC + "/orig", "https://avatars.mds.yandex.net/get-mpic/1/pic/50x50", "https://yastatic.net/avatar.png"]},
+    {"zone": {"grade": 3, "votesAgree": 0}, "date": "5 мая", "author": "Покупатель Б", "text": "Комментарий: средне", "variant": "",
+     "photos": []}]}
 REVIEW_ROWS = [f"17 октября 2024\t5\t+7/−1\tЦвет товара: серый, Длина кабеля: 1.2 м\tПокупатель А\tДостоинства: прочный | Недостатки: нет\t{UGC}/orig",
                "5 мая\t3\t+0/−0\t\tПокупатель Б\tКомментарий: средне\t"]
 REVIEWS_URL = CARD + "/reviews"
@@ -186,7 +188,7 @@ class YmReviewsTests(unittest.TestCase):
         self.assertEqual(exprs[k + 1], f"({ITEMS}[0]?.innerText || '') !== true")
 
     def test_review_without_zone_data_has_no_grade(self):
-        bare = {"date": "5 мая", "up": 0, "down": 0, "author": "Покупатель Б", "text": "Комментарий: средне", "variant": "", "photos": []}
+        bare = {"zone": {}, "date": "5 мая", "author": "Покупатель Б", "text": "Комментарий: средне", "variant": "", "photos": []}
         got = call(ym.reviews, {**REVIEWS, "reviews": [bare]}, CARD)[0]
         self.assertEqual(got.splitlines()[-1], "5 мая\t\t+0/−0\t\tПокупатель Б\tКомментарий: средне\t")
 
