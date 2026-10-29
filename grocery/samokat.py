@@ -253,9 +253,9 @@ def _photos(c):
 
 
 def _cart(tab):
-    args = tab.js("(Object.values(window.__shopStore.getState().api.queries).find(e => e.endpointName === 'cart') || {}).originalArgs || null")
-    if not args:
-        args = {"showcaseId": "SC", "buyout": False}
+    """(the cart's products by id, the whole answer), asked with the page's own cart-query arguments when it has them."""
+    args = (tab.js("(Object.values(window.__shopStore.getState().api.queries).find(e => e.endpointName === 'cart') || {}).originalArgs || null")
+            or {"showcaseId": "SC", "buyout": False})
     d = _call(tab, "cart", args) or {}
     return {str(x.get("id")): x for x in d.get("products") or []}, d
 
@@ -286,11 +286,18 @@ def cart():
         items, d = _cart(tab)
     finally:
         tab.close()
+    return _cart_text(items, d.get("totalPrice"))
+
+
+def _cart_text(items, total):
     if not items:
         return "корзина Самоката пуста"
-    return (f"корзина Самоката: итого {_rub(d.get('totalPrice'))} ₽\nid\tшт\tцена ₽\tназвание\n"
-            + "\n".join(f"{(x.get('product') or {}).get('slug') or i}\t{x.get('quantity')}\t{_rub(x.get('price'))}\t{(x.get('product') or {}).get('name') or ''}"
-                        for i, x in items.items()))
+    return f"корзина Самоката: итого {_rub(total)} ₽\nid\tшт\tцена ₽\tназвание\n" + "\n".join(_cart_row(i, x) for i, x in items.items())
+
+
+def _cart_row(pid, x):
+    p = x.get("product") or {}
+    return f"{p.get('slug') or pid}\t{x.get('quantity')}\t{_rub(x.get('price'))}\t{p.get('name') or ''}"
 
 
 def add_to_cart(id_or_url, quantity=1):
