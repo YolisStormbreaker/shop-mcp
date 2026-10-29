@@ -154,24 +154,19 @@ def nutrition_line(n):
 def describe(composition, nutrition=None, extra=None):
     """Lines for a product card or comparison: ingredients numbered, percents, flags, traces, nutrition.
     extra: the site's own composition facts outside the text («Содержания какао: до 35%»)."""
+    about = [f"о составе: {extra}"] if extra else []
     if not composition and not nutrition:
-        return ["состав: сайт не указывает"] + ([f"о составе: {extra}"] if extra else [])
-    lines = []
-    if composition:
-        p = parse(composition)
-        lines.append(f"состав ({len(p['ingredients'])}): " + "; ".join(f"{i}) {s}" for i, s in enumerate(p["ingredients"], 1)))
-        if p["notes"]:
-            lines.append("в составе отмечено: " + "; ".join(p["notes"]))
-        f = flags(composition, p["ingredients"])
-        if f:
-            lines.append("по составу: " + "; ".join(f))
-        if p["traces"]:
-            lines.append("аллергены-следы: " + p["traces"])
-    if extra:
-        lines.append(f"о составе: {extra}")
-    if nutrition:
-        lines.append(nutrition_line(nutrition))
-    return lines
+        return ["состав: сайт не указывает"] + about
+    return (_ingredients(composition) if composition else []) + about + ([nutrition_line(nutrition)] if nutrition else [])
+
+
+def _ingredients(text):
+    """The numbered ingredients, then the text's notes, the flags and the traces, each only when there is one."""
+    p = parse(text)
+    facts = (("в составе отмечено: ", "; ".join(p["notes"])), ("по составу: ", "; ".join(flags(text, p["ingredients"]))),
+             ("аллергены-следы: ", p["traces"]))
+    return ([f"состав ({len(p['ingredients'])}): " + "; ".join(f"{i}) {s}" for i, s in enumerate(p["ingredients"], 1))]
+            + [label + v for label, v in facts if v])
 
 
 if __name__ == "__main__":
