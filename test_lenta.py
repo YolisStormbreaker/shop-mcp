@@ -1,4 +1,5 @@
-"""Лента search, product card and reviews: what the page's own requests answer -> the grocery dicts and text.
+"""Лента search, product card and reviews: what the page's own requests answer -> the grocery dicts and text; the cart and
+favorites: which of the page's buttons are pressed and what is said.
 No requests to shops: site_tab and capture are fakes.  Run: .venv/bin/python -B -m unittest -v test_lenta"""
 import json
 import re
@@ -231,6 +232,234 @@ class LentaCartLookupTests(unittest.TestCase):
     def test_no_cart(self):
         self.assertEqual(lenta._goods(None), ({}, {}))
         self.assertEqual(lenta._goods({"Body": {"CartList": []}}), ({}, {}))
+
+
+# --- cart and favorites: the page's own buttons, pressed in a model of the page ---------------------------------
+
+PAGE = "https://lenta.com/product/x-84812/"
+MODIFY = "/api/rest/cartItemModify"
+BUTTONS = {lenta.ADD: "В корзину", lenta.INC: "+", lenta.DEC: "−", lenta.HEART: "♥"}
+OTHER = {"GoodsItemId": "052602", "Quantity": 2, "Price": 250, "PriceTotal": 500, "Name": "Хлеб"}
+
+
+class Shop:
+    """The site as the cart code meets it.  A full load answers the cart (cartLookup) or the favorites list; the
+    product page shows «В корзину» while the cart has none of it, «+» while there is stock left and «−» while the
+    cart has some; a press changes the cart like the site does and answers.  sent: loads and presses in order."""
+    def __init__(self, qty=0, stock=100, favs=(), card=True, lookup=(True,), faved=True, inert=False):
+        """lookup: whether each full load in turn brings its answer (the last one goes for the loads after it)."""
+        self.qty, self.stock, self.favs, self.card, self.lookup, self.faved, self.inert = qty, stock, list(favs), card, list(lookup), faved, inert
+        self.sent, self.tab = [], MagicMock()
+        self.tab.js.side_effect = self.js
+
+    def js(self, expr):
+        if expr == f"{lenta.CARD_JS}(\"84812\")":
+            return {"name": "Кефир 2,5%", "fav": False, "count": self.stock} if self.card else None
+        button = next(b for b in BUTTONS if expr == f"!!({b})")
+        return {lenta.ADD: not self.qty and self.stock > 0, lenta.INC: 0 < self.qty < self.stock, lenta.DEC: self.qty > 0}[button]
+
+    def capture(self, tab, site, url, patterns, timeout=20, js=None):
+        assert (tab, site) == (self.tab, "lenta")
+        if js is None:
+            self.sent.append(url)
+            if not (self.lookup.pop(0) if len(self.lookup) > 1 else self.lookup[0]):
+                return {}
+            if patterns == {"f": ["re:/catalog/items/favorites$"]}:
+                return {"f": {"total": len(self.favs), "items": self.favs}}
+            assert patterns == {"c": ["/api/rest/cartLookup"]}
+            return {"c": self.cart()}
+        button = next(b for b in BUTTONS if js == f"({b}).click()")
+        [(what, [awaited])] = patterns.items()
+        self.sent.append((BUTTONS[button], awaited))
+        if not self.inert:
+            self.press(button)
+        return {what: {"result": self.faved}}
+
+    def press(self, button):
+        if button == lenta.HEART:
+            self.favs = [p for p in self.favs if p["id"] != 84812] if any(p["id"] == 84812 for p in self.favs) else self.favs + [ITEM]
+        else:
+            self.qty += -1 if button == lenta.DEC else 1
+
+    def cart(self):
+        goods = [{"GoodsItemId": "084812", "Quantity": self.qty, "Price": 109.99, "PriceTotal": round(109.99 * self.qty, 2),
+                  "Name": "Кефир 2,5%"}] if self.qty > 0 else []
+        return {"Body": {"CartList": [{"PositionsCount": len(goods) + 1, "TotalCost": round(500 + 109.99 * max(self.qty, 0), 2),
+                                       "DeliveryPrice": 0, "Goods": [OTHER] + goods}]}}
+
+    def run(self, fn, *args):
+        with patch.object(lenta, "site_tab", return_value=self.tab), patch.object(lenta, "capture", side_effect=self.capture), \
+                patch.object(lenta, "time"):
+            got = fn(*args)
+        self.tab.close.assert_called_once()
+        return got
+
+
+class LentaCartTests(unittest.TestCase):
+    def test_cart(self):
+        shop = Shop(qty=3)
+        self.assertEqual(shop.run(lenta.cart), "корзина Ленты: позиций 2, итого 829.97 ₽, доставка 0 ₽\nid\tшт\tцена ₽\tсумма ₽\tназвание\n"
+                                               "52602\t2\t250\t500\tХлеб\n84812\t3\t109.99\t329.97\tКефир 2,5%")
+        self.assertEqual(shop.sent, ["https://lenta.com/"])
+
+    def test_cart_without_delivery_price_and_line_fields(self):
+        shop = Shop()
+        shop.cart = lambda: {"Body": {"CartList": [{"PositionsCount": 1, "TotalCost": 100, "Goods": [{"GoodsItemId": "7"}]}]}}
+        self.assertEqual(shop.run(lenta.cart), "корзина Ленты: позиций 1, итого 100 ₽\nid\tшт\tцена ₽\tсумма ₽\tназвание\n7\tNone\tNone\t\t")
+
+    def test_empty_cart(self):
+        shop = Shop()
+        shop.cart = lambda: {"Body": {"CartList": [{"PositionsCount": 0, "TotalCost": 0, "Goods": []}]}}
+        self.assertEqual(shop.run(lenta.cart), "корзина Ленты пуста")
+
+    def test_cart_that_did_not_come(self):
+        self.assertEqual(Shop(lookup=(False,)).run(lenta.cart), "корзина Ленты пуста")
+
+
+class LentaAddToCartTests(unittest.TestCase):
+    def test_first_unit_by_the_add_button_then_plus(self):
+        shop = Shop()
+        self.assertEqual(shop.run(lenta.add_to_cart, "https://lenta.com/product/kefir-25-930g-84812/", 3),
+                         "в корзине Ленты: Кефир 2,5% — 3 шт × 109.99 ₽; итого корзины 829.97 ₽")
+        self.assertEqual(shop.sent, [PAGE, ("В корзину", MODIFY), ("+", MODIFY), ("+", MODIFY), PAGE])
+
+    def test_already_in_the_cart_takes_plus(self):
+        shop = Shop(qty=2)
+        self.assertEqual(shop.run(lenta.add_to_cart, "84812"), "в корзине Ленты: Кефир 2,5% — 3 шт × 109.99 ₽; итого корзины 829.97 ₽")
+        self.assertEqual(shop.sent, [PAGE, ("+", MODIFY), PAGE])
+
+    def test_quantity_is_one_to_thirty_presses(self):
+        for quantity, presses in ((0, 1), (-2, 1), ("2", 2), (100, 30)):
+            with self.subTest(quantity):
+                shop = Shop()
+                shop.run(lenta.add_to_cart, "84812", quantity)
+                self.assertEqual(len(shop.sent), presses + 2)
+
+    def test_no_card(self):
+        shop = Shop(card=False)
+        self.assertEqual(shop.run(lenta.add_to_cart, "84812"), "Лента: товар 84812 не открылся")
+        self.assertEqual(shop.sent, [PAGE])
+
+    def test_out_of_stock_has_no_add_button(self):
+        shop = Shop(stock=0)
+        self.assertEqual(shop.run(lenta.add_to_cart, "84812"), "Лента: кнопки «В корзину» на странице Кефир 2,5% нет (нет в наличии?)")
+        self.assertEqual(shop.sent, [PAGE])
+
+    def test_plus_gone_at_the_stock_limit(self):
+        shop = Shop(stock=2)
+        self.assertEqual(shop.run(lenta.add_to_cart, "84812", 3), "Лента: кнопки «+» на странице Кефир 2,5% нет (нет в наличии?)")
+        self.assertEqual(shop.sent, [PAGE, ("В корзину", MODIFY), ("+", MODIFY)])
+
+    def test_presses_that_changed_nothing(self):
+        shop = Shop(qty=1, inert=True)
+        self.assertEqual(shop.run(lenta.add_to_cart, "84812"), "Лента не положила Кефир 2,5% в корзину")
+        self.assertEqual(shop.sent, [PAGE, ("+", MODIFY), PAGE])
+
+    def test_cart_that_did_not_come(self):
+        shop = Shop(lookup=(True, False))
+        self.assertEqual(shop.run(lenta.add_to_cart, "84812", 2), "Лента не положила Кефир 2,5% в корзину")
+        self.assertEqual(shop.sent, [PAGE, ("В корзину", MODIFY), ("+", MODIFY), PAGE])
+
+
+class LentaRemoveFromCartTests(unittest.TestCase):
+    def test_minus_until_the_line_is_gone(self):
+        shop = Shop(qty=2)
+        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), "убрано из корзины Ленты: Кефир 2,5%")
+        self.assertEqual(shop.sent, [PAGE, ("−", MODIFY), ("−", MODIFY), PAGE])
+
+    def test_not_in_the_cart(self):
+        shop = Shop()
+        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), "Кефир 2,5% в корзине Ленты нет")
+        self.assertEqual(shop.sent, [PAGE])
+
+    def test_without_the_card_the_id_names_it(self):
+        shop = Shop(qty=1, card=False)
+        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), "убрано из корзины Ленты: 84812")
+        self.assertEqual(shop.sent, [PAGE, ("−", MODIFY), PAGE])
+
+    def test_no_minus_button(self):
+        shop = Shop(qty=1)
+        shop.js = lambda expr: False if expr == f"!!({lenta.DEC})" else Shop.js(shop, expr)
+        shop.tab.js.side_effect = shop.js
+        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), "не удалось убрать Кефир 2,5% из корзины Ленты")
+        self.assertEqual(shop.sent, [PAGE, PAGE])
+
+    def test_at_most_thirty_presses(self):
+        shop = Shop(qty=31)
+        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), "не удалось убрать Кефир 2,5% из корзины Ленты")
+        self.assertEqual(shop.sent, [PAGE] + [("−", MODIFY)] * 30 + [PAGE])
+
+    def test_weighed_line_under_one_unit(self):
+        shop = Shop(qty=0.5)
+        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), "Кефир 2,5% в корзине Ленты нет")
+        self.assertEqual(shop.sent, [PAGE])
+
+    def test_cart_that_did_not_come(self):
+        shop = Shop(qty=1, lookup=(False,))
+        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), "Кефир 2,5% в корзине Ленты нет")
+        self.assertEqual(shop.sent, [PAGE])
+
+    def test_cart_that_did_not_come_back(self):
+        shop = Shop(qty=1, lookup=(True, False))
+        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), "убрано из корзины Ленты: Кефир 2,5%")
+        self.assertEqual(shop.sent, [PAGE, ("−", MODIFY), PAGE])
+
+
+FAVORITES = "https://lenta.com/my-account/favorites/"
+
+
+class LentaFavoritesTests(unittest.TestCase):
+    def test_favorites(self):
+        shop = Shop(favs=[ITEM, WEIGHED])
+        self.assertEqual(shop.run(lenta.favorites), "избранное Ленты (2)\nid\tцена ₽\tналичие\tназвание\n"
+                                                    "84812\t109.99\t\tКефир 2,5%\n3001\t89.99\tнет в наличии\tБананы")
+        self.assertEqual(shop.sent, [FAVORITES])
+
+    def test_no_favorites(self):
+        self.assertEqual(Shop().run(lenta.favorites), "избранное Ленты пусто")
+
+    def test_favorites_that_did_not_come(self):
+        self.assertEqual(Shop(lookup=(False,)).run(lenta.favorites), "Лента не отдала избранное")
+
+
+class LentaFavoriteTests(unittest.TestCase):
+    def test_add(self):
+        shop = Shop(favs=[WEIGHED])
+        self.assertEqual(shop.run(lenta.favorite, "84812"), "в избранном Ленты: Кефир 2,5%")
+        self.assertEqual(shop.sent, [FAVORITES, PAGE, ("♥", "/catalog/items/favorites/add")])
+        self.assertEqual(shop.favs, [WEIGHED, ITEM])
+
+    def test_remove(self):
+        shop = Shop(favs=[ITEM, WEIGHED])
+        self.assertEqual(shop.run(lenta.favorite, "84812", True), "убрано из избранного Ленты: Кефир 2,5%")
+        self.assertEqual(shop.sent, [FAVORITES, PAGE, ("♥", "/catalog/items/favorites/delete")])
+        self.assertEqual(shop.favs, [WEIGHED])
+
+    def test_already_as_asked(self):
+        for favs, remove, said in (([ITEM], False, "уже в избранном"), ([WEIGHED], True, "и так не в избранном")):
+            with self.subTest(said):
+                shop = Shop(favs=favs)
+                self.assertEqual(shop.run(lenta.favorite, "84812", remove), f"Кефир 2,5% {said} Ленты")
+                self.assertEqual(shop.sent, [FAVORITES, PAGE])
+
+    def test_favorites_that_did_not_come(self):
+        shop = Shop(lookup=(False,))
+        self.assertEqual(shop.run(lenta.favorite, "84812"), "Лента не отдала избранное")
+        self.assertEqual(shop.sent, [FAVORITES])
+
+    def test_no_card(self):
+        shop = Shop(card=False)
+        self.assertEqual(shop.run(lenta.favorite, "84812"), "Лента: товар 84812 не открылся")
+        self.assertEqual(shop.sent, [FAVORITES, PAGE])
+
+    def test_site_did_not_change_it(self):
+        shop = Shop(faved=False)
+        self.assertEqual(shop.run(lenta.favorite, "84812"), "Лента не изменила избранное")
+        self.assertEqual(shop.sent, [FAVORITES, PAGE, ("♥", "/catalog/items/favorites/add")])
+
+    def test_not_an_id(self):
+        with self.assertRaises(ValueError):
+            lenta.favorite("кефир")
 
 
 if __name__ == "__main__":
