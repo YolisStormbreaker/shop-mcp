@@ -40,41 +40,54 @@ def _price(p):
 def search(query, price_min=None, price_max=None, sort="popular", page=1, limit=30):
     if sort not in SORTS:
         return f"sort: одно из {', '.join(SORTS)}"
-    qs = {"search": query, "sort": sort}
-    if price_min or price_max:
-        qs["priceU"] = f"{int(price_min or 0) * 100};{int(price_max or 10_000_000) * 100}"
-    url = "https://www.wildberries.ru/catalog/0/search.aspx?" + urllib.parse.urlencode(qs)
-    # The site loads page N (100 items each) only while the list is scrolled, which a background tab
-    # never does; a page=N link still asks for page 1. So its own page-1 request is sent as page N.
-    rewrite = None
-    if page > 1:
-        def rewrite_url(u):
-            return re.sub(r"([?&])page=\d+", rf"\g<1>page={page}", u) if re.search(r"[?&]page=", u) else f"{u}&page={page}"
-        rewrite = ("*__internal/search/exactmatch*resultset=catalog*", rewrite_url)
+    url = _search_url(query, price_min, price_max, sort)
     tab = tab_for("wildberries.ru")
     try:
-        d = capture(tab, "wb", url, {"s": ["/exactmatch/", "resultset=catalog"]}, rewrite=rewrite).get("s")
+        d = capture(tab, "wb", url, {"s": ["/exactmatch/", "resultset=catalog"]}, rewrite=_pager(page)).get("s")
     finally:
         tab.close()
     if d is None:
         log.warning("wb search %s: no catalog response", url)
         return BLOCKED
+    return _search_text(d, url, sort, page, limit)
+
+
+def _search_url(query, price_min, price_max, sort):
+    qs = {"search": query, "sort": sort}
+    if price_min or price_max:
+        qs["priceU"] = f"{int(price_min or 0) * 100};{int(price_max or 10_000_000) * 100}"
+    return "https://www.wildberries.ru/catalog/0/search.aspx?" + urllib.parse.urlencode(qs)
+
+
+def _pager(page):
+    """The site loads page N (100 items each) only while the list is scrolled, which a background tab
+    never does; a page=N link still asks for page 1. So its own page-1 request is sent as page N."""
+    return ("*__internal/search/exactmatch*resultset=catalog*", lambda u: _paged(u, page)) if page > 1 else None
+
+
+def _paged(u, page):
+    return re.sub(r"([?&])page=\d+", rf"\g<1>page={page}", u) if re.search(r"[?&]page=", u) else f"{u}&page={page}"
+
+
+def _search_text(d, url, sort, page, limit):
     products = d.get("products") or []
     if sort in ("priceup", "pricedown"):
         # WB lifts promoted items to the top even when sorting by price (seen 2026-09-30); order them ourselves.
         products.sort(key=lambda p: _price(p)[0], reverse=sort == "pricedown")
-    rows = []
-    for i, p in enumerate(products[:limit]):
-        price, basic = _price(p)
-        stock = "" if p.get("totalQuantity") else "нет в наличии"
-        rows.append(f"{i+1}\t{p['id']}\t{price}\t{basic}\t{p.get('name', '')}\t{p.get('brand', '')}\t"
-                    f"{p.get('reviewRating') or ''}\t{p.get('feedbacks') or ''}\t{p.get('supplier', '')}\t{stock or _eta(p)}")
+    rows = [_row(i, p) for i, p in enumerate(products[:limit], 1)]
     total = d.get("total") or len(rows)
     head = (f"Wildberries · {total} найдено · страница {page} из {max(1, -(-total // 100))} (по 100) · {url}\n"
             "товар: https://www.wildberries.ru/catalog/<id>/detail.aspx; «привезут» — оценка по сроку доставки на адрес из профиля\n"
             "цена без скидки WB Кошелька: сайт показывает цену с ней, она на несколько процентов ниже\n"
             "#\tid\tцена ₽\tбез скидки\tназвание\tбренд\tрейтинг\tотзывов\tпродавец\tпривезут")
     return head + "\n" + ("\n".join(rows) if rows else "(пусто)")
+
+
+def _row(i, p):
+    price, basic = _price(p)
+    stock = "" if p.get("totalQuantity") else "нет в наличии"
+    return (f"{i}\t{p['id']}\t{price}\t{basic}\t{p.get('name', '')}\t{p.get('brand', '')}\t"
+            f"{p.get('reviewRating') or ''}\t{p.get('feedbacks') or ''}\t{p.get('supplier', '')}\t{stock or _eta(p)}")
 
 
 def _nm(id_or_url):
