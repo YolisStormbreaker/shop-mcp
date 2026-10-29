@@ -261,10 +261,9 @@ def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=10):
         d = tab.js(f"{REVIEWS_JS}({json.dumps(url)})", timeout=40) or {}
     finally:
         tab.close()
-    p = _mcp("vkusvill_product_details", {"id": int(pid)})
-    rt = p.get("rating") or {}
+    p = _listed(_mcp("vkusvill_product_details", {"id": int(pid)}))
     rows = [f"{x['date']}\t{x['rate']}\t{x['likes']}\t{x['text']}" for x in d.get("items") or []]
-    return (f"ВкусВилл · {_clean(p.get('name'))}: рейтинг {rt.get('average') and round(rt['average'], 2)} ({rt.get('count')} оценок)\n"
+    return (f"ВкусВилл · {p['name']}: рейтинг {p['rating']} ({p['reviews']} оценок)\n"
             f"страница {page} по 10, сортировка {sort}; фото в отзывах ВкусВилла нет" + ("; есть ещё: page=" + str(page + 1) if d.get("more") else "")
             + "\nдата\t★\tполезно\tтекст\n" + ("\n".join(rows) if rows else "(отзывов нет)"))
 
