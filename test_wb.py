@@ -1,5 +1,6 @@
-"""Wildberries read paths: search, item and reviews from the JSON the page captured (capture, tab_for)
-and the public CDN/feedback JSON (_get), all patched.  Today is fixed to 29 Oct 2026.
+"""Wildberries: search, item and reviews from the JSON the page captured (capture, tab_for)
+and the public CDN/feedback JSON (_get), all patched; the cart with what its syncs and the page script
+would send.  Today is fixed to 29 Oct 2026, the clock to 1700000000.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_wb"""
 import datetime
 import fnmatch
@@ -61,6 +62,7 @@ COLUMNS = "дата\t★\tполезно +/−\tцвет, размер\tавто
 class WbTest(unittest.TestCase):
     def setUp(self):
         for p in (patch.object(wb, "datetime", types.SimpleNamespace(date=Today, timedelta=datetime.timedelta)),
+                  patch.object(wb, "time", types.SimpleNamespace(time=lambda: 1700000000.9)),
                   patch.dict(wb._imt, clear=True)):
             p.start()
             self.addCleanup(p.stop)
@@ -252,6 +254,235 @@ class ReviewsTests(WbTest):
         self.assertEqual(wb.reviews("101", sort="best"), "sort: одно из useful, new, high, low")
         self.assertEqual(wb.reviews("x"), "нужен артикул WB или ссылка вида https://www.wildberries.ru/catalog/<id>/detail.aspx")
         self.capture.assert_not_called()
+
+
+P1 = {"id": 101, "name": "Кабель A", "sizes": [{"name": "0", "origName": "0", "optionId": 555}]}
+P2 = {"id": 102, "name": "Футболка B", "sizes": [{"name": "S", "origName": "42", "optionId": 556}, {"name": "M", "optionId": 557}]}
+L1 = {"cod1S": 101, "id": 555, "quantity": 2, "priceWithCouponAndSpp": 299, "price": 350, "includeInOrder": True,
+      "brandName": "Бренд", "goodsName": "Кабель A", "sizeName": "0", "canBeOrdered": True}
+L2 = {"cod1S": 102, "id": 556, "quantity": 1, "price": 199, "goodsName": "Футболка B", "sizeName": "42", "canBeOrdered": False}
+L3 = {"cod1S": 102, "id": 557, "quantity": 1, "priceWithCouponAndSpp": 0, "price": 189, "includeInOrder": False,
+      "goodsName": "Футболка B", "sizeName": ""}
+R1 = "101\t555\t2\t299\t✓\tБренд\tКабель A\t\t"
+R2 = "102\t556\t1\t199\t\t\tФутболка B\t42\tнельзя заказать"
+R3 = "102\t557\t1\t189\t\t\tФутболка B\t\t"
+CART_HEAD = ("корзина Wildberries (✓ — выбрано к оформлению; цена за штуку без WB Кошелька)\n"
+             "артикул\tchrt\tшт\tцена ₽\t✓\tбренд\tназвание\tразмер\tзаметки\n")
+# the shape of the page's own cart sync (values made up); every WB page load sends one
+SYNC_URL = "https://www.wildberries.ru/__internal/cart-storage-api/api/basket/sync?device_id=d1&ts=1761000000123"
+VIEW = (wb.CART, {"cart": ["basket/data_v2"]}, SYNC_URL.replace("ts=1761000000123", "ts=0"), SYNC_URL)
+
+
+def view(*lines):
+    return {"cart": {"value": {"data": {"basket": {"basketItems": list(lines)}}}}}
+
+
+def detail(nm, *products):
+    return ([{"detail": {"products": list(products)}}],
+            [(f"https://www.wildberries.ru/catalog/{nm}/detail.aspx", {"detail": ["/cards/v4/detail", f"nm={nm}"]})])
+
+
+def sync(body):
+    return wb.CART, {"sync": ["basket/sync"]}, (SYNC_URL, body), SYNC_URL
+
+
+def add(chrt, nm, quantity):
+    return {"chrt_id": chrt, "quantity": quantity, "cod_1s": nm, "client_ts": 1700000000, "op_type": 1, "target_url": "",
+            "meta_json": None, "analytics_json": None}
+
+
+class CartTests(WbTest):
+    def answers(self, *answers):
+        self.capture.side_effect = list(answers)
+
+    def sent(self):
+        """Every capture() as (url, patterns), and with a rewrite also what the page's first and second sync go out as."""
+        out = []
+        for c in self.capture.call_args_list:
+            tab, site, url, patterns = c.args
+            self.assertEqual((tab, site), (self.tab, "wb"))
+            self.assertLessEqual(set(c.kwargs), {"rewrite"})
+            if "rewrite" not in c.kwargs:
+                out.append((url, patterns))
+                continue
+            glob, fn = c.kwargs["rewrite"]
+            self.assertEqual(glob, wb.SYNC)
+            self.assertTrue(fnmatch.fnmatchcase(SYNC_URL, glob))
+            out.append((url, patterns, fn(SYNC_URL), fn(SYNC_URL)))
+        return out
+
+    def assertClosed(self):
+        self.tab_for.assert_called_once_with("wildberries.ru")
+        self.tab.close.assert_called_once()
+
+
+class CartViewTests(CartTests):
+    def test_lines_as_the_server_has_them(self):
+        self.answers(view(L1, L2, L3))
+        self.assertEqual(wb.cart(), CART_HEAD + f"{R1}\n{R2}\n{R3}")
+        self.assertEqual(self.sent(), [VIEW])
+        self.assertClosed()
+
+    def test_ts_is_zeroed_wherever_it_stands(self):
+        self.answers(view())
+        wb.cart()
+        fn = self.capture.call_args.kwargs["rewrite"][1]
+        self.assertEqual(fn("https://x/basket/sync?ts=17&ts2=5"), "https://x/basket/sync?ts=0&ts2=5")
+        self.assertEqual(fn("https://x/basket/sync?ts=18"), "https://x/basket/sync?ts=18")
+
+    def test_empty(self):
+        self.answers(view(), {"cart": {}}, {"cart": {"value": {"data": None}}})
+        self.assertEqual([wb.cart() for _ in range(3)], ["корзина Wildberries пуста"] * 3)
+
+    def test_no_answer(self):
+        self.answers({})
+        self.assertEqual(wb.cart(), wb.BLOCKED)
+        self.assertClosed()
+
+    def test_line_without_size_name(self):
+        self.assertEqual(wb._cart_text([{"cod1S": 1, "id": 2, "quantity": 1, "price": 5}]),
+                         CART_HEAD + "1\t2\t1\t5\t\t\t\tNone\t")
+
+
+class AddToCartTests(CartTests):
+    def add(self, answers, calls, *args, **kw):
+        products, opened = answers
+        self.answers(*products, *calls)
+        got = wb.add_to_cart(*args, **kw)
+        self.assertClosed()
+        return got, opened
+
+    def test_adds_the_size_asked_for(self):
+        got, opened = self.add(detail(102, P2), [view(L1), {"sync": {"state": 0}}, view(L1, L3)],
+                               "https://www.wildberries.ru/catalog/102/detail.aspx", size=" m ", quantity=2)
+        self.assertEqual(got, "добавлено: Футболка B, 2 шт\n" + CART_HEAD + f"{R1}\n{R3}")
+        self.assertEqual(self.sent(), opened + [VIEW, sync('[{"chrt_id": 557, "quantity": 2, "cod_1s": 102, "client_ts": 1700000000, '
+                                                           '"op_type": 1, "target_url": "", "meta_json": null, "analytics_json": null}]'), VIEW])
+        self.log.warning.assert_not_called()
+
+    def test_size_by_its_original_name(self):
+        got, _ = self.add(detail(102, P2), [view(), {"sync": {"state": 0}}, view(L2)], "102", size=42, quantity="3")
+        self.assertEqual(got, "добавлено: Футболка B, 3 шт\n" + CART_HEAD + R2)
+        self.assertEqual(self.sent()[2], sync('[{"chrt_id": 556, "quantity": 3, "cod_1s": 102, "client_ts": 1700000000, '
+                                              '"op_type": 1, "target_url": "", "meta_json": null, "analytics_json": null}]'))
+
+    def test_one_size_needs_no_size_and_the_site_did_not_confirm(self):
+        got, _ = self.add(detail(101, P1), [view(L2), {"sync": {"state": 0}}, view(L2)], "101")
+        self.assertEqual(got, "⚠️ Wildberries не подтвердил добавление: Кабель A, 1 шт\n" + CART_HEAD + R2)
+        self.assertEqual(self.sent()[2], sync('[{"chrt_id": 555, "quantity": 1, "cod_1s": 101, "client_ts": 1700000000, '
+                                              '"op_type": 1, "target_url": "", "meta_json": null, "analytics_json": null}]'))
+
+    def test_already_in_the_cart(self):
+        got, opened = self.add(detail(101, P1), [view(L1, L2)], "101", quantity=5)
+        self.assertEqual(got, "уже в корзине, ничего не менял\n" + CART_HEAD + f"{R1}\n{R2}")
+        self.assertEqual(self.sent(), opened + [VIEW])
+
+    def test_sizes_to_choose_from(self):
+        got, opened = self.add(detail(102, P2), [], "102")
+        self.assertEqual(got, "у товара несколько размеров, укажи size: 42, M")
+        self.assertEqual(self.sent(), opened)
+
+    def test_unknown_size(self):
+        got, opened = self.add(detail(102, P2), [], "102", size="XL")
+        self.assertEqual(got, "нет размера «XL»; есть: 42, M")
+        self.assertEqual(self.sent(), opened)
+
+    def test_no_product_in_the_answer(self):
+        for answer in ([{}], [{"detail": None}], detail(101, P2)[0]):
+            with self.subTest(answer):
+                self.tab_for.reset_mock()
+                self.tab.close.reset_mock()
+                got, _ = self.add((answer, []), [], "101")
+                self.assertEqual(got, wb.BLOCKED)
+
+    def test_cart_not_answered(self):
+        got, opened = self.add(detail(101, P1), [{}], "101")
+        self.assertEqual(got, wb.BLOCKED)
+        self.assertEqual(self.sent(), opened + [VIEW])
+
+    def test_sync_refused_or_unanswered(self):
+        for answer, r in (({"sync": {"state": 1}}, {"state": 1}), ({}, None)):
+            with self.subTest(answer):
+                self.tab_for.reset_mock()
+                self.tab.close.reset_mock()
+                self.log.reset_mock()
+                got, _ = self.add(detail(101, P1), [view(), answer], "101")
+                self.assertEqual(got, wb.BLOCKED)
+                self.log.warning.assert_called_once_with("wb cart sync %s: %s", [add(555, 101, 1)], r)
+
+    def test_cart_after_the_sync_not_answered(self):
+        got, _ = self.add(detail(101, P1), [view(), {"sync": {"state": 0}}, {}], "101")
+        self.assertEqual(got, wb.BLOCKED)
+        self.assertEqual(len(self.sent()), 4)
+
+    def test_not_an_id(self):
+        self.assertEqual(wb.add_to_cart("abc"), "нужен артикул WB или ссылка на товар")
+        self.tab_for.assert_not_called()
+
+    def test_product_without_sizes_raises(self):
+        for p in ({"id": 101, "name": "x", "sizes": []}, {"id": 101, "name": "x"}):
+            with self.subTest(p):
+                self.tab_for.reset_mock()
+                self.tab.close.reset_mock()
+                with self.assertRaises(IndexError):
+                    self.add(detail(101, p), [], "101")
+                self.tab.close.assert_called_once()
+
+    def test_quantity_below_one_is_sent(self):
+        self.add(detail(101, P1), [view(), {"sync": {"state": 0}}, view(L1)], "101", quantity=0)
+        self.assertEqual(self.sent()[2], sync('[{"chrt_id": 555, "quantity": 0, "cod_1s": 101, "client_ts": 1700000000, '
+                                              '"op_type": 1, "target_url": "", "meta_json": null, "analytics_json": null}]'))
+
+
+class RemoveFromCartTests(CartTests):
+    def remove(self, key, *answers, found=True):
+        self.answers(*answers)
+        self.tab.js.return_value = found
+        got = wb.remove_from_cart(key)
+        self.assertClosed()
+        return got
+
+    def test_removes_the_line_of_an_article(self):
+        got = self.remove("https://www.wildberries.ru/catalog/101/detail.aspx", view(L1, L2), view(L2))
+        self.assertEqual(got, "удалено: Кабель A\n" + CART_HEAD + R2)
+        self.tab.js.assert_called_once_with(wb.REMOVE_JS + "(555, 2)")
+        self.assertEqual(self.sent(), [VIEW, VIEW])
+
+    def test_one_size_by_chrt(self):
+        got = self.remove("557", view(L1, L2, L3), view(L1, L2))
+        self.assertEqual(got, "удалено: Футболка B\n" + CART_HEAD + f"{R1}\n{R2}")
+        self.tab.js.assert_called_once_with(wb.REMOVE_JS + "(557, 1)")
+
+    def test_site_did_not_confirm(self):
+        got = self.remove("101", view(L1), view(L1))
+        self.assertEqual(got, "⚠️ Wildberries не подтвердил удаление: Кабель A\n" + CART_HEAD + R1)
+
+    def test_several_sizes_of_the_article(self):
+        got = self.remove("102", view(L1, L2, L3))
+        self.assertEqual(got, "в корзине несколько размеров этого товара, укажи chrt\n" + CART_HEAD + f"{R2}\n{R3}")
+        self.tab.js.assert_not_called()
+
+    def test_not_in_the_cart(self):
+        got = self.remove("999", view(L1))
+        self.assertEqual(got, "такого товара в корзине нет\n" + CART_HEAD + R1)
+        self.tab.js.assert_not_called()
+
+    def test_no_cart_in_the_browser(self):
+        got = self.remove("101", view(L1), found=False)
+        self.assertEqual(got, "⚠️ не нашёл корзину Wildberries в браузере, ничего не удалил")
+        self.assertEqual(self.sent(), [VIEW])
+
+    def test_cart_not_answered_before(self):
+        self.assertEqual(self.remove("101", {}), wb.BLOCKED)
+        self.tab.js.assert_not_called()
+
+    def test_cart_not_answered_after(self):
+        self.assertEqual(self.remove("101", view(L1), {}), wb.BLOCKED)
+        self.tab.js.assert_called_once_with(wb.REMOVE_JS + "(555, 2)")
+
+    def test_not_an_id(self):
+        self.assertEqual(wb.remove_from_cart("abc"), "нужен артикул WB, chrt из wb_cart или ссылка на товар")
+        self.tab_for.assert_not_called()
 
 
 class HelperTests(unittest.TestCase):
