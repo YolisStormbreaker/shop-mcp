@@ -1,4 +1,4 @@
-"""Avito search table from what LIST_JS and SHIP_JS read off the page.
+"""Avito search table and item card from what LIST_JS, ITEM_JS and SHIP_JS read off the page.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_avito"""
 import json
 import unittest
@@ -155,6 +155,115 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(tab.js.call_args_list[1], call("document.documentElement.outerHTML"))
         dump.assert_called_once_with("avito", "block", "<html>captcha</html>")
         log.warning.assert_called_once_with("avito search %s: block or captcha, page %s", PAGE, "saved.html")
+
+
+class RevealAddressTests(unittest.TestCase):
+    BEFORE = "Orange Pi Zero 3\nАдрес\nУзнать подробности"
+
+    def reveal(self, pages, clicked=True):
+        tab = MagicMock()
+        tab.js.side_effect = [self.BEFORE] + pages
+        tab.click.return_value = clicked
+        with patch.object(avito.time, "sleep") as sleep:
+            got = avito._reveal_address(tab)
+        if clicked:
+            tab.click.assert_called_once_with('[data-marker="item-map-button"]')
+        self.assertEqual(tab.js.call_args_list, [call("document.body.innerText")] * (len(pages) + 1))
+        return got, sleep.call_count
+
+    def test_map_button_missing(self):
+        self.assertEqual(self.reveal([], clicked=False), (("", ""), 0))
+
+    def test_address_after_the_metro(self):
+        metro = self.BEFORE + "\nПлощадь Восстаниядо 5 мин.\nМаяковскаядо 10 мин"
+        got = self.reveal([metro, metro + "\n  Санкт-Петербург  \nЦентральный район\n© Яндекс Карты\nул. Примерная, 1"])
+        self.assertEqual(got, (("ул. Примерная, 1", "Площадь Восстания (до 5 мин), Маяковская (до 10 мин)"), 2))
+
+    def test_gives_up_after_eight_tries(self):
+        got = self.reveal([self.BEFORE + "\nПлощадь Восстаниядо 5 мин."] * 8)
+        self.assertEqual(got, (("", "Площадь Восстания (до 5 мин)"), 8))
+
+
+CARD = {"title": "Orange Pi Zero 3 2GB", "price": "4500", "address": "Санкт-Петербург, ул. Примерная, 1",
+        "date": "· 28 октября в 10:00", "seller": "Продавец", "seller_rating": "4,9",
+        "params": ["Состояние: Б/у", "Тип: одноплатный компьютер"], "description": "Плата рабочая.",
+        "photos": [f"https://00.img.avito.st/image/1/{n}.jpg" for n in range(11)]}
+
+
+def item(card, offers, html=None, visible=True, reveal=("", ""), **kw):
+    """avito.item with the tab answering ITEM_JS, the page markup when html is given, then SHIP_JS."""
+    tab = MagicMock()
+    tab.js.side_effect = [card] + ([html] if html is not None else []) + [offers]
+    tab.visible.return_value = visible
+    with patch.object(avito, "tab_for", return_value=tab) as tab_for, \
+            patch.object(avito, "dump", return_value="saved.html") as dump, patch.object(avito, "log") as log, \
+            patch.object(avito, "_reveal_address", return_value=reveal) as rev:
+        out = avito.item("https://www.avito.ru" + path(1), **kw)
+    tab_for.assert_called_once_with("avito.ru")
+    tab.goto.assert_called_once_with("https://www.avito.ru" + path(1), "avito", wait_js="document.querySelector('h1')")
+    tab.close.assert_called_once_with()
+    return out, tab, dump, log, rev
+
+
+class ItemTests(unittest.TestCase):
+    def test_full_card(self):
+        out, tab, dump, _, rev = item(CARD, [ship(450, 300)])
+        self.assertEqual(tab.js.call_args_list[1], call(f"{avito.SHIP_JS}([location.pathname])"))
+        dump.assert_not_called()
+        rev.assert_not_called()
+        self.assertEqual(out, "\n".join([
+            "Orange Pi Zero 3 2GB — 4500 ₽",
+            "адрес: Санкт-Петербург, ул. Примерная, 1",
+            "дата: 28 октября в 10:00",
+            "продавец: Продавец 4,9",
+            "доставка: Доставка в Санкт-Петербург от 300 ₽ → итого от 4800 ₽",
+            "параметры: Состояние: Б/у; Тип: одноплатный компьютер",
+            "фото (shop_images): " + " ".join(CARD["photos"][:10]),
+            "",
+            "Плата рабочая."]))
+
+    def test_reserved_and_spaced_price(self):
+        out, *_ = item({**CARD, "price": "4 500 ₽"}, [ship(390, reserved=True)])
+        self.assertEqual(out.splitlines()[:2], ["Orange Pi Zero 3 2GB — 4 500 ₽", "⛔ ЗАРЕЗЕРВИРОВАН другим покупателем — сейчас купить нельзя"])
+        self.assertIn("доставка: Доставка в Санкт-Петербург от 390 ₽ → итого от 4890 ₽", out.splitlines())
+
+    def test_bare_card(self):
+        card = {**CARD, "price": "Договорная", "date": "", "seller": "", "seller_rating": "", "params": [], "photos": []}
+        out, *_ = item(card, [ship(390)])
+        self.assertEqual(out, "\n".join(["Orange Pi Zero 3 2GB — Договорная ₽", "адрес: Санкт-Петербург, ул. Примерная, 1",
+                                         "доставка: Доставка в Санкт-Петербург от 390 ₽", "", "Плата рабочая."]))
+
+    def test_delivery_line_without_a_price(self):
+        out, *_ = item(CARD, [{"text": "Доставка в Санкт-Петербург", "reserved": False, "broken": False, "full": None, "wallet": None}])
+        self.assertIn("доставка: Доставка в Санкт-Петербург", out.splitlines())
+
+    def test_no_delivery_line(self):
+        for offers in ([], [BLOCKED], [NO_LINE], [{"error": "TypeError: Failed to fetch"}]):
+            out, *_ = item({**CARD, "seller": "", "photos": []}, offers)
+            self.assertEqual(out.splitlines()[1:5], ["адрес: Санкт-Петербург, ул. Примерная, 1", "дата: 28 октября в 10:00",
+                                                     "продавец: 4,9", "параметры: Состояние: Б/у; Тип: одноплатный компьютер"], offers)
+
+    def test_address_behind_the_map_button(self):
+        out, tab, _, _, rev = item({**CARD, "address": ""}, [], reveal=("ул. Примерная, 1", "Площадь Восстания (до 5 мин)"))
+        rev.assert_called_once_with(tab)
+        self.assertEqual(out.splitlines()[1:3], ["адрес: ул. Примерная, 1", "метро: Площадь Восстания (до 5 мин)"])
+
+    def test_address_needs_a_tab_on_screen(self):
+        out, _, _, _, rev = item({**CARD, "address": ""}, [], visible=False)
+        rev.assert_not_called()
+        self.assertEqual(out.splitlines()[1], "адрес: не раскрыт: вкладка Авито не на экране (нужно shop-chrome show и открыть вкладку avito.ru)")
+
+    def test_page_without_a_title_is_saved(self):
+        out, tab, dump, log, _ = item({**CARD, "title": ""}, [], html="<html>empty</html>")
+        self.assertEqual(tab.js.call_args_list[1], call("document.documentElement.outerHTML"))
+        dump.assert_called_once_with("avito", "item", "<html>empty</html>")
+        log.warning.assert_called_once_with("avito item %s: no title, page %s", "https://www.avito.ru" + path(1), "saved.html")
+        self.assertEqual(out.splitlines()[0], " — 4500 ₽")
+
+    def test_long_description(self):
+        card = {**CARD, "description": "а" * 2600}
+        self.assertTrue(item(card, [])[0].endswith("\n\n" + "а" * 2500))
+        self.assertTrue(item(card, [], full=True)[0].endswith("\n\n" + "а" * 2600))
 
 
 if __name__ == "__main__":
