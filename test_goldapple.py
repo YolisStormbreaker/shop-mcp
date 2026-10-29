@@ -160,5 +160,51 @@ class GoldAppleItemTests(unittest.TestCase):
         tab.close.assert_called_once()
 
 
+GA_REVIEWS = {"data": {
+    "statistic": {"rating": 4.6, "allReviewsCount": 7274, "recommended": 89, "starStatistic": [{"star": 5, "percent": 80}, {"star": 1, "percent": 3}]},
+    "gallery": {"mediaCount": 142},
+    "listing": {"reviews": [
+        {"submitDate": "2026-10-28T10:00:00+03:00", "stars": 5, "likes": 1, "username": "Покупатель Б.",
+         "attributes": {"units": {"value": "7.5", "name": "г"}, "colors": {"value": picture("36"), "name": "0.5, Porcelain"}},
+         "pros": "стойкий", "cons": "<b>мало</b>", "comment": "Беру&nbsp;снова", "imageUrls": [{"original": picture("r1")}, {}]},
+        {"stars": 4, "comment": "", "attributes": {"size": {"value": "M"}}}]}}}
+REVIEWS_HEAD = "дата\t★\tполезно\tвариант\tавтор\tтекст\tфото (shop_images)\n"
+
+
+class GoldAppleReviewsTests(unittest.TestCase):
+    def reviews(self, d, id_or_url="19000163536", **kw):
+        tab = MagicMock()
+        with patch.object(goldapple, "_ga_tab", return_value=tab), patch.object(goldapple, "_api", return_value=d) as api:
+            return goldapple.reviews(id_or_url, **kw), api, tab
+
+    def test_page_with_reviews(self):
+        got, api, tab = self.reviews(GA_REVIEWS)
+        self.assertEqual(got, "Золотое яблоко · артикул 19000163536: рейтинг 4.6, отзывов 7274, рекомендуют 89% · 5★ 80% 1★ 3%\n"
+                              "страница 1 (по 20), сортировка useful; фото с отзывов всего: 142\n" + REVIEWS_HEAD +
+                              f"2026-10-28\t5\t1\t7.5 г {picture('36')} 0.5, Porcelain\tПокупатель Б.\t+ стойкий | − мало | Беру снова\t"
+                              "https://cdn-01.goldapple.ru/p/p/r1/fullhd.jpg \n"
+                              "\t4\t\tM\t\t\t")
+        self.assertEqual(api.call_args.args, (tab, "GET", "/front/api/review/listing/v3?locale=ru&itemId=19000163536&pageNumber=1&sortType=ByUsefulness"))
+        tab.close.assert_called_once()
+
+    def test_empty_page_with_photos_only(self):
+        got, api, _ = self.reviews({}, "https://goldapple.ru/19000163536-cushion", sort="low", with_media=True, page=2)
+        self.assertEqual(got, "Золотое яблоко · артикул 19000163536: рейтинг None, отзывов None, рекомендуют None% · \n"
+                              "страница 2 (по 20), сортировка low, только с фото; фото с отзывов всего: 0\n" + REVIEWS_HEAD + "(отзывов нет)")
+        self.assertTrue(api.call_args.args[2].endswith("&pageNumber=2&sortType=ByLowestStars&hasMedia=true"))
+
+    def test_limit(self):
+        self.assertEqual(len(self.reviews(GA_REVIEWS, limit=1)[0].splitlines()), 4)
+
+    def test_blocked(self):
+        got, _, tab = self.reviews(None)
+        self.assertEqual(got, goldapple.BLOCKED)
+        tab.close.assert_called_once()
+
+    def test_bad_arguments(self):
+        self.assertEqual(goldapple.reviews("кушон"), "нужен артикул или ссылка на товар Золотого яблока")
+        self.assertEqual(goldapple.reviews("19000163536", sort="best"), "sort: одно из useful, new, high, low")
+
+
 if __name__ == "__main__":
     unittest.main()

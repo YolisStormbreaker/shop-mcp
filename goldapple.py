@@ -176,22 +176,30 @@ def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=20):
     if d is None:
         return BLOCKED
     data = d.get("data") or {}
-    st, listing = data.get("statistic") or {}, data.get("listing") or {}
+    rows = [_review_row(r) for r in ((data.get("listing") or {}).get("reviews") or [])[:limit]]
+    return _reviews_head(data, sku, sort, with_media, page) + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
+
+
+def _reviews_head(data, sku, sort, with_media, page):
+    st = data.get("statistic") or {}
     stars = " ".join(f"{x['star']}★ {x['percent']}%" for x in st.get("starStatistic") or [])
-    head = (f"Золотое яблоко · артикул {sku}: рейтинг {st.get('rating')}, отзывов {st.get('allReviewsCount')}, "
+    return (f"Золотое яблоко · артикул {sku}: рейтинг {st.get('rating')}, отзывов {st.get('allReviewsCount')}, "
             f"рекомендуют {st.get('recommended')}% · {stars}\n"
             f"страница {page} (по 20), сортировка {sort}{', только с фото' if with_media else ''}; "
             f"фото с отзывов всего: {(data.get('gallery') or {}).get('mediaCount', 0)}\n"
             "дата\t★\tполезно\tвариант\tавтор\tтекст\tфото (shop_images)")
-    rows = []
-    for r in (listing.get("reviews") or [])[:limit]:
-        variant = " ".join(f"{a.get('value')} {a.get('name', '')}".strip() for a in (r.get("attributes") or {}).values())
-        text = " | ".join(p for p in (f"+ {r['pros']}" if r.get("pros") else "", f"− {r['cons']}" if r.get("cons") else "",
-                                       r.get("comment") or "") if p)
-        photos = " ".join(_img(i.get("original") or {}) for i in r.get("imageUrls") or [])
-        rows.append(f"{(r.get('submitDate') or '')[:10]}\t{r.get('stars')}\t{r.get('likes') or ''}\t{variant}\t"
-                    f"{r.get('username', '')}\t{_text(text)}\t{photos}")
-    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
+
+
+def _review_row(r):
+    variant = " ".join(f"{a.get('value')} {a.get('name', '')}".strip() for a in (r.get("attributes") or {}).values())
+    photos = " ".join(_img(i.get("original") or {}) for i in r.get("imageUrls") or [])
+    return (f"{(r.get('submitDate') or '')[:10]}\t{r.get('stars')}\t{r.get('likes') or ''}\t{variant}\t"
+            f"{r.get('username', '')}\t{_text(_review_text(r))}\t{photos}")
+
+
+def _review_text(r):
+    return " | ".join(p for p in (f"+ {r['pros']}" if r.get("pros") else "", f"− {r['cons']}" if r.get("cons") else "",
+                                   r.get("comment") or "") if p)
 
 
 # The cart is a plain same-origin API with the session cookie (names from the site's own code:
