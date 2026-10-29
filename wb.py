@@ -301,16 +301,24 @@ def _cart(tab, ops=None):
     with a signed request. Our operations ride in the body of the page's own sync on load; a second
     load with ts=0 makes the page pull the whole server cart, so the listing includes our change.
     """
-    if ops:
-        body = json.dumps(ops)
-        r = capture(tab, "wb", CART, {"sync": ["basket/sync"]}, rewrite=(SYNC, _once(lambda u: (u, body)))).get("sync")
-        if not r or r.get("state") != 0:
-            log.warning("wb cart sync %s: %s", ops, r)
-            return None
+    if ops and not _synced(tab, ops):
+        return None
     ts0 = _once(lambda u: re.sub(r"([?&])ts=\d+", r"\g<1>ts=0", u))
     d = capture(tab, "wb", CART, {"cart": ["basket/data_v2"]}, rewrite=(SYNC, ts0)).get("cart")
-    if d is None:
-        return None
+    return None if d is None else _basket_items(d)
+
+
+def _synced(tab, ops):
+    """Send ops in the body of the page's own sync; whether WB accepted them (state 0)."""
+    body = json.dumps(ops)
+    r = capture(tab, "wb", CART, {"sync": ["basket/sync"]}, rewrite=(SYNC, _once(lambda u: (u, body)))).get("sync")
+    if r and r.get("state") == 0:
+        return True
+    log.warning("wb cart sync %s: %s", ops, r)
+    return False
+
+
+def _basket_items(d):
     return (((d.get("value") or {}).get("data") or {}).get("basket") or {}).get("basketItems") or []
 
 
