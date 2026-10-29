@@ -259,8 +259,12 @@ def _open_good(tab, pid, depot):
     return c
 
 
+def _quantity(items, pid):
+    return float((items.get(pid) or {}).get("quantity") or 0)
+
+
 def _qty(tab, pid, depot):
-    return float((_cart_items(tab, depot)[0].get(pid) or {}).get("quantity") or 0)
+    return _quantity(_cart_items(tab, depot)[0], pid)
 
 
 def _click(tab, sel):
@@ -286,10 +290,10 @@ def add_to_cart(id_or_url, quantity=1):
         if not c.get("available"):
             return f"Лавка: {_clean(c.get('longTitle'))} сейчас нет в наличии"
         _clicks(tab, [PLUS if start else ADD] + [PLUS] * (max(1, min(int(quantity), 30)) - 1))
-        n = _qty(tab, pid, depot)
         items, r = _cart_items(tab, depot)
     finally:
         tab.close()
+    n = _quantity(items, pid)
     if n <= start:
         return f"Лавка не положила {_clean(c.get('longTitle'))} в корзину (кнопка не сработала)"
     return (f"в корзине {DEPOTS[depot]}: {_clean(c.get('longTitle'))} — {n:g} шт; корзина {r.get('totalItemsPrice')} ₽ без доставки"
@@ -302,13 +306,12 @@ def remove_from_cart(id_or_url):
     try:
         c = _open_good(tab, pid, depot)
         pid = c["id"]
+        left = _qty(tab, pid, depot)
         for _ in range(30):
-            if not _qty(tab, pid, depot):
-                break
-            if not _click(tab, MINUS):
+            if not left or not _click(tab, MINUS):
                 break
             time.sleep(1.2)
-        left = _qty(tab, pid, depot)
+            left = _qty(tab, pid, depot)
     finally:
         tab.close()
     return f"не удалось убрать {_clean(c.get('longTitle'))} из корзины Лавки" if left else f"убрано из корзины {DEPOTS[depot]}: {_clean(c.get('longTitle'))}"

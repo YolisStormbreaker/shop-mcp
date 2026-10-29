@@ -302,7 +302,7 @@ class LavkaAddToCartTests(unittest.TestCase):
         self.assertEqual(shop.run(lavka.add_to_cart, "https://lavka.yandex.ru/good/kefir-1", 2),
                          "в корзине Лавка у дома: Кефир 2,5% — 2 шт; корзина 230 ₽ без доставки")
         self.assertEqual(shop.sent, [("v1/product", {"productId": "kefir-1", "enableUnavailable": True}, "regular"), PAGE, RETRIEVE,
-                                     "В корзину", "+", RETRIEVE, RETRIEVE])
+                                     "В корзину", "+", RETRIEVE])
 
     def test_big_lavka_already_in_the_cart_and_under_the_minimum(self):
         shop = Shop(qty=1, depot="supermarket", checkout=False)
@@ -310,7 +310,7 @@ class LavkaAddToCartTests(unittest.TestCase):
                          "в корзине Большая лавка: Кефир 2,5% — 2 шт; корзина 230 ₽ без доставки · к заказу пока нельзя: минимальный заказ 500 ₽")
         sup = ("cart/v1/retrieve", {}, "supermarket")
         self.assertEqual(shop.sent, [("v1/product", {"productId": "a1b2", "enableUnavailable": True}, "supermarket"),
-                                     "https://lavka.yandex.ru/supermarket/good/kefir-1", sup, "+", sup, sup])
+                                     "https://lavka.yandex.ru/supermarket/good/kefir-1", sup, "+", sup])
 
     def test_quantity_is_one_to_thirty_clicks(self):
         for quantity, clicks in ((0, 1), (-3, 1), ("2", 2), (100, 30)):
@@ -332,7 +332,7 @@ class LavkaAddToCartTests(unittest.TestCase):
     def test_button_that_is_not_there(self):
         shop = Shop(buttons=False)
         self.assertEqual(shop.run(lavka.add_to_cart, "a1b2", 3), "Лавка не положила Кефир 2,5% в корзину (кнопка не сработала)")
-        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, RETRIEVE, RETRIEVE])
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, RETRIEVE])
 
     def test_unknown_product(self):
         shop = Shop(good=None)
@@ -345,17 +345,17 @@ class LavkaRemoveFromCartTests(unittest.TestCase):
     def test_minus_until_it_is_gone(self):
         shop = Shop(qty=2)
         self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), "убрано из корзины Лавка у дома: Кефир 2,5%")
-        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, "−", RETRIEVE, "−", RETRIEVE, RETRIEVE])
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, "−", RETRIEVE, "−", RETRIEVE])
 
     def test_not_in_the_cart(self):
         shop = Shop()
         self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), "убрано из корзины Лавка у дома: Кефир 2,5%")
-        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, RETRIEVE])
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE])
 
     def test_no_minus_button(self):
         shop = Shop(qty=1, buttons=False)
         self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), "не удалось убрать Кефир 2,5% из корзины Лавки")
-        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, RETRIEVE])
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE])
 
     def test_at_most_thirty_clicks(self):
         shop = Shop(qty=31)
@@ -365,7 +365,7 @@ class LavkaRemoveFromCartTests(unittest.TestCase):
     def test_cart_that_did_not_come(self):
         shop = Shop(qty=1, reads=False)
         self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), "убрано из корзины Лавка у дома: Кефир 2,5%")
-        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, RETRIEVE])
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE])
 
     def test_unknown_product(self):
         shop = Shop(good=None)
