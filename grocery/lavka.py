@@ -92,39 +92,56 @@ def _search_depot(tab, query, depot, limit):
     return [_listed(cache[i], depot) for i in order]
 
 
+SORTS = {"price": lambda x: x["price"] or 1e9, "price_desc": lambda x: -(x["price"] or 0),
+         "discount": lambda x: (x["price"] or 0) / (x["old"] or x["price"] or 1), "rating": lambda x: 0}
+
+
 def search(query, tag=None, sort="popular", page=1, limit=30):
+    how, query, note = _how(query, tag)
     tab = _tab()
-    note = ""
     try:
-        how = next((v for k, v in TAGS.items() if tag and tag.lower() in k), None) if tag else None
-        if tag and not how:
-            note = f"тега «{tag}» у Лавки нет — искал «{query} {tag}» текстом"
-            query = f"{query} {tag}".strip()
-        if how and how[0] == "fact" and not query:
-            d = _post(tab, "v1/products/list/by-attribute", {"attribute": {"type": "fact", "value": how[1]}, "limit": max(limit, 20)})
-            items = [_listed(p, "regular") for p in (d or {}).get("products") or []] if d else None
-        else:
-            items = _search_depot(tab, query, "regular", limit)
-            if items is not None:
-                items += _search_depot(tab, query, "supermarket", limit) or []
+        items = _found(tab, query, how, limit)
     finally:
         tab.close()
     if items is None:
         return BLOCKED
     if how:
-        kind, val = how
-        items = [p for p in items if (val not in p["_allergens"] if kind == "noallergen" else val in p["_tags"])]
-        note = (f"тег Лавки «{tag}»" + (" — по списку аллергенов: глютена в нём нет (сайт этого не утверждает)" if kind == "noallergen" else "")).strip()
+        items, note = _tagged(items, how, tag)
     for p in items:
         p.pop("_tags"), p.pop("_allergens")
     if sort != "popular":
-        key = {"price": lambda x: x["price"] or 1e9, "price_desc": lambda x: -(x["price"] or 0),
-               "discount": lambda x: (x["price"] or 0) / (x["old"] or x["price"] or 1), "rating": lambda x: 0}[sort]
-        items.sort(key=key)
+        items.sort(key=SORTS[sort])
         note += ("\n" if note else "") + "Лавка не сортирует: отсортированы полученные товары"
     start = (page - 1) * limit
     return {"items": items[start:start + limit], "total": len(items), "note": note.strip(),
             "facets": list(TAGS), "url": SITE + "/search?text=" + urllib.parse.quote(query or "")}
+
+
+def _how(query, tag):
+    """(where Лавка keeps the tag, the query, the note); a tag it does not have is searched as text."""
+    how = next((v for k, v in TAGS.items() if tag.lower() in k), None) if tag else None
+    if tag and not how:
+        return None, f"{query} {tag}".strip(), f"тега «{tag}» у Лавки нет — искал «{query} {tag}» текстом"
+    return how, query, ""
+
+
+def _found(tab, query, how, limit):
+    """Both depots' hits, or a fact's list when there is no query; None when the site did not answer."""
+    if how and how[0] == "fact" and not query:
+        d = _post(tab, "v1/products/list/by-attribute", {"attribute": {"type": "fact", "value": how[1]}, "limit": max(limit, 20)})
+        return [_listed(p, "regular") for p in d.get("products") or []] if d else None
+    items = _search_depot(tab, query, "regular", limit)
+    if items is not None:
+        items += _search_depot(tab, query, "supermarket", limit) or []
+    return items
+
+
+def _tagged(items, how, tag):
+    kind, val = how
+    if kind == "noallergen":
+        return [p for p in items if val not in p["_allergens"]], \
+            f"тег Лавки «{tag}» — по списку аллергенов: глютена в нём нет (сайт этого не утверждает)"
+    return [p for p in items if val in p["_tags"]], f"тег Лавки «{tag}»"
 
 
 def _pid(id_or_url):
