@@ -99,48 +99,78 @@ def _diet_tags(tab, store):
     return _tree[store]
 
 
+DIET = re.compile(r"без |веган|халяль|глютен|лактоз|сахар|постн|спорт|польз", re.I)
+
+
 def search(query, tag=None, sort="popular", page=1, limit=30):
     tab = _tab()
     try:
         store, note = _ctx(tab)
         tags = _diet_tags(tab, store)
-        cat = None
-        if tag:
-            cat = next((cid for name, cid in tags.items() if tag.lower() in name.lower()), None)
-            if not cat:
-                note += f"\nтега «{tag}» среди разделов сайта нет — искал «{query} {tag}» текстом"
-                query = f"{query} {tag}".strip()
-        items, total = [], None
-        if cat:   # a category listing: sorted by the site, filtered by the query words below
-            base = f"{API}/v2/stores/{store}/categories/{cat}/products?mode=delivery&include_restrict=true&order_by={ORDER[sort]}"
-            for off in range((page - 1) * 36, page * 36, 12):
-                d = _get(tab, f"{base}&limit=12&offset={off}")
-                if not d or not d.get("products"):
-                    break
-                items += d["products"]
-            words = [w[:5].lower() for w in (query or "").split()]
-            items = [p for p in items if all(w in p.get("name", "").lower() for w in words)]
-            note += f"\nраздел сайта «{next(n for n, c in tags.items() if c == cat)}»" + (f", отобраны названия со словами «{query}»" if words else "")
+        section = _section(tags, tag)
+        if tag and not section:
+            note += f"\nтега «{tag}» среди разделов сайта нет — искал «{query} {tag}» текстом"
+            query = f"{query} {tag}".strip()
+        if section:
+            rows, more = _section_rows(_section_products(tab, store, tags[section], sort, page), section, query)
         else:
-            q = urllib.parse.quote(query)
-            for off in range((page - 1) * max(limit, 12), page * max(limit, 12), 12):
-                d = _get(tab, f"{API}/v3/stores/{store}/search?mode=delivery&include_restrict=true&q={q}&limit=12&offset={off}")
-                if d is None:
-                    return BLOCKED
-                items += d.get("products") or []
-                if len(d.get("products") or []) < 12:
-                    break
+            products = _search_products(tab, store, query, page, limit)
+            if products is None:
+                return BLOCKED
+            rows, more = _search_rows(products, sort)
     finally:
         tab.close()
-    rows = [_listed(p) for p in items]
-    if sort != "popular" and not cat:   # search itself has no sorting
-        key = {"price": lambda x: x["price"] or 1e9, "price_desc": lambda x: -(x["price"] or 0),
-               "discount": lambda x: (x["price"] or 0) / (x["old"] or x["price"] or 1), "rating": lambda x: -(x["rating"] or 0)}[sort]
-        rows.sort(key=key)
-        note += "\nпоиск сайта не сортирует: отсортирована полученная страница"
-    diet = [n for n in tags if re.search(r"без |веган|халяль|глютен|лактоз|сахар|постн|спорт|польз", n, re.I)]
-    return {"items": rows[:limit], "total": total, "facets": diet, "note": note.strip(),
+    return {"items": rows[:limit], "total": None, "facets": [n for n in tags if DIET.search(n)], "note": (note + more).strip(),
             "url": "https://5ka.ru/search/?text=" + urllib.parse.quote(query or "")}
+
+
+def _section(tags, tag):
+    """The site section whose name has the tag in it («лактоз» → «Без лактозы, халяль»), else None."""
+    return next((name for name in tags if tag and tag.lower() in name.lower()), None)
+
+
+def _section_products(tab, store, cat, sort, page):
+    base = f"{API}/v2/stores/{store}/categories/{cat}/products?mode=delivery&include_restrict=true&order_by={ORDER[sort]}"
+    products = []
+    for off in range((page - 1) * 36, page * 36, 12):
+        d = _get(tab, f"{base}&limit=12&offset={off}")
+        if not d or not d.get("products"):
+            break
+        products += d["products"]
+    return products
+
+
+def _section_rows(products, section, query):
+    """A section is sorted by the site; the query keeps names with every word's first 5 letters («кефиры» → «кефир»)."""
+    words = [w[:5].lower() for w in (query or "").split()]
+    rows = [_listed(p) for p in products if all(w in p.get("name", "").lower() for w in words)]
+    return rows, f"\nраздел сайта «{section}»" + (f", отобраны названия со словами «{query}»" if words else "")
+
+
+def _search_products(tab, store, query, page, limit):
+    """Requests of 12 up to the limit, until a short one; None when the site did not answer."""
+    q, size, products = urllib.parse.quote(query), max(limit, 12), []
+    for off in range((page - 1) * size, page * size, 12):
+        d = _get(tab, f"{API}/v3/stores/{store}/search?mode=delivery&include_restrict=true&q={q}&limit=12&offset={off}")
+        if d is None:
+            return None
+        got = d.get("products") or []
+        products += got
+        if len(got) < 12:
+            break
+    return products
+
+
+BY = {"price": lambda x: x["price"] or 1e9, "price_desc": lambda x: -(x["price"] or 0),
+      "discount": lambda x: (x["price"] or 0) / (x["old"] or x["price"] or 1), "rating": lambda x: -(x["rating"] or 0)}
+
+
+def _search_rows(products, sort):
+    """Search itself has no sorting: the page it gave is sorted here."""
+    rows = [_listed(p) for p in products]
+    if sort == "popular":
+        return rows, ""
+    return sorted(rows, key=BY[sort]), "\nпоиск сайта не сортирует: отсортирована полученная страница"
 
 
 def _plu(id_or_url):
