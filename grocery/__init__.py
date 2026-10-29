@@ -248,25 +248,39 @@ RANKS = {"price": "цена за кг/л ↑", "sugar": "сахар на 100 г 
          "fat": "жир на 100 г ↑", "ingredients": "число ингредиентов ↑"}
 
 
+INF = float("inf")
+
+
+def _last(v, sign=1):
+    """Sort key sign × v; an unknown value goes after every known one."""
+    return INF if v is None else sign * v
+
+
+def _per_unit(p):
+    """The price per kg/l/шт as the table shows it, INF when unknown."""
+    u = unit_price(p)
+    return float(u.split()[0]) if u else INF
+
+
+def _all_text(p):
+    """Composition, the site's composition facts and the name: «74% какао» is often only in the name."""
+    return "; ".join((p.get("composition") or "", p.get("composition_extra") or "", p.get("name") or ""))
+
+
 def _rank_value(p, rank):
     """Sort key, smaller is better; unknown values go last."""
-    n, comp = p.get("nutrition") or {}, p.get("composition") or ""
-    comp_all = "; ".join((comp, p.get("composition_extra") or "", p.get("name") or ""))   # «74% какао» is often only in the name
-    inf = float("inf")
+    n = p.get("nutrition") or {}
     if rank == "price":
-        u = unit_price(p)
-        return float(u.split()[0]) if u else inf
+        return _per_unit(p)
     if rank == "sugar":
-        v = n.get("sugar", n.get("carbs"))
-        return inf if v is None else v
+        return _last(n.get("sugar", n.get("carbs")))
     if rank in ("kcal", "fat"):
-        return n.get(rank, inf)
+        return _last(n.get(rank))
     if rank == "protein":
-        return -n["protein"] if n.get("protein") is not None else inf
+        return _last(n.get("protein"), -1)
     if rank == "ingredients":
-        return len(composition.parse(comp)["ingredients"]) if comp else inf
-    v = composition.percent_of(rank.lstrip("%"), comp_all)   # "%какао": more is better
-    return -v if v is not None else inf
+        return len(composition.parse(p["composition"])["ingredients"]) if p.get("composition") else INF
+    return _last(composition.percent_of(rank.lstrip("%"), _all_text(p)), -1)   # "%какао": more is better
 
 
 def _relevant(name, query):
