@@ -57,16 +57,31 @@ def _rub(k):
     return round(k / 100, 2) if isinstance(k, (int, float)) else None
 
 
+def _obj(d, key):
+    return d.get(key) or {}
+
+
+def _weighed(p):
+    return _obj(p, "features").get("isWeight")
+
+
+def _size(p):
+    """A weighed item is sold in steps of its sale unit."""
+    return f"{_obj(p, 'units').get('saleUnitQuantity', '')} кг" if _weighed(p) else _obj(p, "display").get("package") or ""
+
+
+def _old(price, regular):
+    return regular if regular and price and regular > price else None
+
+
 def _listed(p):
-    pr, d = p.get("prices") or {}, p.get("display") or {}
-    price, regular = _rub(pr.get("price")), _rub(pr.get("priceRegular"))
-    weight = (p.get("features") or {}).get("isWeight")
-    return {"id": str(p.get("id")), "name": d.get("name") or p.get("name", ""), "brand": "",
-            "size": d.get("package") or "" if not weight else f"{(p.get('units') or {}).get('saleUnitQuantity', '')} кг",
-            "price": price, "old": regular if regular and price and regular > price else None,
+    pr, rating = _obj(p, "prices"), _obj(p, "rating")
+    price = _rub(pr.get("price"))
+    return {"id": str(p.get("id")), "name": _obj(p, "display").get("name") or p.get("name", ""), "brand": "", "size": _size(p),
+            "price": price, "old": _old(price, _rub(pr.get("priceRegular"))),
             "available": (p.get("count") or 0) > 0, "url": f"{SITE}/product/{p.get('slug') or 'x'}-{p.get('id')}/",
-            "rating": (p.get("rating") or {}).get("rate"), "reviews": (p.get("rating") or {}).get("votes"), "ean": None,
-            "_per_kg": _rub(pr.get("cost")) if weight else None}
+            "rating": rating.get("rate"), "reviews": rating.get("votes"), "ean": None,
+            "_per_kg": _rub(pr.get("cost")) if _weighed(p) else None}
 
 
 def _search(tab, query, mc=None, cat=None, sort="popular", limit=40, offset=0):
