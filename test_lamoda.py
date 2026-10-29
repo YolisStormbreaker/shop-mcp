@@ -1,7 +1,8 @@
-"""Lamoda: the page state (window.__NUXT__, in the shape the site has used since 2026-10) and the reviews API -> the tools' text.
+"""Lamoda: the page state (window.__NUXT__, in the shape the site has used since 2026-10), the reviews and cart APIs -> the tools' text.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_lamoda"""
+import json
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import lamoda
 
@@ -236,6 +237,146 @@ class LamodaReviewsTests(unittest.TestCase):
     def test_bad_arguments(self):
         self.assertEqual(lamoda.reviews("MP002XM01L0O", sort="best"), "sort: одно из useful, new, high, low")
         self.assertEqual(lamoda.reviews("носки"), "нужен sku Lamoda или ссылка https://www.lamoda.ru/p/<sku>/...")
+
+
+SWEATER = {"size": {"sku": "MP002XW0ABCDE420", "title": "42"}, "quantity": 1, "total_price": 3999, "original_price": 4999,
+           "product": {"brand": {"title": "Befree"}, "title": "Свитер"}}
+SCARF = {"size": {"sku": "AB123XY45678ONE"}, "quantity": 2, "total_price": 3000, "original_price": 3000, "product": {"title": "Шарф"}}
+CART = {"total_quantity": 3, "total_price": 6999, "packages": [{"items": [SWEATER]}, {"items": [SCARF, {"size": {}}]}, {}]}
+CART_HEAD = "sku размера\tшт\tсумма ₽\tбез скидок\tбренд\tназвание\tразмер\n"
+CART_TEXT = ("корзина Lamoda: 3 шт, итого 6999 ₽ (со всеми скидками)\n" + CART_HEAD +
+             "MP002XW0ABCDE420\t1\t3999\t4999\tBefree\tСвитер\t42\n"
+             "AB123XY45678ONE\t2\t3000\t\t\tШарф\t\n"
+             "None\tNone\tNone\t\t\t\t")
+SCARF_CART = {"total_quantity": 2, "total_price": 3000, "packages": [{"items": [SCARF]}]}
+SCARF_TEXT = "корзина Lamoda: 2 шт, итого 3000 ₽ (со всеми скидками)\n" + CART_HEAD + "AB123XY45678ONE\t2\t3000\t\t\tШарф\t"
+SIZES = [{"sku": "MP002XW0ABCDE420", "title": "42", "brand": "XS", "stock": 3}, {"sku": "MP002XW0ABCDE440", "title": "44", "brand": "44", "stock": 0},
+         {"sku": "MP002XW0ABCDE460", "title": "46", "brand": "", "stock": 1}]
+SIZE_NAMES = "42 (XS): 3 шт, 44: 0 шт, 46: 1 шт"
+SIZES_JS = ("(window.__NUXT__?.payload?.state?.payload?.product?.sizes || [])"
+            ".map(s => ({sku: s.sku, title: s.title, brand: s.brand_title || '', stock: s.stock_quantity || 0}))")
+GEO_JS = "decodeURIComponent((document.cookie.match(/(?:^|; )gd_aoid=([^;]+)/) || [])[1] || '')"
+GET = ("GET", "/api/v1/cart/get", None)
+
+
+class LamodaCartTests(unittest.TestCase):
+    """The cart tools with the site mocked: the answer, and every request that would go to Lamoda (bodies as sent)."""
+
+    def call(self, fn, *args, answers=(), js=()):
+        tab = MagicMock()
+        tab.js.side_effect = list(js)  # a page read the test did not expect raises StopIteration
+        with patch.object(lamoda, "_lm_tab", return_value=tab) as lm_tab, patch.object(lamoda, "_api", side_effect=list(answers)) as api:
+            got = fn(*args)
+        for c in api.call_args_list:
+            self.assertIs(c.args[0], tab)
+        sent = [(c.args[1], c.args[2], None if len(c.args) < 4 else json.dumps(c.args[3])) for c in api.call_args_list]
+        self.assertEqual(tab.close.call_count, lm_tab.call_count)
+        return got, sent, tab, lm_tab
+
+    def test_cart(self):
+        got, sent, tab, _ = self.call(lamoda.cart, answers=[CART])
+        self.assertEqual(got, CART_TEXT)
+        self.assertEqual(sent, [GET])
+        tab.close.assert_called_once()
+
+    def test_empty_cart(self):
+        for d in ({"total_quantity": 0, "packages": []}, {}, {"packages": [{"items": None}]}):
+            self.assertEqual(self.call(lamoda.cart, answers=[d])[0], "корзина Lamoda пуста")
+
+    def test_cart_blocked(self):
+        got, _, tab, _ = self.call(lamoda.cart, answers=[None])
+        self.assertEqual(got, lamoda.BLOCKED)
+        tab.close.assert_called_once()
+
+    def add(self, sku_or_url="MP002XW0ABCD", size=None, sizes=SIZES, geo="test-aoid", answers=({}, CART)):
+        return self.call(lamoda.add_to_cart, sku_or_url, size, answers=answers, js=[sizes, geo])
+
+    def test_add_a_size_by_its_brand_name(self):
+        got, sent, tab, _ = self.add(size="xs")
+        self.assertEqual(got, "добавлено: MP002XW0ABCDE420, размер 42\n" + CART_TEXT)
+        self.assertEqual(sent, [("POST", "/api/v1/cart/add", '{"sku": "MP002XW0ABCDE420", "geo": {"aoid": "test-aoid"}}'), GET])
+        self.assertEqual(tab.goto.call_args_list, [call(
+            "https://www.lamoda.ru/p/mp002xw0abcd/", "lamoda", wait_js='window.__NUXT__?.payload?.state?.payload?.product?.sku === "MP002XW0ABCD"')])
+        self.assertEqual([c.args for c in tab.js.call_args_list], [(SIZES_JS,), (GEO_JS,)])
+        tab.close.assert_called_once()
+
+    def test_add_a_size_by_its_title_or_sku_from_a_link(self):
+        cart = {"total_quantity": 1, "total_price": 2500, "packages": [{"items": [{**SWEATER, "size": {"sku": "MP002XW0ABCDE460", "title": "46"}}]}]}
+        for size in (" 46 ", "mp002xw0abcde460"):
+            got, sent, tab, _ = self.add(" https://www.lamoda.ru/p/mp002xw0abcd/clothes-befree-sviter/?utm=x ", size, answers=[{}, cart])
+            self.assertEqual(got.splitlines()[0], "добавлено: MP002XW0ABCDE460, размер 46")
+            self.assertEqual(sent[0], ("POST", "/api/v1/cart/add", '{"sku": "MP002XW0ABCDE460", "geo": {"aoid": "test-aoid"}}'))
+            self.assertEqual(tab.goto.call_args.args[0], "https://www.lamoda.ru/p/mp002xw0abcd/")
+
+    def test_add_the_only_size_without_naming_it(self):
+        got, sent, _, _ = self.add(" mp002xw0abcd ", sizes=SIZES[:1])
+        self.assertEqual(got, "добавлено: MP002XW0ABCDE420, размер 42\n" + CART_TEXT)
+        self.assertEqual(sent[0][2], '{"sku": "MP002XW0ABCDE420", "geo": {"aoid": "test-aoid"}}')
+
+    def test_add_not_confirmed(self):
+        got, sent, _, _ = self.add(size="46", answers=[None, SCARF_CART])
+        self.assertEqual(got, "⚠️ Lamoda не подтвердила добавление: MP002XW0ABCDE460, размер 46\n" + SCARF_TEXT)
+        self.assertEqual(len(sent), 2)
+
+    def test_add_then_the_cart_is_blocked(self):
+        got, sent, tab, _ = self.add(size="42", answers=[{}, None])
+        self.assertEqual(got, lamoda.BLOCKED)
+        self.assertEqual([s[:2] for s in sent], [("POST", "/api/v1/cart/add"), GET[:2]])
+        tab.close.assert_called_once()
+
+    def test_add_sends_nothing_without_a_size_in_stock(self):
+        for size, sizes, want in [
+                (None, SIZES, "у товара несколько размеров, укажи size: " + SIZE_NAMES),
+                ("XL", SIZES, "нет размера «XL»; есть: " + SIZE_NAMES),
+                ("44", SIZES, "размер 44 закончился; есть: " + SIZE_NAMES),
+                (None, [{**SIZES[0], "stock": 0}], "размер 42 закончился; есть: 42 (XS): 0 шт"),
+                ("42", [], lamoda.BLOCKED), ("42", None, lamoda.BLOCKED)]:
+            got, sent, tab, _ = self.call(lamoda.add_to_cart, "MP002XW0ABCD", size, js=[sizes])
+            self.assertEqual(got, want)
+            self.assertEqual(sent, [])
+            tab.close.assert_called_once()
+
+    def test_add_sends_nothing_without_the_delivery_region(self):
+        got, sent, tab, _ = self.add(size="42", geo="")
+        self.assertEqual(got, "⚠️ не нашёл регион доставки Lamoda (cookie gd_aoid): открой сайт и выбери город")
+        self.assertEqual(sent, [])
+        tab.close.assert_called_once()
+
+    def test_add_needs_a_sku_or_a_link(self):
+        for s in ("носки", "MP002XW0ABC", "MP002XW0ABCDE", "https://www.lamoda.ru/c/355/clothes-sharfy/"):
+            got, _, _, lm_tab = self.call(lamoda.add_to_cart, s, "42")
+            self.assertEqual(got, "нужен sku товара (из lamoda_search) или ссылка на товар")
+            lm_tab.assert_not_called()
+
+    def test_remove(self):
+        got, sent, tab, _ = self.call(lamoda.remove_from_cart, " mp002xw0abcde420 ", answers=[CART, {}, SCARF_CART], js=["test-aoid"])
+        self.assertEqual(got, "удалено: MP002XW0ABCDE420\n" + SCARF_TEXT)
+        self.assertEqual(sent, [GET, ("POST", "/api/v1/cart/remove", '{"skus": ["MP002XW0ABCDE420"], "geo": {"aoid": "test-aoid"}}'), GET])
+        self.assertEqual([c.args for c in tab.js.call_args_list], [(GEO_JS,)])
+        tab.goto.assert_not_called()
+        tab.close.assert_called_once()
+
+    def test_remove_without_the_delivery_region_sends_no_geo(self):
+        _, sent, _, _ = self.call(lamoda.remove_from_cart, "MP002XW0ABCDE420", answers=[CART, {}, SCARF_CART], js=[""])
+        self.assertEqual(sent[1], ("POST", "/api/v1/cart/remove", '{"skus": ["MP002XW0ABCDE420"], "geo": null}'))
+
+    def test_remove_not_confirmed(self):
+        got, _, _, _ = self.call(lamoda.remove_from_cart, "MP002XW0ABCDE420", answers=[CART, None, CART], js=["test-aoid"])
+        self.assertEqual(got, "⚠️ Lamoda не подтвердила удаление: MP002XW0ABCDE420\n" + CART_TEXT)
+
+    def test_remove_what_is_not_in_the_cart(self):
+        got, sent, tab, _ = self.call(lamoda.remove_from_cart, "MP002XW0ABCDE440", answers=[CART])
+        self.assertEqual(got, "такого sku размера в корзине нет\n" + CART_TEXT)
+        self.assertEqual(sent, [GET])
+        tab.close.assert_called_once()
+
+    def test_remove_blocked(self):
+        got, sent, tab, _ = self.call(lamoda.remove_from_cart, "MP002XW0ABCDE420", answers=[None])
+        self.assertEqual((got, sent), (lamoda.BLOCKED, [GET]))
+        tab.close.assert_called_once()
+        got, sent, tab, _ = self.call(lamoda.remove_from_cart, "MP002XW0ABCDE420", answers=[CART, {}, None], js=["test-aoid"])
+        self.assertEqual((got, len(sent)), (lamoda.BLOCKED, 3))
+        tab.close.assert_called_once()
 
 
 if __name__ == "__main__":
