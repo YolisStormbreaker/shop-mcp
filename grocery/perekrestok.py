@@ -43,10 +43,15 @@ def _tab():
         # restart brings back the old one, already passed (2026-10-13). If the home page shows the check, it is real.
         tab.goto(SITE + "/", "perekrestok", wait_js="!!window.__LOADABLE_LOADED_CHUNKS__ && document.readyState === 'complete' || location.pathname.includes('/xpvnsulc/')")
         if not tab.js(FIND_API):
-            checked = "/xpvnsulc/" in (tab.js("location.pathname") or "")
+            checked = _checked(tab)
             tab.close()
             raise RuntimeError(CHECKED if checked else BLOCKED)
     return tab
+
+
+def _checked(tab):
+    """The tab shows ServicePipe's bot check."""
+    return "/xpvnsulc/" in (tab.js("location.pathname") or "")
 
 
 _last = 0.0
@@ -73,21 +78,31 @@ def _call(tab, method, path, body=None, retried=False):
     if wait > 0:
         time.sleep(wait)
     _last = time.time()
+    d = _request(tab, method, path, body)
+    if isinstance(d, dict) and "__error" in d:
+        log.warning("perekrestok %s %s: %s%s", method, path[:120], d["__error"], " again after reload" if retried else "")
+        if d["__error"] in (401, 403) and not retried and _renew(tab):
+            return _call(tab, method, path, body, True)
+    return d
+
+
+def _request(tab, method, path, body):
     args = json.dumps(path) + ("" if body is None else ", " + json.dumps(body))
     r = tab.js(f"window.__shopApi.{method}({args}).then(r => JSON.stringify(r.data ?? null))"
                ".catch(e => JSON.stringify({__error: e.response ? e.response.status : String(e.message || e)}))")
-    d = json.loads(r) if r else None
-    if isinstance(d, dict) and "__error" in d:
-        log.warning("perekrestok %s %s: %s%s", method, path[:120], d["__error"], " again after reload" if retried else "")
-        if d["__error"] in (401, 403) and not retried:
-            tab.js("delete window.__shopApi")
-            tab.goto(SITE + "/", "perekrestok", wait_js="!!window.__LOADABLE_LOADED_CHUNKS__ && document.readyState === 'complete'")
-            time.sleep(1.5)
-            if tab.js(FIND_API):
-                return _call(tab, method, path, body, True)
-            if "/xpvnsulc/" in (tab.js("location.pathname") or ""):
-                raise RuntimeError(CHECKED)
-    return d
+    return json.loads(r) if r else None
+
+
+def _renew(tab):
+    """Reload the home page; True when the site's client is back, the bot check raises."""
+    tab.js("delete window.__shopApi")
+    tab.goto(SITE + "/", "perekrestok", wait_js="!!window.__LOADABLE_LOADED_CHUNKS__ && document.readyState === 'complete'")
+    time.sleep(1.5)
+    if tab.js(FIND_API):
+        return True
+    if _checked(tab):
+        raise RuntimeError(CHECKED)
+    return False
 
 
 def _rub(k):
