@@ -243,7 +243,7 @@ def _extra(c, info):
     return [x for x in ("доставка: ~15 мин из ближайшего склада Самоката (условия сайта для адреса пользователя)",
                         c.get("quantity") and f"на складе {c['quantity']} шт",
                         c.get("discountPercent") and f"скидка {c['discountPercent']}%",
-                        "характеристики: " + "; ".join(info)) if x]
+                        info and "характеристики: " + "; ".join(info)) if x]
 
 
 def _photos(c):

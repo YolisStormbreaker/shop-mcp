@@ -254,7 +254,7 @@ class SamokatProductTests(unittest.TestCase):
         self.assertEqual(got, {
             "id": "a1", "name": "Вода", "brand": "", "size": "", "price": 49.9, "old": None, "available": False,
             "url": "https://samokat.ru/product/a1", "rating": None, "reviews": None, "ean": None, "photos": [], "description": "",
-            "composition": "", "nutrition": {}, "composition_extra": "", "extra": [DELIVERY, "характеристики: "]})
+            "composition": "", "nutrition": {}, "composition_extra": "", "extra": [DELIVERY]})
 
     def test_unknown_product(self):
         for answer in (None, {}):
