@@ -65,13 +65,20 @@ def _id(p, depot):
     return ("s:" if depot == "supermarket" else "") + p["id"]
 
 
+def _attributes(p):
+    return (p.get("options") or {}).get("attributes") or {}
+
+
+def _tags(p):
+    return set((p.get("productTags") or []) + (p.get("facts") or []) + _attributes(p).get("customTags", []))
+
+
 def _listed(p, depot):
     sup = "/supermarket" if depot == "supermarket" else ""
-    return {"id": _id(p, depot), "name": _clean(p.get("longTitle") or p.get("title")) + (" · Большая лавка" if depot == "supermarket" else ""),
+    return {"id": _id(p, depot), "name": _clean(p.get("longTitle") or p.get("title")) + (" · Большая лавка" if sup else ""),
             "brand": p.get("brand") or "", "size": p.get("amount") or "", "price": _num(p.get("currentPrice")), "old": _num(p.get("oldPrice")),
             "available": bool(p.get("available")), "url": f"{SITE}{sup}/good/{p.get('deepLink') or p['id']}", "rating": None, "reviews": None,
-            "ean": None, "_tags": set((p.get("productTags") or []) + (p.get("facts") or []) + ((p.get("options") or {}).get("attributes") or {}).get("customTags", [])),
-            "_allergens": set(((p.get("options") or {}).get("attributes") or {}).get("mainAllergens") or [])}
+            "ean": None, "_tags": _tags(p), "_allergens": set(_attributes(p).get("mainAllergens") or [])}
 
 
 def _search_depot(tab, query, depot, limit):
@@ -140,47 +147,74 @@ def product(id_or_url):
     c = (d or {}).get("product")
     if not c:
         return BLOCKED if d is None else f"Лавка: товар {pid} не найден"
+    return _card(c, info, depot)
+
+
+def _card(c, info, depot):
     p = _listed(c, depot)
     tags, allergens = p.pop("_tags"), p.pop("_allergens")
-    blocks = c.get("descriptionBlocks") or []
-    comp = next((b.get("value") for b in blocks if "ingredientsLoc" in (b.get("attributes") or [])), "") or ""
-    traces = next((b.get("value") for b in blocks if "specificsProduction" in (b.get("attributes") or [])), "")
+    composition, other = _blocks(c.get("descriptionBlocks") or [])
+    p.update(photos=_photos(c), description=_clean(c.get("description")), composition=composition, nutrition=_nutrition(c),
+             composition_extra="без сахара (тег Лавки)" if "withoutSugar" in tags or "nosugar" in tags else "",
+             extra=[x for x in (_discount(c), _delivery(info, depot), c.get("isLowStock") and "осталось мало",
+                                tags and "теги Лавки: " + ", ".join(sorted(tags)), _allergy(c, allergens),
+                                other and "о товаре: " + "; ".join(other)[:800]) if x])
+    return p
+
+
+def _block(blocks, attribute):
+    return next((b.get("value") for b in blocks if attribute in (b.get("attributes") or [])), "") or ""
+
+
+def _blocks(blocks):
+    """(the composition with its production traces, the card's other description lines)"""
+    composition, traces = _block(blocks, "ingredientsLoc"), _block(blocks, "specificsProduction")
     other = [f"{_clean(b.get('title'))}: {_clean(b.get('value'))}" for b in blocks
              if b.get("value") and not set(b.get("attributes") or []) & {"ingredientsLoc", "specificsProduction"}]
+    return composition + (f". {traces}" if traces and traces not in composition else ""), other
+
+
+NUTRIENTS = {"calories": "kcal", "protein": "protein", "fat": "fat", "carbohydrate": "carbs"}
+
+
+def _nutrition(c):
     nut = {}
     for t in ((c.get("options") or {}).get("ingredients") or {}).get("pfcTraits") or []:
-        k = {"calories": "kcal", "protein": "protein", "fat": "fat", "carbohydrate": "carbs"}.get(t.get("id"))
-        v = _num((t.get("measures") or {}).get("per100g"))
+        k, v = NUTRIENTS.get(t.get("id")), _num((t.get("measures") or {}).get("per100g"))
         if k and v is not None:
             nut[k] = v
-    attrs = (c.get("options") or {}).get("attributes") or {}
-    extra = []
-    disc = next((s.get("text") for s in c.get("stickersV2") or [] if s.get("stickerId") == "discount"), None)
-    if disc:
-        extra.append(f"скидка {disc}")
-    if isinstance(info, dict) and info.get("deliveryTimeText"):
-        pc = info.get("pricingConditions") or {}
-        extra.append(f"доставка ({DEPOTS[depot]}): {_clean(info.get('deliveryTimeText'))}"
-                     + (f", доставка {_clean(str(pc.get('deliveryCost')))} ₽" if str(pc.get("deliveryCost", "")).isdigit() else
-                        f", {_clean(str(pc.get('deliveryCost')))}" if pc.get("deliveryCost") else "")
-                     + "; " + "; ".join(_clean(f"{x.get('name', '')} {x.get('threshold', '')}") for x in info.get("deliveryConditions") or [])
-                     + ("" if info.get("isOpen", True) else " · сейчас закрыто"))
-    if c.get("isLowStock"):
-        extra.append("осталось мало")
-    if tags:
-        extra.append("теги Лавки: " + ", ".join(sorted(tags)))
-    if allergens or attrs.get("importantIngredients"):
-        extra.append("аллергены: " + ", ".join(sorted(allergens)) + (" · важные ингредиенты: " + ", ".join(attrs["importantIngredients"]) if attrs.get("importantIngredients") else ""))
-    if other:
-        extra.append("о товаре: " + "; ".join(other)[:800])
-    imgs = [u.replace("{w}x{h}", "orig") for u in c.get("imageUrlTemplates") or []] or \
-           [((c.get("snippetImage") or {}).get("url") or "").replace("{w}x{h}", "orig")]
-    p.update(photos=[u for u in imgs if u], description=_clean(c.get("description")),
-             composition=comp + (f". {traces}" if traces and traces not in comp else ""), nutrition=nut,
-             composition_extra="без сахара (тег Лавки)" if "withoutSugar" in tags or "nosugar" in tags else "", extra=extra)
     if nut.get("carbs") == 0:          # no sugar line on the site, but zero carbs means zero sugar
         nut["sugar"] = 0.0
-    return p
+    return nut
+
+
+def _discount(c):
+    text = next((s.get("text") for s in c.get("stickersV2") or [] if s.get("stickerId") == "discount"), None)
+    return text and f"скидка {text}"
+
+
+def _delivery(info, depot):
+    if not isinstance(info, dict) or not info.get("deliveryTimeText"):
+        return ""
+    pc = info.get("pricingConditions") or {}
+    cost = _clean(str(pc.get("deliveryCost")))
+    return (f"доставка ({DEPOTS[depot]}): {_clean(info.get('deliveryTimeText'))}"
+            + (f", доставка {cost} ₽" if str(pc.get("deliveryCost", "")).isdigit() else f", {cost}" if pc.get("deliveryCost") else "")
+            + "; " + "; ".join(_clean(f"{x.get('name', '')} {x.get('threshold', '')}") for x in info.get("deliveryConditions") or [])
+            + ("" if info.get("isOpen", True) else " · сейчас закрыто"))
+
+
+def _allergy(c, allergens):
+    important = _attributes(c).get("importantIngredients")
+    if not (allergens or important):
+        return ""
+    return "аллергены: " + ", ".join(sorted(allergens)) + (" · важные ингредиенты: " + ", ".join(important) if important else "")
+
+
+def _photos(c):
+    urls = [u.replace("{w}x{h}", "orig") for u in c.get("imageUrlTemplates") or []] or \
+           [((c.get("snippetImage") or {}).get("url") or "").replace("{w}x{h}", "orig")]
+    return [u for u in urls if u]
 
 
 # Cart: its update call carries the whole cart with the delivery address the page keeps, so we press the page's
