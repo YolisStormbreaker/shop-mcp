@@ -17,8 +17,8 @@ class FetchTests(unittest.TestCase):
     def fetch(self, *answers, last_call=0.0):
         tab = MagicMock()
         tab.js.side_effect = list(answers)
-        ozon._last_call = last_call
-        with patch.object(ozon.time, "sleep") as sleep, patch.object(ozon, "dump", return_value="logs/bodies/x.html"), \
+        with patch.object(ozon, "_last_call", last_call), patch.object(ozon.time, "sleep") as sleep, \
+                patch.object(ozon, "dump", return_value="logs/bodies/x.html"), \
                 patch.object(ozon, "log") as log:
             try:
                 return ozon._page(tab, "/search/?text=usb c"), tab, sleep, log
@@ -41,8 +41,7 @@ class FetchTests(unittest.TestCase):
     def test_post_sends_json_body(self):
         tab = MagicMock()
         tab.js.return_value = answer({"ok": 1})
-        ozon._last_call = 0.0
-        with patch.object(ozon.time, "sleep"):
+        with patch.object(ozon, "_last_call", 0.0), patch.object(ozon.time, "sleep"):
             self.assertEqual(ozon._fetch(tab, "/api/x", "POST", {"pageType": "pdp"}), {"ok": 1})
         self.assertIn('{"method": "POST", "credentials": "include", "headers": {"Content-Type": "application/json"}, '
                       '"body": "{\\"pageType\\": \\"pdp\\"}"}', tab.js.call_args.args[0])

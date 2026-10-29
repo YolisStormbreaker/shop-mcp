@@ -17,8 +17,8 @@ class FetchTests(unittest.TestCase):
     def fetch(self, *answers, last_call=0.0, call=lambda tab: ali._fetch(tab, "/aer-webapi/v1/search", {"page": 1})):
         tab = MagicMock()
         tab.js.side_effect = list(answers)
-        ali._last_call = last_call
-        with patch.object(ali.time, "sleep") as sleep, patch.object(ali, "dump", return_value="logs/bodies/x.html"), \
+        with patch.object(ali, "_last_call", last_call), patch.object(ali.time, "sleep") as sleep, \
+                patch.object(ali, "dump", return_value="logs/bodies/x.html"), \
                 patch.object(ali, "log") as log:
             try:
                 return call(tab), tab, sleep, log
