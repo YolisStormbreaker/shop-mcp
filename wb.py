@@ -18,6 +18,7 @@ from shoplog import log
 
 SORTS = ("popular", "rate", "priceup", "pricedown", "newly", "benefit")
 MONTHS = "янв фев мар апр мая июн июл авг сен окт ноя дек".split()
+NEED_ID = "нужен артикул WB или ссылка вида https://www.wildberries.ru/catalog/<id>/detail.aspx"
 BLOCKED = ("⚠️ Wildberries не отдал данные: вероятно, проверка на бота. "
            "Открыть браузер: shop-chrome show, пройти проверку, повторить.")
 
@@ -145,46 +146,61 @@ def _history(base):
 def item(id_or_url, full=False):
     nm = _nm(id_or_url)
     if not nm:
-        return "нужен артикул WB или ссылка вида https://www.wildberries.ru/catalog/<id>/detail.aspx"
-    url = f"https://www.wildberries.ru/catalog/{nm}/detail.aspx"
+        return NEED_ID
     d, p, base = _open(nm, {"seller": ["/api/v1/suppliers/"]})
     if not p:
         log.warning("wb item %s: no detail response, got %s", nm, list(d))
         return BLOCKED
-    card, seller = {}, d.get("seller") or {}
-    if base:
-        try:
-            card = _get(f"{base}/info/ru/card.json")   # the page loads it not for every product
-        except Exception as e:
-            log.warning("wb item %s: card.json: %s", nm, e)
+    card, hist = (_card(nm, base), _history(base)) if base else ({}, "")
+    return "\n".join([_head(p), f"https://www.wildberries.ru/catalog/{nm}/detail.aspx", *_stock(p), _seller(p, d.get("seller") or {}),
+                      *_cdn(base, p, hist), "отзывы: wb_reviews", *_about(card, full)])
+
+
+def _card(nm, base):
+    try:
+        return _get(f"{base}/info/ru/card.json")   # the page loads it not for every product
+    except Exception as e:
+        log.warning("wb item %s: card.json: %s", nm, e)
+        return {}
+
+
+def _head(p):
     price, basic = _price(p)
-    if price:
-        head = (f"{p.get('name', '')} — {price} ₽ без WB Кошелька (с ним на сайте на несколько % ниже)"
-                + (f", до скидок {basic} ₽ (−{round(100 - price * 100 / basic)}%)" if basic > price else ""))
-    else:
-        head = f"{p.get('name', '')} — цены нет: товара нет в наличии (последние цены — в истории ниже)"
-    lines = [head, url]
+    if not price:
+        return f"{p.get('name', '')} — цены нет: товара нет в наличии (последние цены — в истории ниже)"
+    return (f"{p.get('name', '')} — {price} ₽ без WB Кошелька (с ним на сайте на несколько % ниже)"
+            + (f", до скидок {basic} ₽ (−{round(100 - price * 100 / basic)}%)" if basic > price else ""))
+
+
+def _stock(p):
     stock = f"в наличии: {p['totalQuantity']} шт" if p.get("totalQuantity") else "нет в наличии"
-    lines.append(f"бренд: {p.get('brand') or '—'} · рейтинг {p.get('reviewRating') or '—'} ({p.get('feedbacks', 0)} отзывов) · {stock}")
+    lines = [f"бренд: {p.get('brand') or '—'} · рейтинг {p.get('reviewRating') or '—'} ({p.get('feedbacks', 0)} отзывов) · {stock}"]
     if p.get("totalQuantity") and _eta(p):
         lines.append(f"привезут {_eta(p)} (оценка по сроку доставки на адрес из профиля)")
+    return lines
+
+
+def _seller(p, seller):
     s = f"продавец: {p.get('supplier', '')}, рейтинг {seller.get('valuation') or p.get('supplierRating') or '—'}"
     if seller.get("saleItemQuantity"):
         s += f", продаж {seller['saleItemQuantity']}"
     if seller.get("registrationDate"):
         s += f", на WB с {seller['registrationDate'][:4]}"
-    lines.append(s)
-    if base:
-        if hist := _history(base):
-            lines.append(hist)
-        lines.append("фото (shop_images): " + " ".join(f"{base}/images/big/{i}.webp" for i in range(1, min(p.get("pics") or 0, 10) + 1)))
-    lines.append("отзывы: wb_reviews")
+    return s
+
+
+def _cdn(base, p, hist):
+    """Price history and photos: known only with the product's CDN folder."""
+    if not base:
+        return []
+    photos = " ".join(f"{base}/images/big/{i}.webp" for i in range(1, min(p.get("pics") or 0, 10) + 1))
+    return ([hist] if hist else []) + ["фото (shop_images): " + photos]
+
+
+def _about(card, full):
     specs = [f"{o['name']}: {o['value']}" for g in card.get("grouped_options") or [] for o in g.get("options", [])]
-    if specs:
-        lines.append("характеристики: " + "; ".join(specs))
     desc = card.get("description") or ""
-    lines.append("\n" + (desc if full else desc[:2500]))
-    return "\n".join(lines)
+    return (["характеристики: " + "; ".join(specs)] if specs else []) + ["\n" + (desc if full else desc[:2500])]
 
 
 REVIEW_SORTS = ("useful", "new", "high", "low")
