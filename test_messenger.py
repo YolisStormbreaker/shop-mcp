@@ -1,15 +1,17 @@
-"""Avito messenger: what the messenger socket answers -> the chat list and a chat.
-No requests to shops: the tab is a mock.  Run: .venv/bin/python -B -m unittest -v test_messenger"""
+"""Avito messenger: what the messenger socket answers -> the chat list and a chat; what send() types and presses.
+No requests to shops, nothing is sent: the tab is a mock.  Run: .venv/bin/python -B -m unittest -v test_messenger"""
 import json
 import unittest
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import messenger
 
 ME, SELLER = "uid-me", "uid-seller"
 ITEM = "/sankt-peterburg/velosipedy/test_velosiped_1"
 HEAD = "чат\tнепрочитан\tкогда\tсобеседник\tобъявление\tцена\tпоследнее сообщение\tобъявление (путь на avito.ru)"
+INPUT = json.dumps(messenger.INPUT)
+BUTTON = '[data-marker="messenger-button/button"]'
 
 
 def at(day, hour, minute):
@@ -189,6 +191,139 @@ class ChatTests(unittest.TestCase):
     def test_empty_chat(self):
         tab = avito_tab({"avito.getChatById.v3": [ok({})], "messenger.history.v2": [ok({})]})
         self.assertEqual(run(messenger.chat, tab, "u2i-chat3/")[0], "чат u2i-chat3 с ")
+
+
+ENTER = [call("Input.dispatchKeyEvent", type="keyDown", key="Enter", code="Enter", windowsVirtualKeyCode=13,
+              nativeVirtualKeyCode=13, text="\r"),
+         call("Input.dispatchKeyEvent", type="keyUp", key="Enter", code="Enter", windowsVirtualKeyCode=13, nativeVirtualKeyCode=13)]
+FOCUS = [call("Page.bringToFront"), call("Emulation.setFocusEmulationEnabled", enabled=True)]
+UNFOCUS = call("Emulation.setFocusEmulationEnabled", enabled=False)
+TEXT = "Здравствуйте!\nЕщё продаётся?"
+MINE = {"type": "text", "fromUid": ME, "uid": ME, "body": {"text": "Здравствуйте! Ещё продаётся?"}}
+THEIRS = {"type": "text", "fromUid": SELLER, "uid": ME, "body": {"text": "Здравствуйте! Ещё продаётся?"}}
+
+
+def send_tab(rpc, box=(True,), value=None, button=(640.5, 360.0), hrefs=(), h1=""):
+    """The tab send() drives. The reply box shows up on the polls given by box; it then holds what Input.insertText
+    typed (or value); the listing's biggest write button is at button; location.href walks through hrefs."""
+    box, hrefs, typed = list(box), list(hrefs), []
+
+    def js(expr):
+        if expr == f"!!document.querySelector({INPUT})":
+            return box.pop(0)
+        if expr == f"document.querySelector({INPUT}).value":
+            return typed[-1] if value is None else value
+        if expr == "location.href":
+            return hrefs.pop(0)
+        if "getBoundingClientRect" in expr and json.dumps(BUTTON) in expr:
+            return button
+        if expr == "document.querySelector('h1')?.textContent":
+            return h1
+        assert expr == f"document.querySelector({INPUT}).focus()", expr
+    tab = avito_tab(rpc, js=js)
+    tab.call.side_effect = lambda method, **params: typed.append(params["text"]) if method == "Input.insertText" else None
+    tab.typed = typed
+    return tab
+
+
+def history(*items):
+    return ok({"items": list(items)})
+
+
+class SendTests(unittest.TestCase):
+    def test_to_a_chat(self):
+        tab = send_tab({"messenger.history.v2": [history(THEIRS), history(MINE, THEIRS)]}, box=(False, False, True))
+        out, _, sleep = run(messenger.send, tab, f"  {TEXT}\n", chat_id="https://www.avito.ru/profile/messenger/channel/u2i-chat1")
+        self.assertEqual(out, "отправлено в чат u2i-chat1")
+        tab.goto.assert_called_once_with("https://www.avito.ru/profile/messenger/channel/u2i-chat1", "avito",
+                                         wait_js=f"document.querySelector({INPUT})")
+        tab.click.assert_called_once_with(messenger.INPUT)
+        self.assertEqual(tab.call.call_args_list, FOCUS + [call("Input.insertText", text=TEXT)] + ENTER + [UNFOCUS])
+        self.assertEqual([calls for calls, _ in tab.sent], [[["messenger.history.v2", {"channelId": "u2i-chat1", "limit": 5}]]] * 2)
+        self.assertEqual(sleep.call_args_list, [call(0.5)] * 3 + [call(1)] * 2)
+
+    def test_to_the_seller_found_among_the_chats(self):
+        chats = [{"channelId": "u2i-other", "lastMessage": {**MINE, "body": {"text": "Другое"}}}, {"channelId": "u2i-empty"},
+                 {"channelId": "u2i-new", "lastMessage": MINE}]
+        tab = send_tab({"avito.getChats.v5": [ok({"channels": chats})], "messenger.history.v2": [history(MINE)]},
+                       hrefs=["https://www.avito.ru" + ITEM])
+        out, _, _ = run(messenger.send, tab, TEXT, item_url="https://www.avito.ru" + ITEM)
+        self.assertEqual(out, "отправлено в чат u2i-new")
+        tab.goto.assert_called_once_with("https://www.avito.ru" + ITEM, "avito",
+                                         wait_js="document.querySelector('[data-marker=\"messenger-button/button\"]')")
+        mouse = [call("Input.dispatchMouseEvent", type=t, x=640.5, y=360.0, button="left", clickCount=1)
+                 for t in ("mouseMoved", "mousePressed", "mouseReleased")]
+        self.assertEqual(tab.call.call_args_list, FOCUS + mouse + [call("Input.insertText", text=TEXT)] + ENTER + [UNFOCUS])
+        self.assertEqual([calls for calls, _ in tab.sent], [[["avito.getChats.v5", {"limit": 5}]],
+                                                           [["messenger.history.v2", {"channelId": "u2i-new", "limit": 5}]]])
+
+    def test_to_the_seller_found_by_the_page_address(self):
+        tab = send_tab({"avito.getChats.v5": [ok({})], "messenger.history.v2": [history(THEIRS), history(MINE)]},
+                       hrefs=["https://www.avito.ru" + ITEM, "https://www.avito.ru/profile/messenger/channel/u2i-new?from=item"])
+        out, _, _ = run(messenger.send, tab, TEXT, item_url="https://www.avito.ru" + ITEM)
+        self.assertEqual(out, "отправлено в чат u2i-new")
+        self.assertEqual([calls[0] for calls, _ in tab.sent], [["avito.getChats.v5", {"limit": 5}]]
+                         + [["messenger.history.v2", {"channelId": "u2i-new", "limit": 5}]] * 2)
+
+    def test_listing_without_a_write_button(self):
+        tab = send_tab({}, button=None, h1="  Велосипед\n детский ")
+        out, _, _ = run(messenger.send, tab, TEXT, item_url="https://www.avito.ru" + ITEM)
+        self.assertEqual(out, "на странице объявления нет кнопки «Написать сообщение» (заголовок: «Велосипед детский») — ничего не отправлено")
+        self.assertEqual(tab.call.call_args_list, FOCUS + [UNFOCUS])
+        tab.click.assert_not_called()
+
+    def test_no_reply_box(self):
+        tab = send_tab({}, box=[False] * 20)
+        out, _, sleep = run(messenger.send, tab, TEXT, chat_id="u2i-closed")
+        self.assertEqual(out, "не нашёл поле ввода сообщения — ничего не отправлено. Чат закрыт или страница не загрузилась.")
+        self.assertEqual(tab.call.call_args_list, FOCUS + [UNFOCUS])
+        self.assertEqual(sleep.call_count, 20)
+
+    def test_text_that_did_not_reach_the_box_is_not_sent(self):
+        tab = send_tab({}, value="Здравствуйте!")
+        with self.assertRaises(RuntimeError) as e:
+            run(messenger.send, tab, TEXT, chat_id="u2i-chat1")
+        self.assertEqual(str(e.exception), "текст не попал в поле ввода — сообщение не отправлено")
+        self.assertEqual(tab.call.call_args_list, FOCUS + [call("Input.insertText", text=TEXT), UNFOCUS])
+        tab.close.assert_called_once()
+
+    def test_not_seen_in_the_chat(self):
+        tab = send_tab({"messenger.history.v2": [history(THEIRS)] * 10})
+        out, log, sleep = run(messenger.send, tab, TEXT, chat_id="u2i-chat1")
+        self.assertEqual(out, "⚠️ Enter нажат, но в истории чата u2i-chat1 сообщения не видно. "
+                              "Проверить через avito_chats / avito_chat, прежде чем отправлять ещё раз.")
+        self.assertEqual(len(tab.sent), 10)
+        self.assertEqual(sleep.call_args_list[-10:], [call(1)] * 10)
+        log.warning.assert_called_once_with("avito send: message not seen in history, chat %s", "u2i-chat1")
+
+    def test_chat_of_a_listing_not_found(self):
+        tab = send_tab({"avito.getChats.v5": [ok({"channels": [{"channelId": "u2i-x", "lastMessage": THEIRS}]})] * 10},
+                       hrefs=["https://www.avito.ru" + ITEM] * 10)
+        out, log, _ = run(messenger.send, tab, TEXT, item_url="https://www.avito.ru" + ITEM)
+        self.assertTrue(out.startswith("⚠️ Enter нажат, но в истории чата (не определён) сообщения не видно."), out)
+        self.assertEqual(len(tab.sent), 10)
+        log.warning.assert_called_once_with("avito send: message not seen in history, chat %s", None)
+
+    def test_focus_left_on_a_dead_tab_does_not_hide_the_result(self):
+        tab = send_tab({"messenger.history.v2": [history(MINE)]})
+        typed = tab.call.side_effect
+
+        def call_(method, **params):
+            if params == {"enabled": False}:
+                raise RuntimeError("Emulation.setFocusEmulationEnabled: target closed")
+            return typed(method, **params)
+        tab.call.side_effect = call_
+        self.assertEqual(run(messenger.send, tab, TEXT, chat_id="u2i-chat1")[0], "отправлено в чат u2i-chat1")
+
+    def test_nothing_to_send_or_nowhere(self):
+        for text, kw, out in (("  \n ", {"chat_id": "u2i-chat1"}, "пустой текст — ничего не отправлено"),
+                              (TEXT, {}, "нужно одно из двух: chat_id (из avito_chats) или item_url (ссылка на объявление)"),
+                              (TEXT, {"chat_id": "", "item_url": None}, "нужно одно из двух: chat_id (из avito_chats) или item_url (ссылка на объявление)"),
+                              (TEXT, {"chat_id": "u2i-chat1", "item_url": "https://www.avito.ru" + ITEM},
+                               "нужно одно из двух: chat_id (из avito_chats) или item_url (ссылка на объявление)")):
+            with self.subTest(text=text, kw=kw), patch.object(messenger, "tab_for") as tab_for:
+                self.assertEqual(messenger.send(text, **kw), out)
+                tab_for.assert_not_called()
 
 
 if __name__ == "__main__":
