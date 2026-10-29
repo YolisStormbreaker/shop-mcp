@@ -97,38 +97,59 @@ def _search(tab, query, mc=None, cat=None, sort="popular", limit=40, offset=0):
 def search(query, tag=None, sort="popular", page=1, limit=30):
     limit = min(limit, 40)
     tab = _tab()
-    note = ""
     try:
-        cat = next((v for k, v in DIET.items() if tag and tag.lower() in k), None) if tag else None
-        d = _search(tab, query, cat=cat, sort=sort, limit=limit, offset=(page - 1) * limit)
-        if d is None:
-            return BLOCKED
-        if cat:
-            note = f"раздел Ленты «{next(k for k, v in DIET.items() if v == cat)}» + запрос «{query}»"
-        elif tag:   # a value of the search's own facets («Сахар: без добавления сахара», «Тип продукта: …»)
-            hit = next(((f, v) for f in (d.get("filters") or {}).get("multicheckbox") or [] for v in f.get("values") or []
-                        if tag.lower() in str(v.get("value", "")).lower()), None)
-            if hit:
-                d = _search(tab, query, mc=[{"key": hit[0]["key"], "valueIds": [hit[1]["id"]]}], sort=sort, limit=limit,
-                            offset=(page - 1) * limit) or d
-                note = f"фильтр Ленты «{hit[0]['name']}: {hit[1]['value']}»"
-            else:
-                note = f"тега «{tag}» у Ленты для этого запроса нет — искал «{query} {tag}» текстом"
-                d = _search(tab, f"{query} {tag}", sort=sort, limit=limit, offset=(page - 1) * limit) or d
+        d, note = _tagged(tab, query, tag, sort, limit, (page - 1) * limit)
     finally:
         tab.close()
-    facets = list(DIET)
-    for f in (d.get("filters") or {}).get("multicheckbox") or []:
-        if f.get("key") not in ("brand", "rating") and f.get("values"):
-            facets.append(f"{f['name']}: " + " / ".join(str(v.get("value")) for v in f["values"][:6]))
+    if d is None:
+        return BLOCKED
+    return _found(d, note, query, page, limit)
+
+
+def _tagged(tab, query, tag, sort, limit, offset):
+    """The search's answer with the tag applied, and how it was applied."""
+    cat = _diet(tag)
+    d = _search(tab, query, cat=cat, sort=sort, limit=limit, offset=offset)
+    if d is None or not tag:
+        return d, ""
+    if cat:
+        return d, f"раздел Ленты «{next(k for k, v in DIET.items() if v == cat)}» + запрос «{query}»"
+    hit = _facet(d, tag)
+    if hit:     # a value of the search's own facets («Сахар: без добавления сахара», «Тип продукта: …»)
+        f, v = hit
+        return (_search(tab, query, mc=[{"key": f["key"], "valueIds": [v["id"]]}], sort=sort, limit=limit, offset=offset) or d,
+                f"фильтр Ленты «{f['name']}: {v['value']}»")
+    return (_search(tab, f"{query} {tag}", sort=sort, limit=limit, offset=offset) or d,
+            f"тега «{tag}» у Ленты для этого запроса нет — искал «{query} {tag}» текстом")
+
+
+def _diet(tag):
+    return next((v for k, v in DIET.items() if tag.lower() in k), None) if tag else None
+
+
+def _checkboxes(d):
+    return _obj(d, "filters").get("multicheckbox") or []
+
+
+def _facet(d, tag):
+    return next(((f, v) for f in _checkboxes(d) for v in f.get("values") or [] if tag.lower() in str(v.get("value", "")).lower()), None)
+
+
+def _found(d, note, query, page, limit):
     rows = [_listed(p) for p in d.get("items") or []]
     for r in rows:
         r.pop("_per_kg")      # a weighed item's price is for its sale step, which is its size
     total = d.get("total")
     if total and total > page * limit:
         note += ("\n" if note else "") + f"есть следующая страница: page={page + 1}"
-    return {"items": rows, "total": total, "note": note.strip(), "facets": facets[:40],
+    return {"items": rows, "total": total, "note": note.strip(), "facets": _facets(d),
             "url": f"{SITE}/search/{urllib.parse.quote(query or '')}/"}
+
+
+def _facets(d):
+    facets = list(DIET) + [f"{f['name']}: " + " / ".join(str(v.get("value")) for v in f["values"][:6])
+                           for f in _checkboxes(d) if f.get("key") not in ("brand", "rating") and f.get("values")]
+    return facets[:40]
 
 
 def _id(id_or_url):
