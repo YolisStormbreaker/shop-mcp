@@ -238,13 +238,14 @@ def _cart_text(d):
     items = _items(d)
     if not items:
         return "корзина Золотого яблока пуста"
-    rows = []
-    for i in items:
-        price, old = i.get("specialPriceAmountClean"), i.get("oldPriceAmountClean")
-        rows.append(f"{i.get('productSku')}\t{i.get('qty')}\t{price or old}\t{old if old and old != price else ''}\t"
-                    f"{'✓' if i.get('isSelected') else ''}\t{i.get('brand', '')}\t{i.get('productName') or i.get('prodname', '')}\t{i.get('variant') or ''}")
     return ("корзина Золотого яблока (✓ — выбрано к оформлению; цена — за все штуки строки)\n"
-            "артикул\tшт\tцена ₽\tбез скидки\t✓\tбренд\tназвание\tвариант\n" + "\n".join(rows))
+            "артикул\tшт\tцена ₽\tбез скидки\t✓\tбренд\tназвание\tвариант\n" + "\n".join(map(_cart_row, items)))
+
+
+def _cart_row(i):
+    price, old = i.get("specialPriceAmountClean"), i.get("oldPriceAmountClean")
+    return (f"{i.get('productSku')}\t{i.get('qty')}\t{price or old}\t{old if old and old != price else ''}\t"
+            f"{'✓' if i.get('isSelected') else ''}\t{i.get('brand', '')}\t{i.get('productName') or i.get('prodname', '')}\t{i.get('variant') or ''}")
 
 
 def _sku(id_or_url):
