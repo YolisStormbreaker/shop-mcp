@@ -3,7 +3,7 @@ No requests to shops, nothing is sent: the tab is a mock.  Run: .venv/bin/python
 import json
 import unittest
 from datetime import datetime
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import ANY, MagicMock, call, patch
 
 import messenger
 
@@ -295,6 +295,31 @@ class SendTests(unittest.TestCase):
         self.assertEqual(len(tab.sent), 10)
         self.assertEqual(sleep.call_args_list[-10:], [call(1)] * 10)
         log.warning.assert_called_once_with("avito send: message not seen in history, chat %s", "u2i-chat1")
+
+    def failing_checks(self, n, rpc):
+        """send_tab whose first n socket requests fail, as on a dropped session or a socket timeout."""
+        tab = send_tab(rpc)
+        evaluate, left = tab.js.side_effect, [n]
+
+        def js(expr, timeout=60):
+            if expr.startswith(messenger.RPC_JS) and left[0]:
+                left[0] -= 1
+                raise RuntimeError("no session")
+            return evaluate(expr, timeout)
+        tab.js.side_effect = js
+        return tab
+
+    def test_a_check_that_fails_after_enter_is_tried_again(self):
+        tab = self.failing_checks(1, {"messenger.history.v2": [history(MINE)]})
+        self.assertEqual(run(messenger.send, tab, TEXT, chat_id="u2i-chat1")[0], "отправлено в чат u2i-chat1")
+
+    def test_checks_that_all_fail_after_enter_say_enter_was_pressed(self):
+        # an error here would read as 'not sent' and the message could be sent twice under the user's name
+        tab = self.failing_checks(10, {})
+        out, log, _ = run(messenger.send, tab, TEXT, chat_id="u2i-chat1")
+        self.assertTrue(out.startswith("⚠️ Enter нажат, но в истории чата u2i-chat1 сообщения не видно."), out)
+        self.assertEqual(log.warning.call_args_list[0], call("avito send: history check failed: %s", ANY))
+        tab.close.assert_called_once()
 
     def test_chat_of_a_listing_not_found(self):
         tab = send_tab({"avito.getChats.v5": [ok({"channels": [{"channelId": "u2i-x", "lastMessage": THEIRS}]})] * 10},

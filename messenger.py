@@ -201,6 +201,23 @@ def _type_and_send(tab, text):
     return True
 
 
+def _sent(tab, cid, flat):
+    """(the chat, whether our message is in its history).  A chat opened from a listing is found by its URL,
+    or as the newest chat whose last message is ours."""
+    if not cid:
+        href = tab.js("location.href") or ""
+        if "/channel/" in href:
+            cid = _channel_id(href)
+        else:
+            (r,) = _rpc(tab, ("avito.getChats.v5", {"limit": 5}))
+            hit = [c for c in r.get("channels") or [] if _mine(c.get("lastMessage")) and _text(c["lastMessage"]) == flat]
+            cid = hit[0]["channelId"] if hit else None
+        if not cid:
+            return None, False
+    (h,) = _rpc(tab, ("messenger.history.v2", {"channelId": cid, "limit": 5}))
+    return cid, any(_mine(m) and _text(m) == flat for m in h.get("items") or [])
+
+
 def send(text, chat_id=None, item_url=None):
     """Send text to an existing chat, or to the seller of a listing (opens the chat from its page)."""
     text = text.strip()
@@ -231,18 +248,12 @@ def send(text, chat_id=None, item_url=None):
         # is found by its URL, or as the newest chat whose last message is ours.
         for _ in range(10):
             time.sleep(1)
-            if not cid:
-                href = tab.js("location.href") or ""
-                if "/channel/" in href:
-                    cid = _channel_id(href)
-                else:
-                    (r,) = _rpc(tab, ("avito.getChats.v5", {"limit": 5}))
-                    hit = [c for c in r.get("channels") or [] if _mine(c.get("lastMessage")) and _text(c["lastMessage"]) == flat]
-                    cid = hit[0]["channelId"] if hit else None
-                if not cid:
-                    continue
-            (h,) = _rpc(tab, ("messenger.history.v2", {"channelId": cid, "limit": 5}))
-            if any(_mine(m) and _text(m) == flat for m in h.get("items") or []):
+            try:
+                cid, seen = _sent(tab, cid, flat)
+            except Exception as e:   # Enter was pressed: a failed check must not read as 'not sent' and get it sent twice
+                log.warning("avito send: history check failed: %s", e)
+                continue
+            if seen:
                 return f"отправлено в чат {cid}"
     finally:
         try:
