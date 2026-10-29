@@ -1,6 +1,8 @@
-"""ВкусВилл read paths: the catalog API's JSON and the site's pages -> search results, the product card, reviews.
-No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_vkusvill"""
+"""ВкусВилл: the catalog API's JSON and the site's pages -> search results, the product card, reviews; the cart and
+favorites, with the buttons add_to_cart and remove_from_cart would press on fake site pages and the request favorite
+would send.  No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_vkusvill"""
 import json
+import re
 import unittest
 import urllib.error
 from unittest.mock import MagicMock, call, patch
@@ -265,6 +267,216 @@ class VkusvillApiTests(unittest.TestCase):
         got, urlopen, sleep = self.call(http(500))
         self.assertEqual((got, urlopen.call_count), ("ВкусВилл API: HTTP 500", 1))
         sleep.assert_not_called()
+
+
+NAME = "Кефир 3,2%, 1000 г"
+MILK = {"777": {"q": 0.5, "price": 120.0, "total": 60.0, "name": "Сыр", "unit": None, "can": "N"}}
+
+
+def sent(expr):
+    """What a fetch() in a page script would send: (path, method, headers, form fields)."""
+    def obj(text):          # a JS object literal of strings
+        return {k: a or b for k, a, b in re.findall(r"'?([\w-]+)'?: (?:\"([^\"]*)\"|'([^']*)')", text)}
+    path, method = re.search(r"fetch\('([^']+)', \{method: '(\w+)'", expr).groups()
+    return (path, method, obj(re.search(r"headers: (\{.*?\})", expr).group(1)),
+            obj(re.search(r"new URLSearchParams\((\{.*?\})\)", expr).group(1)))
+
+
+class Site:
+    """The site in the tab: the cart it keeps (read by its dropdown endpoint), the product page with the product's add
+    button while it is not in the cart and its «+» once it is, the cart page with a «−» on the product's row, and the
+    favorites. A click or a favorites request changes the site unless it ignores that one."""
+    def __init__(self, qty=0, absent=(), ignored=(), favs=()):
+        self.qty, self.absent, self.ignored, self.favs = qty, set(absent), set(ignored), list(favs)
+        self.page, self.clicks, self.gotos, self.posts = None, [], [], []
+        self.tab = MagicMock()
+        self.tab.js.side_effect = self.js
+        self.tab.goto.side_effect = self.goto
+
+    def goto(self, url, site, wait_js=None):
+        self.gotos.append((url, site, wait_js))
+        self.page = url
+
+    def buttons(self):
+        shown = {"−"} if self.page == "https://vkusvill.ru/cart/" and self.qty else set()
+        if self.page == "https://vkusvill.ru/goods/x-158/":
+            shown = {"+"} if self.qty else {"add"}
+        return shown - self.absent
+
+    def js(self, expr, timeout=None):
+        if expr == vkusvill.CART_JS:
+            assert timeout == 40
+            mine = {"158": {"q": float(self.qty), "price": 98.0, "total": 98.0 * self.qty, "name": "Кефир", "unit": "шт", "can": "Y"}}
+            return {"basket": {**MILK, **(mine if self.qty else {})}, "totals": {}}
+        if expr == vkusvill.FAV_JS:
+            assert timeout == 40
+            return [{"id": i, "name": "", "price": "", "rest": ""} for i in self.favs]
+        if expr == "document.querySelector('h1')?.innerText || ''":
+            return NAME
+        if "fetch('/ajax/favorites/" in expr:
+            path, method, headers, form = sent(expr)
+            self.posts.append((path, method, headers, form))
+            if "favorite" not in self.ignored:
+                self.favs = [i for i in self.favs if i != form["id"]] + ([form["id"]] if form["command"] == "add" else [])
+            return {"s": 200, "b": "{}"}
+        assert "b.click()" in expr, expr
+        button = "+" if ".Q_Up" in expr else "−" if ".Q_Down" in expr else "add"
+        assert {"+": "basket--add[data-id='158']", "−": "basket--row[data-product-id='158'] .Q_Down",
+                "add": "basket--add[data-id='158']"}[button] in expr, expr     # the product's own button, not another's
+        if button not in self.buttons():
+            return False
+        self.clicks.append(button)
+        if button not in self.ignored:
+            self.qty += -1 if button == "−" else 1
+        return True
+
+
+def change(fn, site, *args):
+    """fn(*args) on the fake site: (answer, buttons clicked, pages loaded, time.sleep calls); the tab is closed once."""
+    with patch.object(vkusvill, "_tab", return_value=site.tab), patch.object(vkusvill, "_mcp") as api, \
+            patch.object(vkusvill.time, "sleep") as sleep, patch.object(vkusvill, "log") as site.log:
+        got = fn(*args)
+    site.tab.close.assert_called_once()
+    api.assert_not_called()
+    return got, site.clicks, site.gotos, sleep.call_args_list
+
+
+PRODUCT_PAGE = ("https://vkusvill.ru/goods/x-158/", "vkusvill", "!!document.querySelector('.js-delivery__basket--add')")
+CART_PAGE = ("https://vkusvill.ru/cart/", "vkusvill", "document.readyState === 'complete'")
+NOT_ADDED = f"ВкусВилл не положил «{NAME}» в корзину (нет в наличии на адрес пользователя?)"
+
+
+class VkusvillAddToCartTests(unittest.TestCase):
+    def test_add_presses_the_add_button_then_plus(self):
+        got, clicks, gotos, _ = change(vkusvill.add_to_cart, Site(), "https://vkusvill.ru/goods/kefir-3-158/", 3)
+        self.assertEqual((clicks, gotos), (["add", "+", "+"], [PRODUCT_PAGE]))
+        self.assertEqual(got, f"в корзине ВкусВилла: {NAME} — 3")
+
+    def test_add_on_top_of_the_cart_presses_plus(self):
+        got, clicks, _, _ = change(vkusvill.add_to_cart, Site(qty=2), "158")
+        self.assertEqual((got, clicks), (f"в корзине ВкусВилла: {NAME} — 3", ["+"]))
+
+    def test_quantity_is_one_to_thirty(self):
+        for quantity, presses in ((0, 1), (-3, 1), ("2", 2), (99, 30)):
+            with self.subTest(quantity):
+                got, clicks, _, _ = change(vkusvill.add_to_cart, Site(), "158", quantity)
+                self.assertEqual((len(clicks), got), (presses, f"в корзине ВкусВилла: {NAME} — {presses}"))
+
+    def test_add_button_the_site_ignores(self):
+        got, clicks, _, sleeps = change(vkusvill.add_to_cart, Site(ignored=["add"]), "158", 2)
+        self.assertEqual((got, clicks), (NOT_ADDED, ["add"]))
+        self.assertEqual(sleeps, [call(1.5)] + [call(0.5)] * 14)      # it waits 7 s for the cart to change
+
+    def test_no_add_button(self):
+        got, clicks, _, _ = change(vkusvill.add_to_cart, Site(absent=["add"]), "158", 2)
+        self.assertEqual((got, clicks), (NOT_ADDED, []))
+
+    def test_no_plus_on_top_of_the_cart(self):
+        got, clicks, _, _ = change(vkusvill.add_to_cart, Site(qty=1, absent=["+"]), "158")
+        self.assertEqual((got, clicks), (NOT_ADDED, []))
+
+    def test_not_an_id(self):
+        with patch.object(vkusvill, "_tab") as tab, self.assertRaises(ValueError):
+            vkusvill.add_to_cart("кефир")
+        tab.assert_not_called()
+
+
+class VkusvillRemoveFromCartTests(unittest.TestCase):
+    def test_minus_on_the_cart_page_until_it_is_gone(self):
+        got, clicks, gotos, sleeps = change(vkusvill.remove_from_cart, Site(qty=3), "https://vkusvill.ru/goods/kefir-3-158/")
+        self.assertEqual((clicks, gotos), (["−"] * 3, [CART_PAGE]))
+        self.assertEqual(sleeps[-1], call(5))                         # the site drops the line 4 s after the last «−»
+        self.assertEqual(got, "убрано из корзины ВкусВилла: 158")
+
+    def test_minus_the_site_ignores_is_pressed_forty_times(self):
+        got, clicks, _, _ = change(vkusvill.remove_from_cart, Site(qty=2, ignored=["−"]), "158")
+        self.assertEqual((got, clicks), ("не удалось убрать товар 158 из корзины ВкусВилла", ["−"] * 40))
+
+    def test_no_minus(self):
+        got, clicks, _, _ = change(vkusvill.remove_from_cart, Site(qty=1, absent=["−"]), "158")
+        self.assertEqual((got, clicks), ("не удалось убрать товар 158 из корзины ВкусВилла", []))
+
+    def test_not_in_the_cart(self):
+        got, clicks, _, _ = change(vkusvill.remove_from_cart, Site(), "158")
+        self.assertEqual((got, clicks), ("убрано из корзины ВкусВилла: 158", []))
+
+    def test_not_an_id(self):
+        with patch.object(vkusvill, "_tab") as tab, self.assertRaises(ValueError):
+            vkusvill.remove_from_cart("кефир")
+        tab.assert_not_called()
+
+
+FAVORITES = ("/ajax/favorites/add-remove.php", "POST",
+             {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-Requested-With": "XMLHttpRequest"})
+
+
+class VkusvillFavoriteTests(unittest.TestCase):
+    def favorite(self, site, *args):
+        got, _, gotos, _ = change(vkusvill.favorite, site, *args)
+        self.assertEqual(gotos, [])
+        return got, site.posts
+
+    def test_add(self):
+        got, posts = self.favorite(Site(favs=["5"]), "https://vkusvill.ru/goods/kefir-3-158/")
+        self.assertEqual(posts, [FAVORITES + ({"id": "158", "xmlid": "158", "command": "add", "notNeedHtml": "false"},)])
+        self.assertEqual(got, "в избранном ВкусВилла: 158")
+
+    def test_remove(self):
+        got, posts = self.favorite(Site(favs=["158", "5"]), "158", True)
+        self.assertEqual(posts, [FAVORITES + ({"id": "158", "xmlid": "158", "command": "remove", "notNeedHtml": "false"},)])
+        self.assertEqual(got, "убрано из избранного ВкусВилла: 158")
+
+    def test_the_site_did_not_change(self):
+        for favs, remove in (([], False), (["158"], True)):
+            with self.subTest(remove=remove):
+                site = Site(favs=favs, ignored=["favorite"])
+                got, posts = self.favorite(site, "158", remove)
+                self.assertEqual((got, len(posts)), ("ВкусВилл не изменил избранное", 1))
+                site.log.warning.assert_called_once_with("vkusvill favorite %s %s: %s", "158", remove, {"s": 200, "b": "{}"})
+
+    def test_not_an_id(self):
+        with patch.object(vkusvill, "_tab") as tab, self.assertRaises(ValueError):
+            vkusvill.favorite("кефир")
+        tab.assert_not_called()
+
+
+class VkusvillCartAndFavoritesTests(unittest.TestCase):
+    def read(self, fn, answer):
+        tab = MagicMock()
+        tab.js.return_value = answer
+        with patch.object(vkusvill, "_tab", return_value=tab):
+            got = fn()
+        tab.close.assert_called_once()
+        tab.goto.assert_not_called()
+        return got, tab.js.call_args_list
+
+    def test_cart(self):
+        basket = {"158": {"q": 2.0, "price": 98.0, "total": 196.0, "name": "Кефир", "unit": "шт", "can": "Y"}, **MILK,
+                  "9": {"q": 1, "price": 50, "total": 50, "name": "Хлеб", "unit": "шт", "can": True},
+                  "10": {"q": 3, "price": 10, "total": 30, "name": "Вода", "unit": "шт", "can": "true"}}
+        got, js = self.read(vkusvill.cart, {"basket": basket, "totals": {"sum": 336}})
+        self.assertEqual(js, [call(vkusvill.CART_JS, timeout=40)])
+        self.assertEqual(got, "корзина ВкусВилла\nid\tкол-во\tцена ₽\tсумма ₽\tназвание\n"
+                              "158\t2 шт\t98.0\t196.0\tКефир\n"
+                              "777\t0.5 \t120.0\t60.0\tСыр — нельзя купить\n"
+                              "9\t1 шт\t50\t50\tХлеб\n"
+                              "10\t3 шт\t10\t30\tВода")
+
+    def test_empty_cart(self):
+        for answer in ({"basket": {}}, None):
+            with self.subTest(answer):
+                self.assertEqual(self.read(vkusvill.cart, answer)[0], "корзина ВкусВилла пуста")
+
+    def test_favorites(self):
+        got, js = self.read(vkusvill.favorites, [{"id": "158", "name": "Кефир", "price": "98", "rest": "В наличии"},
+                                                 {"id": "5", "name": "Хлеб", "price": "", "rest": ""}])
+        self.assertEqual(js, [call(vkusvill.FAV_JS, timeout=40)])
+        self.assertEqual(got, "избранное ВкусВилла\nid\tцена ₽\tналичие\tназвание\n158\t98\tВ наличии\tКефир\n5\t\t\tХлеб")
+
+    def test_no_favorites(self):
+        for answer in ([], None):
+            with self.subTest(answer):
+                self.assertEqual(self.read(vkusvill.favorites, answer)[0], "избранное ВкусВилла пусто")
 
 
 if __name__ == "__main__":
