@@ -191,7 +191,9 @@ def _reviews_head(data, sku, sort, with_media, page):
 
 
 def _review_row(r):
-    variant = " ".join(f"{a.get('value')} {a.get('name', '')}".strip() for a in (r.get("attributes") or {}).values())
+    # a color's value is its swatch picture, its name is the shade
+    variant = " ".join(f"{'' if isinstance(a.get('value'), dict) else a.get('value')} {a.get('name', '')}".strip()
+                       for a in (r.get("attributes") or {}).values())
     photos = " ".join(_img(i.get("original") or {}) for i in r.get("imageUrls") or [])
     return (f"{(r.get('submitDate') or '')[:10]}\t{r.get('stars')}\t{r.get('likes') or ''}\t{variant}\t"
             f"{r.get('username', '')}\t{_text(_review_text(r))}\t{photos}")

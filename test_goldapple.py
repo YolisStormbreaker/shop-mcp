@@ -181,7 +181,7 @@ class GoldAppleReviewsTests(unittest.TestCase):
         got, api, tab = self.reviews(GA_REVIEWS)
         self.assertEqual(got, "Золотое яблоко · артикул 19000163536: рейтинг 4.6, отзывов 7274, рекомендуют 89% · 5★ 80% 1★ 3%\n"
                               "страница 1 (по 20), сортировка useful; фото с отзывов всего: 142\n" + REVIEWS_HEAD +
-                              f"2026-10-28\t5\t1\t7.5 г {picture('36')} 0.5, Porcelain\tПокупатель Б.\t+ стойкий | − мало | Беру снова\t"
+                              "2026-10-28\t5\t1\t7.5 г 0.5, Porcelain\tПокупатель Б.\t+ стойкий | − мало | Беру снова\t"
                               "https://cdn-01.goldapple.ru/p/p/r1/fullhd.jpg \n"
                               "\t4\t\tM\t\t\t")
         self.assertEqual(api.call_args.args, (tab, "GET", "/front/api/review/listing/v3?locale=ru&itemId=19000163536&pageNumber=1&sortType=ByUsefulness"))
