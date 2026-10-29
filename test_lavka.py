@@ -1,4 +1,5 @@
-"""Яндекс Лавка: the site's product JSON and delivery info -> the grocery product dict; its search answers -> search results.
+"""Яндекс Лавка: the site's product JSON and delivery info -> the grocery product dict; its search answers -> search results;
+the cart and favorites: which of the page's buttons are clicked, what is sent and what is said.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_lavka"""
 import unittest
 from unittest.mock import MagicMock, call, patch
@@ -227,6 +228,225 @@ class LavkaPostTests(unittest.TestCase):
         for answer in (None, [], "text"):
             with self.subTest(answer):
                 self.assertIsNone(self.post(answer)[0])
+
+
+# --- cart and favorites: the page's own buttons, clicked in a model of the site ------------------------------------
+
+GOOD = {"id": "a1b2", "deepLink": "kefir-1", "longTitle": "Кефир&shy; 2,5%", "title": "Кефир", "currentPrice": "115", "available": True}
+READY = "!!document.querySelector('[data-testid=snippet-control], [data-testid=snippet-control-base]')"
+BUTTONS = {"[data-testid=snippet-control]": "В корзину", "[data-testid=snippet-control-base] [data-testid=add-spin-button]": "+",
+           "[data-testid=snippet-control-base] [data-testid=remove-spin-button]": "−"}
+CLICKS = {"(() => { const b = document.querySelector('" + sel + "'); if (!b) return false; b.click(); return true })()": name
+          for sel, name in BUTTONS.items()}
+RETRIEVE = ("cart/v1/retrieve", {}, "regular")
+
+
+class Shop:
+    """The site as the cart code meets it: the product API, the cart of each depot (cart/v1/retrieve), the product
+    page with «В корзину» while its depot's cart has none of the product, «+» and «−» while it has some, a click
+    changing that cart.  sent: API calls (path, body, depot), page loads and clicks in order."""
+    def __init__(self, qty=0, depot="regular", good=GOOD, buttons=True, reads=True, checkout=True):
+        self.carts = {"regular": {}, "supermarket": {}}
+        self.carts[depot]["a1b2"] = qty
+        self.good, self.buttons, self.reads, self.checkout, self.page, self.sent = good, buttons, reads, checkout, None, []
+        self.tab = MagicMock()
+        self.tab.js.side_effect, self.tab.goto.side_effect = self.click, self.goto
+
+    def post(self, tab, path, body, depot="regular"):
+        assert tab is self.tab
+        self.sent.append((path, body, depot))
+        if path == "cart/v1/retrieve":
+            return self.retrieve(depot) if self.reads else None
+        assert path == "v1/product" and body == {"productId": body["productId"], "enableUnavailable": True}, (path, body)
+        return {"product": self.good} if self.good and body["productId"] in ("a1b2", "kefir-1") else {}
+
+    def retrieve(self, depot):
+        items = [{"id": i, "quantity": q, "price": "115", "title": "Кефир&shy; 2,5%"} for i, q in self.carts[depot].items() if q]
+        return {"items": items, "totalItemsPrice": 115 * sum(i["quantity"] for i in items), "totalPriceValue": 115 * sum(i["quantity"] for i in items) + 99,
+                "availableForCheckout": self.checkout, "checkoutUnavailableReason": "минимальный заказ 500 ₽"}
+
+    def goto(self, url, site, wait_js=None):
+        assert (site, wait_js) == ("lavka", READY)
+        self.sent.append(url)
+        self.page = "supermarket" if "/supermarket/" in url else "regular"
+
+    def click(self, expr):
+        name = CLICKS[expr]
+        cart = self.carts[self.page]
+        if not self.buttons or (name == "В корзину") != (not cart["a1b2"]):
+            return False
+        self.sent.append(name)
+        cart["a1b2"] += -1 if name == "−" else 1
+        return True
+
+    def run(self, fn, *args):
+        with patch.object(lavka, "_tab", return_value=self.tab), patch.object(lavka, "_post", side_effect=self.post), \
+                patch.object(lavka, "time"):
+            got = fn(*args)
+        self.tab.close.assert_called_once()
+        return got
+
+
+PAGE = "https://lavka.yandex.ru/good/kefir-1"
+OPEN = ("v1/product", {"productId": "a1b2", "enableUnavailable": True}, "regular")
+
+
+def nothing_but_the_lookup(test, shop):
+    shop.tab.close.assert_called_once()
+    test.assertEqual(shop.sent, [("v1/product", {"productId": "zz", "enableUnavailable": True}, "regular")])
+
+
+class LavkaAddToCartTests(unittest.TestCase):
+    def test_first_unit_by_the_add_button_then_plus(self):
+        shop = Shop()
+        self.assertEqual(shop.run(lavka.add_to_cart, "https://lavka.yandex.ru/good/kefir-1", 2),
+                         "в корзине Лавка у дома: Кефир 2,5% — 2 шт; корзина 230 ₽ без доставки")
+        self.assertEqual(shop.sent, [("v1/product", {"productId": "kefir-1", "enableUnavailable": True}, "regular"), PAGE, RETRIEVE,
+                                     "В корзину", "+", RETRIEVE, RETRIEVE])
+
+    def test_big_lavka_already_in_the_cart_and_under_the_minimum(self):
+        shop = Shop(qty=1, depot="supermarket", checkout=False)
+        self.assertEqual(shop.run(lavka.add_to_cart, "s:a1b2"),
+                         "в корзине Большая лавка: Кефир 2,5% — 2 шт; корзина 230 ₽ без доставки · к заказу пока нельзя: минимальный заказ 500 ₽")
+        sup = ("cart/v1/retrieve", {}, "supermarket")
+        self.assertEqual(shop.sent, [("v1/product", {"productId": "a1b2", "enableUnavailable": True}, "supermarket"),
+                                     "https://lavka.yandex.ru/supermarket/good/kefir-1", sup, "+", sup, sup])
+
+    def test_quantity_is_one_to_thirty_clicks(self):
+        for quantity, clicks in ((0, 1), (-3, 1), ("2", 2), (100, 30)):
+            with self.subTest(quantity):
+                shop = Shop()
+                shop.run(lavka.add_to_cart, "a1b2", quantity)
+                self.assertEqual(len([x for x in shop.sent if x in ("В корзину", "+")]), clicks)
+
+    def test_page_by_id_when_the_product_has_no_link(self):
+        shop = Shop(good=dict(GOOD, deepLink=None))
+        shop.run(lavka.add_to_cart, "a1b2")
+        self.assertEqual(shop.sent[1], "https://lavka.yandex.ru/good/a1b2")
+
+    def test_not_available(self):
+        shop = Shop(good=dict(GOOD, available=False))
+        self.assertEqual(shop.run(lavka.add_to_cart, "a1b2"), "Лавка: Кефир 2,5% сейчас нет в наличии")
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE])
+
+    def test_button_that_is_not_there(self):
+        shop = Shop(buttons=False)
+        self.assertEqual(shop.run(lavka.add_to_cart, "a1b2", 3), "Лавка не положила Кефир 2,5% в корзину (кнопка не сработала)")
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, RETRIEVE, RETRIEVE])
+
+    def test_unknown_product(self):
+        shop = Shop(good=None)
+        with self.assertRaisesRegex(ValueError, "Лавка: товар zz не найден"):
+            shop.run(lavka.add_to_cart, "zz")
+        nothing_but_the_lookup(self, shop)
+
+
+class LavkaRemoveFromCartTests(unittest.TestCase):
+    def test_minus_until_it_is_gone(self):
+        shop = Shop(qty=2)
+        self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), "убрано из корзины Лавка у дома: Кефир 2,5%")
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, "−", RETRIEVE, "−", RETRIEVE, RETRIEVE])
+
+    def test_not_in_the_cart(self):
+        shop = Shop()
+        self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), "убрано из корзины Лавка у дома: Кефир 2,5%")
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, RETRIEVE])
+
+    def test_no_minus_button(self):
+        shop = Shop(qty=1, buttons=False)
+        self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), "не удалось убрать Кефир 2,5% из корзины Лавки")
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, RETRIEVE])
+
+    def test_at_most_thirty_clicks(self):
+        shop = Shop(qty=31)
+        self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), "не удалось убрать Кефир 2,5% из корзины Лавки")
+        self.assertEqual(shop.sent, [OPEN, PAGE] + [RETRIEVE, "−"] * 30 + [RETRIEVE])
+
+    def test_cart_that_did_not_come(self):
+        shop = Shop(qty=1, reads=False)
+        self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), "убрано из корзины Лавка у дома: Кефир 2,5%")
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, RETRIEVE])
+
+    def test_unknown_product(self):
+        shop = Shop(good=None)
+        with self.assertRaisesRegex(ValueError, "Лавка: товар zz не найден"):
+            shop.run(lavka.remove_from_cart, "zz")
+        nothing_but_the_lookup(self, shop)
+
+
+class LavkaCartTests(unittest.TestCase):
+    def test_both_depots(self):
+        shop = Shop(qty=2, checkout=False)
+        shop.carts["supermarket"] = {"c3": 1, "gone": 0}
+        self.assertEqual(shop.run(lavka.cart), "корзина Лавки\n"
+                         "Лавка у дома: 230 ₽ без доставки, итого 329 ₽ (к заказу нельзя: минимальный заказ 500 ₽)\n  a1b2\t2 шт\t115 ₽\tКефир 2,5%\n"
+                         "Большая лавка: 115 ₽ без доставки, итого 214 ₽ (к заказу нельзя: минимальный заказ 500 ₽)\n  s:c3\t1 шт\t115 ₽\tКефир 2,5%")
+        self.assertEqual(shop.sent, [RETRIEVE, ("cart/v1/retrieve", {}, "supermarket")])
+
+    def test_one_depot(self):
+        shop = Shop(qty=1, depot="supermarket")
+        self.assertEqual(shop.run(lavka.cart), "корзина Лавки\nБольшая лавка: 115 ₽ без доставки, итого 214 ₽\n  s:a1b2\t1 шт\t115 ₽\tКефир 2,5%")
+
+    def test_empty(self):
+        for reads in (True, False):
+            with self.subTest(reads=reads):
+                self.assertEqual(Shop(reads=reads).run(lavka.cart), "корзины Лавки (у дома и Большой лавки) пусты")
+
+
+class LavkaFavoritesTests(unittest.TestCase):
+    def favorites(self, answer):
+        tab = MagicMock()
+        with patch.object(lavka, "_tab", return_value=tab), patch.object(lavka, "_post", return_value=answer) as post:
+            got = lavka.favorites()
+        tab.close.assert_called_once()
+        self.assertEqual(post.call_args_list, [call(tab, "v1/api/v1/user/favorites", {})])
+        return got
+
+    def test_favorites(self):
+        self.assertEqual(self.favorites({"products": [KEFIR, VEGAN]}),
+                         "избранное Лавки\nid\tцена ₽\tналичие\tназвание\nk1\t115.0\t\tКефир 3,2%\nk3\t89.0\tнет в наличии\tКефир 1%")
+
+    def test_no_favorites(self):
+        for answer in ({"products": []}, {}, None):
+            with self.subTest(answer):
+                self.assertEqual(self.favorites(answer), "избранное Лавки пусто")
+
+
+class LavkaFavoriteTests(unittest.TestCase):
+    def favorite(self, product, answer, *args):
+        tab, sent = MagicMock(), []
+
+        def post(t, path, body, depot="regular"):
+            assert t is tab
+            sent.append((path, body, depot))
+            return product if path == "v1/product" else answer
+
+        with patch.object(lavka, "_tab", return_value=tab), patch.object(lavka, "_post", side_effect=post):
+            got = lavka.favorite(*args)
+        tab.close.assert_called_once()
+        return got, sent
+
+    def test_add_by_link(self):
+        got, sent = self.favorite({"product": GOOD}, {"isFavorite": True}, "https://lavka.yandex.ru/good/kefir-1")
+        self.assertEqual(sent, [("v1/product", {"productId": "kefir-1", "enableUnavailable": True}, "regular"),
+                                ("attributes/v2/favorite", {"productId": "a1b2", "isFavorite": True}, "regular")])
+        self.assertEqual(got, "в избранном Лавки: Кефир 2,5%")
+
+    def test_remove_in_the_big_lavka(self):
+        got, sent = self.favorite({"product": GOOD}, {"isFavorite": False}, "s:a1b2", True)
+        self.assertEqual(sent[1], ("attributes/v2/favorite", {"productId": "a1b2", "isFavorite": False}, "supermarket"))
+        self.assertEqual(got, "убрано из избранного Лавки: Кефир 2,5%")
+
+    def test_unknown_product_is_sent_as_given(self):
+        for product in (None, {}, {"product": None}):
+            with self.subTest(product):
+                got, sent = self.favorite(product, {"isFavorite": True}, "zz")
+                self.assertEqual((got, sent[1]), ("в избранном Лавки: zz", ("attributes/v2/favorite", {"productId": "zz", "isFavorite": True}, "regular")))
+
+    def test_not_changed(self):
+        for answer, remove in ((None, False), ({}, False), ({"isFavorite": True}, True), ({"isFavorite": 0}, True)):
+            with self.subTest(answer=answer, remove=remove):
+                self.assertEqual(self.favorite({"product": GOOD}, answer, "a1b2", remove)[0], "Лавка не изменила избранное")
 
 
 if __name__ == "__main__":
