@@ -272,26 +272,19 @@ def cart():
     return BLOCKED if d is None else _cart_text(d)
 
 
+SIZES_JS = f"({STATE}?.product?.sizes || []).map(s => ({{sku: s.sku, title: s.title, brand: s.brand_title || '', stock: s.stock_quantity || 0}}))"
+
+
 def add_to_cart(sku_or_url, size=None):
-    s = sku_or_url.strip()
-    m = re.search(r"/p/([a-z0-9]+)", s, re.I) or re.fullmatch(r"([a-z0-9]{12})", s, re.I)
-    if not m:
+    sku = _product_sku(sku_or_url)
+    if not sku:
         return "нужен sku товара (из lamoda_search) или ссылка на товар"
-    sku = m.group(1).upper()
     tab = _lm_tab()
     try:
         tab.goto(f"https://www.lamoda.ru/p/{sku.lower()}/", "lamoda", wait_js=f"{STATE}?.product?.sku === {json.dumps(sku)}")
-        sizes = tab.js(f"({STATE}?.product?.sizes || []).map(s => ({{sku: s.sku, title: s.title, brand: s.brand_title || '', stock: s.stock_quantity || 0}}))")
-        if not sizes:
-            return BLOCKED
-        names = ", ".join(f"{x['title']}{' (' + x['brand'] + ')' if x['brand'] and x['brand'] != x['title'] else ''}: {x['stock']} шт" for x in sizes)
-        if size is None and len(sizes) > 1:
-            return "у товара несколько размеров, укажи size: " + names
-        pick = sizes[0] if size is None else next((x for x in sizes if str(size).strip().lower() in (x["title"].lower(), x["brand"].lower(), x["sku"].lower())), None)
-        if not pick:
-            return f"нет размера «{size}»; есть: " + names
-        if not pick["stock"]:
-            return f"размер {pick['title']} закончился; есть: " + names
+        pick = _pick_size(tab.js(SIZES_JS), size)
+        if isinstance(pick, str):
+            return pick
         geo = _geo(tab)
         if not geo:
             return "⚠️ не нашёл регион доставки Lamoda (cookie gd_aoid): открой сайт и выбери город"
@@ -301,8 +294,44 @@ def add_to_cart(sku_or_url, size=None):
         tab.close()
     if d is None:
         return BLOCKED
-    ok = any(i["size"].get("sku") == pick["sku"] for i in _lines(d))
+    ok = _has(d, pick["sku"])
     return f"{'добавлено' if ok else '⚠️ Lamoda не подтвердила добавление'}: {pick['sku']}, размер {pick['title']}\n" + _cart_text(d)
+
+
+def _product_sku(sku_or_url):
+    s = sku_or_url.strip()
+    m = re.search(r"/p/([a-z0-9]+)", s, re.I) or re.fullmatch(r"([a-z0-9]{12})", s, re.I)
+    return m and m.group(1).upper()
+
+
+def _pick_size(sizes, size):
+    """The size to put in the cart from the page's [{sku, title, brand, stock}], or the answer why there is none."""
+    if not sizes:
+        return BLOCKED
+    names = ", ".join(map(_size_name, sizes))
+    if size is None and len(sizes) > 1:
+        return "у товара несколько размеров, укажи size: " + names
+    pick = sizes[0] if size is None else _find_size(sizes, size)
+    if not pick:
+        return f"нет размера «{size}»; есть: " + names
+    if not pick["stock"]:
+        return f"размер {pick['title']} закончился; есть: " + names
+    return pick
+
+
+def _size_name(x):
+    brand = f" ({x['brand']})" if x["brand"] and x["brand"] != x["title"] else ""
+    return f"{x['title']}{brand}: {x['stock']} шт"
+
+
+def _find_size(sizes, size):
+    """by its Russian title, its brand title or its sku, in any case"""
+    want = str(size).strip().lower()
+    return next((x for x in sizes if want in (x["title"].lower(), x["brand"].lower(), x["sku"].lower())), None)
+
+
+def _has(d, size_sku):
+    return any(i["size"].get("sku") == size_sku for i in _lines(d))
 
 
 def remove_from_cart(size_sku):
