@@ -230,6 +230,13 @@ class OzonOrdersTests(CacheInTempDir):
         self.assertEqual(c["ozon:live"], {"at": NOW, "years": [2026, 2025, 2024], "active": [[A1, "В пути"]]})
         self.assertIn("просмотрено заказов 6", out)
 
+    def test_narrow_no_break_spaces_in_prices_become_plain(self):
+        pages = {**OZON, "/my/orderdetails/?order=" + A1: details(("ООО Ромашка", [product(
+            "Кабель USB-C 1 м", "kabel-usb-c-100001", attributes=("Цвет: чёрный", "Длина: 1 м"),
+            prices=({"text": "1\u202f299\u202f₽"},))]), total="1\u202f299\u202f₽")}
+        out, _ = self.ozon_orders(pages=pages, query="кабель")
+        self.assertEqual(out, answer("Ozon: заказы с «кабель» в названии — найдено 1, просмотрено заказов 4", A1))
+
     def test_tab_is_closed_when_a_request_fails(self):
         tab = MagicMock()
         with patch.object(ozon, "_tab", return_value=tab), patch.object(ozon, "_page", side_effect=RuntimeError("бот")):
@@ -324,6 +331,12 @@ class AliOrdersTests(CacheInTempDir):
         self.assertEqual(out, "AliExpress: заказы с «флюс» в названии — найдено 0, просмотрено заказов 1" + CAPPED
                          + "\n(ничего)")
         self.assertEqual(read, [])
+
+    def test_no_break_spaces_in_the_total_become_plain(self):
+        lists = {**ALI_LISTS, ("active", 1): ali_page(ali_order(B1, "1\xa0234,56\xa0₽", "1005001", status="Ожидает получения"),
+                                                      more=True)}
+        out, _, _ = self.ali_orders(lists=lists, query="паяльник")
+        self.assertEqual(out.splitlines()[2:], [ALI_ROWS[0]])
 
     def test_orders_cached_before_dates_were_kept_apart(self):
         self.seed({"ali:live": {"at": NOW - 60, "active": []},

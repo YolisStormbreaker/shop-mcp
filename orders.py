@@ -163,14 +163,14 @@ def _ozon_details(tab, oid):
                         "title": t.get("name", {}).get("text", ""),
                         "variant": "; ".join(a.get("text", "") for a in p.get("attributes", [])),
                         "price": " ".join(x.get("text", "") for x in p.get("price", {}).get("price", [])
-                                          if x.get("textStyle", "PRICE") == "PRICE").replace(" ", " "),
+                                          if x.get("textStyle", "PRICE") == "PRICE").replace("\u202f", " "),
                         "url": ("https://www.ozon.ru" + link) if link else "",
                         "seller": s.get("name", {}).get("text", ""),
                     })
     total = ""
     for w in ozon._widgets(d, "orderDoneTotal") + ozon._widgets(d, "orderTotal"):
         total = w.get("total", {}).get("right", {}).get("price", {}).get("text", "") or total
-    return products, total.replace(" ", " ")
+    return products, total.replace("\u202f", " ")     # digit groups; escapes, since literal ones were once lost
 
 
 def ozon_orders(query=None, year=None, limit=30, max_new=60):
@@ -248,7 +248,7 @@ def _ali_pages(tab, tab_type):
         data = r.get("data") or {}
         yield [(od["orderId"],
                 (od.get("statusInfo") or {}).get("title") or (od.get("tag") or {}).get("title", ""),
-                od.get("totalPrice", "").replace(" ", " "),
+                od.get("totalPrice", "").replace("\xa0", " "),     # digit groups, as in _ozon_details
                 [p.get("itemId") for p in od.get("products") or []])
                for group in data.get("items") or [] for od in group.get("orders") or [] if od.get("orderId")]
         if not data.get("hasMore"):
