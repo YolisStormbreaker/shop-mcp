@@ -58,15 +58,27 @@ def _store(store):
     return s
 
 
+def _old(p):
+    """The price before the discount, when the site gives one above the price."""
+    old, price = p.get("old"), p.get("price")
+    return old if old and price and old > price else None
+
+
+def _off(p):
+    """«−17%» off the old price, or ""."""
+    return f"−{round(100 - p['price'] * 100 / _old(p))}%" if _old(p) else ""
+
+
+def _rating(p):
+    """«4.8 (120)»: the rating and how many reviews, or ""."""
+    return f"{p['rating']}" + (f" ({p['reviews']})" if p.get("reviews") else "") if p.get("rating") else ""
+
+
 def _row(i, store, p):
     price = p.get("price")
-    old = p.get("old") if p.get("old") and price and p["old"] > price else None
-    disc = f"−{round(100 - price * 100 / old)}%" if old else ""
-    avail = "" if p.get("available", True) else "нет в наличии"
-    rating = f"{p['rating']}" + (f" ({p['reviews']})" if p.get("reviews") else "") if p.get("rating") else ""
     return "\t".join(str(x) for x in (i, NAMES[store], p.get("id", ""), p.get("name", ""), _display_size(p),
-                                      price if price is not None else "", old or "", disc, unit_price(p),
-                                      rating, avail, p.get("url", "")))
+                                      "" if price is None else price, _old(p) or "", _off(p), unit_price(p),
+                                      _rating(p), "" if p.get("available", True) else "нет в наличии", p.get("url", "")))
 
 
 HEAD = "#\tмагазин\tid\tназвание\tфасовка\tцена ₽\tбез скидки\tскидка\tза кг/л/шт\tрейтинг\tналичие\tссылка"
