@@ -1,5 +1,7 @@
-"""Пятёрочка read paths: search, product card and reviews from the site's API answers; the tab and the fetch.
+"""Пятёрочка: search, product card and reviews from the site's API answers; the tab and the fetch; the cart, with
+the buttons add_to_cart and remove_from_cart would press on a fake product page.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_pyaterochka"""
+import re
 import time
 import unittest
 from unittest.mock import MagicMock, call, patch
@@ -295,6 +297,168 @@ class GetTests(unittest.TestCase):
         self.assertIsNone(got)
         self.assertEqual(tab.goto.call_args_list, [HOME])
         self.assertEqual(log.warning.call_args_list[1], call("5ka %s: %s non-JSON%s", "https://5d.5ka.ru/api/x", 0, " again"))
+
+
+ADD, PLUS, MINUS, BIN = ("product-detail-add-to-cart-button", "cart-button-increment-button", "cart-button-decrement-button",
+                         "cart-button-remove-button")
+OTHER = {"plu": "5", "qty": 1.5, "price": 199.9, "total": 299.85, "name": "Яблоки", "uom": "кг", "gone": False}
+
+
+class Shop:
+    """The product page and the cart the site keeps in localStorage. Buttons follow the quantity (none in the cart:
+    «в корзину»; one: «+» and the bin; more: «+» and «−»); a click changes the cart unless the site ignores that button;
+    a reload after clicks shows what the server kept, when `kept` says so."""
+    def __init__(self, qty=0, absent=(), ignored=(), kept=(), modal=False):
+        self.qty, self.absent, self.ignored, self.kept, self.modal = qty, set(absent), set(ignored), list(kept), modal
+        self.clicks, self.gotos, self.closed = [], [], 0
+
+    def buttons(self):
+        shown = {ADD} if not self.qty else {PLUS, MINUS if self.qty > 1 else BIN}
+        return shown - self.absent
+
+    def js(self, expr):
+        if expr == pyaterochka.CART_JS:
+            mine = [{"plu": "97001", "qty": float(self.qty), "price": 79.99, "total": 79.99 * self.qty, "name": "Кефир", "uom": "шт",
+                     "gone": False}]
+            return {"total": 777.5, "items": [OTHER] + (mine if self.qty else [])}
+        if expr == "document.querySelector('h1')?.innerText || ''":
+            return "Кефир 2,5%"
+        if expr == "!!document.querySelector('[data-qa=\"delivery-modal\"]')":
+            return self.modal
+        qa = re.search(r'data-qa="([\w-]+)"', expr).group(1)
+        assert "b.click()" in expr and "product-card-" in expr, expr      # the product's own button, not a card's below
+        if qa not in self.buttons():
+            return False
+        self.clicks.append(qa)
+        if qa not in self.ignored:
+            self.qty = {ADD: 1, PLUS: self.qty + 1, MINUS: self.qty - 1, BIN: 0}[qa]
+        return True
+
+    def goto(self, url, site, wait_js=None):
+        self.gotos.append((url, site, wait_js))
+        if self.clicks and self.kept:
+            self.qty = self.kept.pop(0)
+
+    def close(self):
+        self.closed += 1
+
+
+PAGE = ("https://5ka.ru/product/97001/", "5ka",
+        "!!document.querySelector('[data-qa=\"product-detail-add-to-cart-button\"], [data-qa=\"cart-button-with-item\"]')")
+RELOAD = ("https://5ka.ru/product/97001/", "5ka", "!!document.getElementById('__NEXT_DATA__')")
+ADDED = "в корзине Пятёрочки: Кефир 2,5% — {} шт; корзина 777.5 ₽"
+NOT_ADDED = "Пятёрочка не положила «Кефир 2,5%» в корзину (нет в наличии?)"
+NOT_REMOVED = "не удалось убрать «Кефир 2,5%» из корзины Пятёрочки"
+
+
+def change(fn, shop, *args):
+    """fn(*args) on the shop's page: (answer, buttons clicked, pages loaded); the tab is closed once."""
+    with patch.object(pyaterochka, "_tab", return_value=shop), patch.object(pyaterochka.time, "sleep"):
+        got = fn(*args)
+    assert shop.closed == 1
+    return got, shop.clicks, shop.gotos
+
+
+class AddToCartTests(unittest.TestCase):
+    def test_add_presses_the_add_button_then_plus(self):
+        got, clicks, gotos = change(pyaterochka.add_to_cart, Shop(), "https://5ka.ru/product/kefir--97001/", 3)
+        self.assertEqual(clicks, [ADD, PLUS, PLUS])
+        self.assertEqual(gotos, [PAGE, RELOAD])
+        self.assertEqual(got, ADDED.format(3))
+
+    def test_add_on_top_of_the_cart_presses_plus(self):
+        got, clicks, _ = change(pyaterochka.add_to_cart, Shop(qty=2), "97001")
+        self.assertEqual((got, clicks), (ADDED.format(3), [PLUS]))
+
+    def test_the_answer_is_what_the_server_kept(self):
+        got, clicks, _ = change(pyaterochka.add_to_cart, Shop(kept=[2]), "97001", 3)
+        self.assertEqual((got, clicks), (ADDED.format(2), [ADD, PLUS, PLUS]))
+
+    def test_quantity_is_one_to_thirty(self):
+        for quantity, presses in ((0, 1), (-2, 1), ("4", 4), (99, 30)):
+            with self.subTest(quantity):
+                got, clicks, _ = change(pyaterochka.add_to_cart, Shop(), "97001", quantity)
+                self.assertEqual((len(clicks), got), (presses, ADDED.format(presses)))
+
+    def test_no_add_button(self):
+        got, clicks, gotos = change(pyaterochka.add_to_cart, Shop(absent=[ADD]), "97001", 2)
+        self.assertEqual((got, clicks, gotos), (NOT_ADDED, [], [PAGE, RELOAD]))
+
+    def test_add_button_the_site_ignores(self):
+        got, clicks, _ = change(pyaterochka.add_to_cart, Shop(ignored=[ADD]), "97001", 2)
+        self.assertEqual((got, clicks), (NOT_ADDED, [ADD]))
+
+    def test_no_plus_on_top_of_the_cart(self):
+        got, clicks, _ = change(pyaterochka.add_to_cart, Shop(qty=1, absent=[PLUS]), "97001", 2)
+        self.assertEqual((got, clicks), (NOT_ADDED, []))
+
+    def test_the_site_asks_for_an_address(self):
+        got, clicks, gotos = change(pyaterochka.add_to_cart, Shop(modal=True), "97001", 3)
+        self.assertEqual((clicks, gotos), ([ADD], [PAGE]))
+        self.assertEqual(got, "Пятёрочка просит адрес доставки: выберите его на 5ka.ru (shop-chrome show), потом повторите")
+
+    def test_not_a_plu(self):
+        with patch.object(pyaterochka, "_tab") as tab, self.assertRaises(ValueError):
+            pyaterochka.add_to_cart("https://5ka.ru/catalog/kefir/")
+        tab.assert_not_called()
+
+
+class RemoveFromCartTests(unittest.TestCase):
+    def test_minus_down_to_the_bin(self):
+        got, clicks, gotos = change(pyaterochka.remove_from_cart, Shop(qty=3), "https://5ka.ru/product/kefir--97001/")
+        self.assertEqual((clicks, gotos), ([MINUS, MINUS, BIN], [PAGE, RELOAD]))
+        self.assertEqual(got, "убрано из корзины Пятёрочки: Кефир 2,5%")
+
+    def test_a_second_round_when_the_server_kept_some(self):
+        got, clicks, gotos = change(pyaterochka.remove_from_cart, Shop(qty=2, kept=[1]), "97001")
+        self.assertEqual((clicks, gotos), ([MINUS, BIN, BIN], [PAGE, RELOAD, RELOAD]))
+        self.assertEqual(got, "убрано из корзины Пятёрочки: Кефир 2,5%")
+
+    def test_kept_after_both_rounds(self):
+        got, clicks, gotos = change(pyaterochka.remove_from_cart, Shop(qty=1, kept=[1, 1]), "97001")
+        self.assertEqual((got, clicks, gotos), (NOT_REMOVED, [BIN, BIN], [PAGE, RELOAD, RELOAD]))
+
+    def test_minus_the_site_ignores_is_pressed_thirty_times_a_round(self):
+        got, clicks, _ = change(pyaterochka.remove_from_cart, Shop(qty=2, ignored=[MINUS]), "97001")
+        self.assertEqual((got, clicks), (NOT_REMOVED, [MINUS] * 60))
+
+    def test_no_buttons(self):
+        got, clicks, gotos = change(pyaterochka.remove_from_cart, Shop(qty=1, absent=[BIN]), "97001")
+        self.assertEqual((got, clicks, gotos), (NOT_REMOVED, [], [PAGE, RELOAD, RELOAD]))
+
+    def test_not_in_the_cart(self):
+        got, clicks, gotos = change(pyaterochka.remove_from_cart, Shop(), "97001")
+        self.assertEqual((got, clicks, gotos), ("убрано из корзины Пятёрочки: Кефир 2,5%", [], [PAGE, RELOAD]))
+
+    def test_not_a_plu(self):
+        with patch.object(pyaterochka, "_tab") as tab, self.assertRaises(ValueError):
+            pyaterochka.remove_from_cart("кефир")
+        tab.assert_not_called()
+
+
+class CartTests(unittest.TestCase):
+    def cart(self, answer):
+        tab = MagicMock()
+        tab.js.return_value = answer
+        with patch.object(pyaterochka, "_tab", return_value=tab), patch.object(pyaterochka.time, "sleep") as sleep:
+            got = pyaterochka.cart()
+        self.assertEqual(tab.goto.call_args_list, [HOME])
+        tab.js.assert_called_once_with(pyaterochka.CART_JS)
+        tab.close.assert_called_once()
+        sleep.assert_called_once_with(1.5)
+        return got
+
+    def test_cart(self):
+        got = self.cart({"total": 459.83, "items": [
+            {"plu": "97001", "qty": 2.0, "price": 79.99, "total": 159.98, "name": "Кефир 2,5%", "uom": "шт", "gone": False}, OTHER,
+            {"plu": "7", "qty": 1, "price": None, "total": 0, "name": "Хлеб", "uom": None, "gone": True}]})
+        self.assertEqual(got, "корзина Пятёрочки: итого 459.83 ₽\nplu\tкол-во\tцена ₽\tсумма ₽\tназвание\n"
+                              "97001\t2 шт\t79.99\t159.98\tКефир 2,5%\n"
+                              "5\t1.5 кг\t199.9\t299.85\tЯблоки\n"
+                              "7\t1 \tNone\t0\tХлеб — нет в наличии")
+
+    def test_empty_cart(self):
+        self.assertEqual(self.cart({"items": []}), "корзина Пятёрочки пуста")
 
 
 if __name__ == "__main__":
