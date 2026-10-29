@@ -17,26 +17,7 @@ BLOCKED = "⚠️ Lamoda не отдала данные страницы (про
 SEARCH_JS = f"(() => {{ const P = {STATE}; return P?.products ? {{pagination: P.pagination || {{}}, products: P.products}} : null }})()"
 
 
-ITEM_JS = f"""
-(() => {{
-  const p = {STATE}?.product;
-  if (!p) return null;
-  const prices = Object.values(p.prices || {{}}).map(x => +String(x.price).replace(/\\D/g, '')).filter(Boolean);
-  return {{
-    title: [p.brand?.title || p.brand?.name, p.model_title || p.title].filter(Boolean).join(' '), kind: p.title, sku: p.sku,
-    price: prices.length ? Math.min(...prices) : null, base: prices.length ? Math.max(...prices) : null,
-    seller: p.seller?.title || '', returnable: !!p.is_returnable, in_stock: !!p.is_in_stock,
-    sizes: (p.sizes || []).map(s => `${{s.title}}${{s.brand_title && s.brand_title !== s.title ? ` (${{s.brand_size_system}} ${{s.brand_title}})` : ''}}: ${{s.stock_quantity ? s.stock_quantity + ' шт' : 'нет'}}`),
-    attrs: (p.attributes || []).map(a => `${{a.title}}: ${{a.value}}`),
-    description: p.description || '',
-    // every price the site knows: original, and each discount with its kind (loyalty, action, promocode)
-    prices: Object.entries(p.prices || {{}}).map(([k, x]) => `${{k}} ${{x.price}} ₽` + (x.discount ? ` (−${{x.discount.percent}}%${{x.discount.promocode ? ', промокод ' + x.discount.promocode : ''}})` : '')),
-    delivery: [p.delivery?.best_delivery_info?.description || '', ...(p.delivery?.best_delivery_info?.delivery_data || []).map(d => d[d.type]?.info?.title || '')].filter(Boolean),
-    photos: (p.gallery || []).map(x => 'https://a.lmcdn.ru/product' + x),
-    rating: p.average_rating || '', reviews: p.counters?.reviews || 0,
-  }};
-}})()
-"""
+ITEM_JS = f"{STATE}?.product || null"
 
 
 def search(query, price_min=None, price_max=None, sort="default", page=1, limit=30):
@@ -102,37 +83,80 @@ def _search_row(n, p):
 
 
 def item(sku_or_url, full=False):
-    s = sku_or_url.strip()
-    if s.startswith("/"):
-        s = "https://www.lamoda.ru" + s
-    url = s if "lamoda.ru" in s else f"https://www.lamoda.ru/p/{s.lower()}/"
+    url = _item_url(sku_or_url)
     m = re.search(r"/p/([a-z0-9]+)", url, re.I)
     ready = f"{STATE}?.product?.sku?.toLowerCase() === {json.dumps(m.group(1).lower())}" if m else f"!!{STATE}?.product"
     tab = tab_for("lamoda.ru")
     try:
         tab.goto(url, "lamoda", wait_js=ready)
-        r = tab.js(ITEM_JS)
-        if r is None:
+        p = tab.js(ITEM_JS)
+        if p is None:
             saved = dump("lamoda", "item", tab.js("document.documentElement.outerHTML"))
             log.warning("lamoda item %s: no __NUXT__ product, page %s", url, saved)
     finally:
         tab.close()
-    if r is None:
-        return BLOCKED
-    lines = [f"{r['title']} ({r['kind']}) — {r['price']} ₽" + (f", без скидок {r['base']} ₽" if r["base"] and r["base"] > r["price"] else ""),
-             url.split("?")[0], f"sku: {r['sku']} · продавец: {r['seller']} · " + ("можно вернуть" if r["returnable"] else "⚠️ без возврата")]
-    lines.append("размеры: " + "; ".join(r["sizes"]) if r["sizes"] else ("в наличии" if r["in_stock"] else "нет в наличии"))
-    if r["prices"]:
-        lines.append("цены: " + "; ".join(r["prices"]))
-    if r["delivery"]:
-        lines.append("доставка: " + "; ".join(r["delivery"]))
-    lines.append(f"рейтинг {r['rating'] or '—'}, отзывов на этот цвет {r['reviews']} (все цвета — lamoda_reviews)")
-    if r["photos"]:
-        lines.append("фото (shop_images): " + " ".join(r["photos"][:10]))
-    if r["attrs"]:
-        lines.append("характеристики: " + "; ".join(r["attrs"]))
-    lines.append("\n" + (r["description"] if full else r["description"][:2500]))
-    return "\n".join(lines)
+    return BLOCKED if p is None else _card(p, url, full)
+
+
+def _item_url(sku_or_url):
+    s = sku_or_url.strip()
+    if s.startswith("/"):
+        s = "https://www.lamoda.ru" + s
+    return s if "lamoda.ru" in s else f"https://www.lamoda.ru/p/{s.lower()}/"
+
+
+def _card(p, url, full):
+    description = p.get("description") or ""
+    return "\n".join(x for x in [
+        _item_head(p), url.split("?")[0], _seller(p), _item_sizes(p),
+        _joined("цены: ", _item_prices(p)),
+        _joined("доставка: ", _item_delivery(p)),
+        f"рейтинг {p.get('average_rating') or '—'}, отзывов на этот цвет {(p.get('counters') or {}).get('reviews') or 0} (все цвета — lamoda_reviews)",
+        _joined("фото (shop_images): ", ["https://a.lmcdn.ru/product" + x for x in p.get("gallery") or []][:10], " "),
+        _joined("характеристики: ", [f"{a.get('title')}: {a.get('value')}" for a in p.get("attributes") or []]),
+        "\n" + (description if full else description[:2500])] if x)
+
+
+def _joined(label, values, sep="; "):
+    return label + sep.join(values) if values else ""
+
+
+def _item_head(p):
+    brand = p.get("brand") or {}
+    title = " ".join(x for x in (brand.get("title") or brand.get("name"), p.get("model_title") or p.get("title")) if x)
+    price, base, _ = _offers(p.get("prices"))
+    return f"{title} ({p.get('title')}) — {price or None} ₽" + (f", без скидок {base} ₽" if base > price else "")
+
+
+def _seller(p):
+    return f"sku: {p.get('sku')} · продавец: {(p.get('seller') or {}).get('title') or ''} · " + \
+        ("можно вернуть" if p.get("is_returnable") else "⚠️ без возврата")
+
+
+def _item_sizes(p):
+    return _joined("размеры: ", [_size(s) for s in p.get("sizes") or []]) or ("в наличии" if p.get("is_in_stock") else "нет в наличии")
+
+
+def _size(s):
+    brand = f" ({s.get('brand_size_system')} {s['brand_title']})" if s.get("brand_title") and s["brand_title"] != s.get("title") else ""
+    return f"{s.get('title')}{brand}: " + (f"{s['stock_quantity']} шт" if s.get("stock_quantity") else "нет")
+
+
+def _item_prices(p):
+    """every price the site knows: original, and each discount under its kind (loyalty, action, promocode)"""
+    return [f"{k} {x.get('price')} ₽" + _discount(x.get("discount")) for k, x in (p.get("prices") or {}).items()]
+
+
+def _discount(d):
+    if not d:
+        return ""
+    return f" (−{d.get('percent')}%" + (f", промокод {d['promocode']}" if d.get("promocode") else "") + ")"
+
+
+def _item_delivery(p):
+    best = (p.get("delivery") or {}).get("best_delivery_info") or {}
+    ways = [((d.get(d.get("type")) or {}).get("info") or {}).get("title") for d in best.get("delivery_data") or []]
+    return [x for x in (best.get("description"), *ways) if x]
 
 
 # The product page's own review client (productReviewsV2 in its code). only_with_photos was found by trying
