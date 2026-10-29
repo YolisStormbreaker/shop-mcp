@@ -6,6 +6,7 @@ fetch is enough — no browser tab, no site lock. Every picture is re-encoded as
 max_side and also saved to cache/images, so a client that prefers files gets a path.
 """
 import hashlib
+import http.client
 import io
 import ipaddress
 import socket
@@ -29,10 +30,45 @@ def _public(url):
     if u.scheme not in ("http", "https") or not u.hostname:
         return False
     try:
-        addrs = {a[4][0] for a in socket.getaddrinfo(u.hostname, u.port or 443)}
+        return _global(a[4][0] for a in socket.getaddrinfo(u.hostname, u.port or 443))
     except OSError:
         return False
+
+
+def _global(addrs):
     return all(ipaddress.ip_address(a.split("%")[0]).is_global for a in addrs)
+
+
+def _connect(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+    """socket.create_connection that resolves the name once and connects only to what it checked: a name that
+    answered public to _public could otherwise point at this machine by the time we connect (DNS rebinding)."""
+    host, port = address
+    addrs = [a[4][0] for a in socket.getaddrinfo(host, port)]
+    if not addrs or not _global(addrs):
+        raise ValueError(f"непубличный адрес: {host}")
+    return socket.create_connection((addrs[0], port), timeout, source_address)
+
+
+class _PublicHTTP(http.client.HTTPConnection):
+    def __init__(self, *args, **kw):
+        super().__init__(*args, **kw)
+        self._create_connection = _connect
+
+
+class _PublicHTTPS(http.client.HTTPSConnection):
+    def __init__(self, *args, **kw):
+        super().__init__(*args, **kw)
+        self._create_connection = _connect      # TLS still checks the certificate against the name
+
+
+class _HTTP(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PublicHTTP, req)
+
+
+class _HTTPS(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PublicHTTPS, req, context=self._context)
 
 
 class _Redirect(urllib.request.HTTPRedirectHandler):
@@ -43,7 +79,7 @@ class _Redirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-_open = urllib.request.build_opener(_Redirect).open
+_open = urllib.request.build_opener(_Redirect, _HTTP, _HTTPS).open
 
 
 def fetch(url, max_side=1024):

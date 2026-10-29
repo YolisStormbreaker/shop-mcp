@@ -85,6 +85,34 @@ class PublicTests(unittest.TestCase):
         self.assertTrue(any(isinstance(h, images._Redirect) for h in images._open.__self__.handlers))
 
 
+class ConnectionTests(unittest.TestCase):
+    """The address checked is the address connected to (DNS rebinding: a name that answered public to the check
+    must not point at this machine by the time the connection is made)."""
+    def setUp(self):
+        p = patch.object(images.socket, "create_connection", return_value="sock")
+        self.connect = p.start()
+        self.addCleanup(p.stop)
+
+    def test_connects_to_the_public_address_it_checked(self):
+        with patch.object(images.socket, "getaddrinfo", side_effect=getaddrinfo):
+            self.assertEqual(images._connect(("a.lmcdn.ru", 443), 20), "sock")
+        self.connect.assert_called_once_with(("185.65.148.7", 443), 20, None)
+
+    def test_refuses_a_local_address_without_connecting(self):
+        with patch.object(images.socket, "getaddrinfo", side_effect=getaddrinfo), \
+                self.assertRaisesRegex(ValueError, "непубличный адрес: localhost"):
+            images._connect(("localhost", 9222), 20)
+        self.connect.assert_not_called()
+
+    def test_a_name_that_turns_local_after_the_check_is_not_fetched(self):
+        answers = iter([[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("185.65.148.7", 9222))],
+                        [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 9222))]])
+        with patch.object(images.socket, "getaddrinfo", side_effect=lambda host, port: next(answers)), \
+                patch.object(images, "DIR", Path(tempfile.mkdtemp())), self.assertRaises(ValueError):
+            images.fetch("http://rebind.test:9222/json/version")
+        self.connect.assert_not_called()
+
+
 class FetchTests(unittest.TestCase):
     URL = "https://a.lmcdn.ru/img600x866/R/T/RTLAB.jpg"
 
