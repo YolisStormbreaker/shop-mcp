@@ -369,19 +369,29 @@ def add_to_cart(id_or_url, quantity=1):
     plu = _plu(id_or_url)
     tab = _tab()
     try:
-        pid, title = _product_id(tab, plu)
-        b = None
-        for _ in range(max(1, min(int(quantity), 30))):          # the site's own «+»: one unit per call
-            b = _call(tab, "put", f"/basket/plu{plu}/plus")
-            if not isinstance(b, dict) or "__error" in b:
-                return f"Перекрёсток не положил {title}: {b.get('__error') if isinstance(b, dict) else b}"
+        _, title = _product_id(tab, plu)
+        n = max(1, min(int(quantity), 30))
+        b, done, refused = _plus(tab, plu, n)
     finally:
         tab.close()
+    if not done:
+        return f"Перекрёсток не положил {title}: {refused}"
     it, state = _line(b, plu)
     if not it:
         return f"Перекрёсток: {title} в корзине не появился (нет в наличии?)"
     return (f"в корзине Перекрёстка: {title} — {it.get('quantity')} шт × {_rub(it.get('price'))} ₽ = {_rub(it.get('cost'))} ₽"
-            + (f"\n{state}" if state else ""))
+            + (f"\n{state}" if state else "") + (f"\nположено {done} из {n}, дальше Перекрёсток отказал: {refused}" if done < n else ""))
+
+
+def _plus(tab, plu, n):
+    """The site's own «+», one unit per call, n times or up to a refusal: (the last basket, calls that went through, the refusal)."""
+    b = None
+    for done in range(n):
+        r = _call(tab, "put", f"/basket/plu{plu}/plus")
+        if not isinstance(r, dict) or _failed(r):
+            return b, done, r.get("__error") if isinstance(r, dict) else r
+        b = r
+    return b, n, None
 
 
 def remove_from_cart(id_or_url):

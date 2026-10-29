@@ -354,7 +354,8 @@ class Basket:
     """The site's basket: «+» puts one unit of a product in, deleting the line takes it out; every call answers
     the whole basket.  answers() gives run() the paths the cart code calls."""
     def __init__(self, kefir=0, bread=0, state=None, plus=None, delete=True):
-        self.lines, self.state, self.plus_answers, self.delete = {"7001": kefir, "7002": bread}, state or {}, plus, delete
+        """plus: {n: answer} for the «+» calls that answer otherwise (the first is 1)."""
+        self.lines, self.state, self.plus_answers, self.delete, self.pluses = {"7001": kefir, "7002": bread}, state or {}, plus or {}, delete, 0
 
     def view(self):
         items = [{"product": p, "quantity": self.lines[str(p["id"])], "price": 10999, "cost": 10999 * self.lines[str(p["id"])]}
@@ -362,8 +363,9 @@ class Basket:
         return {"items": items, "totalCost": sum(i["cost"] for i in items), **self.state}
 
     def plus(self, _):
-        if self.plus_answers:
-            return self.plus_answers.pop(0)
+        self.pluses += 1
+        if self.pluses in self.plus_answers:
+            return self.plus_answers[self.pluses]
         self.lines["7001"] += 1
         return self.view()
 
@@ -426,12 +428,17 @@ class AddToCartTests(unittest.TestCase):
     def test_refused(self):
         for answer, said in (({"__error": 400}, "400"), (None, "None")):
             with self.subTest(said):
-                basket = Basket(plus=[{"items": []}, answer])
-                got, calls = run(pk.add_to_cart, basket.answers(), "2093082", 3)
-                self.assertEqual((got, calls), (f"Перекрёсток не положил Кефир 2,5%, 930г: {said}", [PRODUCT, PLUS, PLUS]))
+                got, calls = run(pk.add_to_cart, Basket(plus={1: answer}).answers(), "2093082", 3)
+                self.assertEqual((got, calls), (f"Перекрёсток не положил Кефир 2,5%, 930г: {said}", [PRODUCT, PLUS]))
+
+    def test_refused_halfway(self):
+        got, calls = run(pk.add_to_cart, Basket(plus={3: {"__error": 400}}).answers(), "2093082", 5)
+        self.assertEqual(got, "в корзине Перекрёстка: Кефир 2,5%, 930г — 2 шт × 109.99 ₽ = 219.98 ₽\n"
+                              "положено 2 из 5, дальше Перекрёсток отказал: 400")
+        self.assertEqual(calls, [PRODUCT, PLUS, PLUS, PLUS])
 
     def test_not_in_the_basket_after_all(self):
-        got, _ = run(pk.add_to_cart, Basket(plus=[{"items": []}]).answers(), "2093082")
+        got, _ = run(pk.add_to_cart, Basket(plus={1: {"items": []}}).answers(), "2093082")
         self.assertEqual(got, "Перекрёсток: Кефир 2,5%, 930г в корзине не появился (нет в наличии?)")
 
     def test_unknown_product(self):
