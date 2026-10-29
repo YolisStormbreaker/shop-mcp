@@ -185,6 +185,11 @@ class YmReviewsTests(unittest.TestCase):
         self.assertEqual(exprs[k - 1], f"{ITEMS}[0]?.innerText || ''")
         self.assertEqual(exprs[k + 1], f"({ITEMS}[0]?.innerText || '') !== true")
 
+    def test_review_without_zone_data_has_no_grade(self):
+        bare = {"date": "5 мая", "up": 0, "down": 0, "author": "Покупатель Б", "text": "Комментарий: средне", "variant": "", "photos": []}
+        got = call(ym.reviews, {**REVIEWS, "reviews": [bare]}, CARD)[0]
+        self.assertEqual(got.splitlines()[-1], "5 мая\t\t+0/−0\t\tПокупатель Б\tКомментарий: средне\t")
+
     def test_no_reviews(self):
         got = call(ym.reviews, {"summary": "", "dist": "", "reviews": []}, CARD, with_media=True)[0]
         self.assertEqual(got, f"Яндекс Маркет · {REVIEWS_URL}\n\nвсе варианты, сортировка useful, только с фото{REVIEWS_NOTE}\n(отзывов нет)")

@@ -274,7 +274,7 @@ def _reviews_text(r, url, sort, with_media, this_variant):
 
 
 def _review_row(x):
-    return f"{x['date']}\t{x['grade']}\t+{x['up']}/−{x['down']}\t{x['variant']}\t{x['author']}\t{x['text']}\t{' '.join(x['photos'])}"
+    return f"{x['date']}\t{x.get('grade', '')}\t+{x['up']}/−{x['down']}\t{x['variant']}\t{x['author']}\t{x['text']}\t{' '.join(x['photos'])}"
 
 
 # Cart. Reading works from a background tab; adding and removing are clicks (the site's cart calls
