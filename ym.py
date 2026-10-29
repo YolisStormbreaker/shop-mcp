@@ -346,25 +346,27 @@ def cart():
 
 
 def add_to_cart(url):
-    if url.startswith("/"):
-        url = "https://market.yandex.ru" + url
-    tab = tab_for("market.yandex.ru")
-    try:
-        before = _open_cart(tab)
-        if before is None:
-            return BLOCKED
-        tab.goto(url, "ym", wait_js=f"{_new_page(tab)} && (!!document.querySelector('h1') || {CAPTCHA_JS})")
-        if _captcha(tab, f"add {url}"):
-            return BLOCKED
-        # the offer's own button: the page also has «В корзину» on every similar product
-        if not tab.click('[data-auto="main"] [data-auto="cartButton"]'):
-            return "не добавлено: " + (NOT_ON_SCREEN if not tab.visible() else "не нашёл кнопку «В корзину» у основного предложения")
-        time.sleep(2)
-        rows = _open_cart(tab)
-    finally:
-        tab.close()
-    if rows is None:
+    url = _absolute(url)
+    return _in_tab(lambda tab: _add(tab, url))
+
+
+def _add(tab, url):
+    before = _open_cart(tab)
+    if before is None:
         return BLOCKED
+    # the offer's own button: the page also has «В корзину» on every similar product
+    clicked = _load(tab, url, "add", "!!document.querySelector('h1')", lambda t: t.click('[data-auto="main"] [data-auto="cartButton"]'))
+    if clicked is None:
+        return BLOCKED
+    if not clicked:
+        return "не добавлено: " + (NOT_ON_SCREEN if not tab.visible() else "не нашёл кнопку «В корзину» у основного предложения")
+    time.sleep(2)
+    rows = _open_cart(tab)
+    return BLOCKED if rows is None else _added(before, rows)
+
+
+def _added(before, rows):
+    """The reply from the cart's rows before and after the click."""
     old = {r["sku"]: r["qty"] for r in before}
     new = [r for r in rows if old.get(r["sku"]) != r["qty"]]  # the page does not name its sku reliably: diff the cart
     if not new:
