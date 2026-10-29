@@ -294,7 +294,7 @@ def add_to_cart(id_or_url, quantity=1):
             return f"Лавка: {_clean(c.get('longTitle'))} сейчас нет в наличии"
         if start is None:
             return BLOCKED
-        _clicks(tab, [PLUS if start else ADD] + [PLUS] * (max(1, min(int(quantity), 30)) - 1))
+        _clicks(tab, [PLUS if start else ADD] + [PLUS] * (min(int(quantity), 30) - 1))     # 0 or less: the first click alone
         got = _cart_items(tab, depot)
     finally:
         tab.close()

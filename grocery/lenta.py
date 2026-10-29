@@ -333,7 +333,7 @@ def add_to_cart(id_or_url, quantity=1):
         if lookup is None:
             return BLOCKED
         have = _quantity(lookup[0], pid)
-        n = max(1, min(int(quantity), 30))
+        n = min(int(quantity), 30)      # 0 or less: the first button alone
         pressed = _presses(tab, [INC if have else ADD] + [INC] * (n - 1))
         if not pressed:
             return f"Лента: кнопки «{'+' if have else 'В корзину'}» на странице {card['name']} нет (нет в наличии?)"
