@@ -313,6 +313,18 @@ def _added(c, depot, start, got):
             + (f" · к заказу пока нельзя: {r.get('checkoutUnavailableReason')}" if not r.get("availableForCheckout") else ""))
 
 
+def _take(tab, pid, depot, left):
+    """Click «−» while the cart has some (30 times at most); what is left, None when the cart did not come."""
+    for _ in range(30):
+        if not _click(tab, MINUS):
+            break
+        time.sleep(1.2)
+        left = _qty(tab, pid, depot)
+        if not left:
+            break
+    return left
+
+
 def remove_from_cart(id_or_url):
     pid, depot = _pid(id_or_url)
     tab = _tab()
@@ -322,11 +334,9 @@ def remove_from_cart(id_or_url):
         left = _qty(tab, pid, depot)
         if left is None:
             return BLOCKED
-        for _ in range(30):
-            if not left or not _click(tab, MINUS):
-                break
-            time.sleep(1.2)
-            left = _qty(tab, pid, depot)
+        if not left:
+            return f"{_clean(c.get('longTitle'))} в корзине {DEPOTS[depot]} нет"
+        left = _take(tab, pid, depot, left)
     finally:
         tab.close()
     title = _clean(c.get("longTitle"))

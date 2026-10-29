@@ -360,8 +360,8 @@ class LavkaRemoveFromCartTests(unittest.TestCase):
         self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, "−", RETRIEVE, "−", RETRIEVE])
 
     def test_not_in_the_cart(self):
-        shop = Shop()
-        self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), "убрано из корзины Лавка у дома: Кефир 2,5%")
+        shop = Shop(qty=1, depot="supermarket")
+        self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), "Кефир 2,5% в корзине Лавка у дома нет")
         self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE])
 
     def test_no_minus_button(self):
