@@ -86,6 +86,10 @@ def _row(i, store, p):
                                       _rating(p), "" if p.get("available", True) else "нет в наличии", p.get("url", "")))
 
 
+def _tag(tag):
+    return f" · тег «{tag}»" if tag else ""
+
+
 HEAD = "#\tмагазин\tid\tназвание\tфасовка\tцена ₽\tбез скидки\tскидка\tза кг/л/шт\tрейтинг\tналичие\tссылка"
 
 
@@ -97,7 +101,7 @@ def search(store, query, tag=None, sort="popular", page=1, limit=30):
     if isinstance(r, str):          # a site's own message: bot check, unknown tag…
         return r
     items = r["items"][:limit]
-    head = [f"{NAMES[store]} · «{query}»" + (f" · тег «{tag}»" if tag else "")
+    head = [f"{NAMES[store]} · «{query}»" + _tag(tag)
             + (f" · найдено {r['total']}" if r.get("total") is not None else "") + f" · страница {page} · {r.get('url', '')}"]
     if r.get("note"):
         head.append(r["note"])
@@ -152,60 +156,76 @@ def _display_size(p):
     return m[-1].group(0).strip() if m else (p.get("size") or "")
 
 
-def compare(query, stores=None, tag=None, limit=8, strict=True):
-    """Search every store at once (each site has its own tab and lock) and put the results in one table:
-    groups of the same product (see _same) first, cheapest per kg/l inside a group."""
-    keys = [_store(s) for s in stores] if stores else list(STORES)
+def _keys(stores):
+    return [_store(s) for s in stores] if stores else list(STORES)
 
-    def one(s):
-        try:
-            r = STORES[s].search(query, tag=tag, sort="popular", page=1, limit=max(limit * 3, 20) if strict else limit)
-            if isinstance(r, str):
-                return s, r
-            hits = [p for p in r["items"] if not strict or _relevant(p.get("name"), query)]
-            # no name has every word («соус для фрикаделек»): the site's own best matches, marked as such
-            return s, hits[:limit] or [dict(p, name=p.get("name", "") + " (≈ похожее)") for p in r["items"][:min(limit, 4)]]
-        except Exception as e:
-            return s, f"ошибка: {str(e)[:150]}"
 
-    with ThreadPoolExecutor(len(keys)) as ex:
-        results = list(ex.map(one, keys))
-    notes, flat = [], []
-    for s, items in results:
-        if isinstance(items, str):
-            notes.append(f"{NAMES[s]}: {items.splitlines()[0]}")
-        else:
-            flat += [(s, p) for p in items]
-    clusters = []                      # greedy: each product joins the first cluster it matches
-    for s, p in flat:
+def _safe(fn, *args):
+    """fn(*args), or «ошибка: …» if it raises: one store failing is a note, not the whole tool failing."""
+    try:
+        return fn(*args)
+    except Exception as e:
+        return f"ошибка: {str(e)[:150]}"
+
+
+def _each(keys, fn):
+    """[(store, fn(store))] for every store at once: each site has its own tab and lock."""
+    with ThreadPoolExecutor(max(1, len(keys))) as ex:
+        return list(ex.map(lambda s: (s, _safe(fn, s)), keys))
+
+
+def _notes(results):
+    """The first line of each store's message (bot check, error) that came instead of results."""
+    return [f"{NAMES[s]}: {v.splitlines()[0]}" for s, v in results if isinstance(v, str)]
+
+
+def _hits(r, query, strict):
+    """Search results whose names have every word of the query (see _relevant); all of them unless strict."""
+    return [p for p in r["items"] if not strict or _relevant(p.get("name"), query)]
+
+
+def _matches(s, query, tag, limit, strict):
+    """One store's products for compare, or the site's message."""
+    r = STORES[s].search(query, tag=tag, sort="popular", page=1, limit=max(limit * 3, 20) if strict else limit)
+    if isinstance(r, str):
+        return r
+    # no name has every word («соус для фрикаделек»): the site's own best matches, marked as such
+    return _hits(r, query, strict)[:limit] or [dict(p, name=p.get("name", "") + " (≈ похожее)") for p in r["items"][:min(limit, 4)]]
+
+
+def _groups(found):
+    """(clusters of the same product seen in more than one store, the other products) from [(store, product)];
+    greedy: each product joins the first cluster whose every member it matches (see _same)."""
+    clusters = []
+    for s, p in found:
         c = next((c for c in clusters if all(_same(p, q) for _, q in c)), None)
         if c is None:
             clusters.append([(s, p)])
         else:
             c.append((s, p))
-    same = {i: c for i, c in enumerate(clusters) if len({s for s, _ in c}) > 1}
-    rest = [x for i, c in enumerate(clusters) if i not in same for x in c]
+    shared = [len({s for s, _ in c}) > 1 for c in clusters]
+    return [c for c, m in zip(clusters, shared) if m], [x for c, m in zip(clusters, shared) if not m for x in c]
 
-    def per_unit(x):
-        u = unit_price(x[1])
-        return float(u.split()[0]) if u else float("inf")
 
-    lines = [f"Сравнение «{query}»" + (f" · тег «{tag}»" if tag else "") + f" · по {limit} первых из поиска каждого магазина"]
-    lines += notes
-    lines.append("Одинаковые товары в разных магазинах (фасовка, проценты и слова названия совпадают; сверяй названия), "
-                 "дешевле за кг/л — выше:" if same else "Одинаковых товаров не нашлось — сравнивай по цене за кг/л:")
-    lines.append("группа\t" + HEAD)
-    n = 0
-    for gi, (k, v) in enumerate(sorted(same.items(), key=lambda kv: min(per_unit(x) for x in kv[1])), 1):
-        for s, p in sorted(v, key=per_unit):
-            n += 1
-            lines.append(f"{gi}\t" + _row(n, s, p))
-    if rest:
-        lines.append("Остальное, дешевле за кг/л — выше:" if same else "")
-        for s, p in sorted(rest, key=lambda x: ("(≈ похожее)" in (x[1].get("name") or ""), per_unit(x))):   # exact matches first
-            n += 1
-            lines.append("—\t" + _row(n, s, p))
-    return "\n".join(x for x in lines if x is not None)
+def _table(same, rest):
+    """The comparison table: groups by their cheapest per kg/l, cheapest first inside each; then the rest,
+    exact matches before «(≈ похожее)»."""
+    groups = [(gi, s, p) for gi, c in enumerate(sorted(same, key=lambda c: min(_per_unit(p) for _, p in c)), 1)
+              for s, p in sorted(c, key=lambda x: _per_unit(x[1]))]
+    others = [("—", s, p) for s, p in sorted(rest, key=lambda x: ("(≈ похожее)" in (x[1].get("name") or ""), _per_unit(x[1])))]
+    rows = [f"{g}\t" + _row(n, s, p) for n, (g, s, p) in enumerate(groups + others, 1)]
+    middle = ["Остальное, дешевле за кг/л — выше:" if same else ""] if rest else []
+    head = ("Одинаковые товары в разных магазинах (фасовка, проценты и слова названия совпадают; сверяй названия), дешевле за кг/л — выше:"
+            if same else "Одинаковых товаров не нашлось — сравнивай по цене за кг/л:")
+    return [head, "группа\t" + HEAD] + rows[:len(groups)] + middle + rows[len(groups):]
+
+
+def compare(query, stores=None, tag=None, limit=8, strict=True):
+    """Search every store at once and put the results in one table: groups of the same product (see _same)
+    first, cheapest per kg/l inside a group."""
+    found = _each(_keys(stores), lambda s: _matches(s, query, tag, limit, strict))
+    same, rest = _groups([(s, p) for s, items in found if not isinstance(items, str) for p in items])
+    return "\n".join([f"Сравнение «{query}»" + _tag(tag) + f" · по {limit} первых из поиска каждого магазина"] + _notes(found) + _table(same, rest))
 
 
 def item(store, id_or_url, full=False):
