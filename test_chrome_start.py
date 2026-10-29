@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import cdp
 
@@ -50,6 +50,8 @@ class ChromeStartTests(unittest.TestCase):
             cdp.tab_for("example.test")
         run.assert_called_once()
         self.assertEqual(run.call_args.args[0], [str(Path(cdp.__file__).parent / "shop-chrome"), "start"])
+        # captured: stdout is the MCP stdio channel
+        self.assertEqual(run.call_args.kwargs, {"capture_output": True, "text": True, "timeout": 90})
 
     def test_browser_started_by_another_process_is_reused(self):
         with patch.object(cdp, "_http", return_value={"Browser": "Chrome/155"}), \
@@ -65,11 +67,13 @@ class ChromeStartTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0][1:], ["setup"])
 
     def test_failed_start_says_why_and_does_not_retry(self):
-        bad = subprocess.CompletedProcess([], 1, "", "Load failed: 5: Input/output error")
+        bad = subprocess.CompletedProcess([], 1, "x" * 400, "Load failed: 5: Input/output error")
         with patch.object(cdp, "_http", side_effect=DOWN), patch.object(cdp.subprocess, "run", return_value=bad) as run:
             with self.assertRaisesRegex(RuntimeError, "Input/output error"):
                 cdp._start_chrome()
         run.assert_called_once()
+        *_, cmd, code, tail = cdp.log.warning.call_args.args     # the end of the launcher's output goes to the log
+        self.assertEqual((cmd, code, tail), ("start", 1, ("x" * 400 + "Load failed: 5: Input/output error")[-300:]))
 
     def test_launcher_that_cannot_run_is_reported(self):
         with patch.object(cdp, "_http", side_effect=DOWN), \
@@ -84,6 +88,7 @@ class ChromeStartTests(unittest.TestCase):
                 cdp._start_chrome()
         run.assert_called_once()
         self.assertLessEqual(http.call_count, 32)
+        self.assertEqual(cdp.time.sleep.call_args_list, [call(1)] * 30)
 
     def test_no_chrome_app_is_reported_without_launching(self):
         with patch.object(cdp, "CHROME_APP", self.dir / "nope.app"), patch.object(cdp, "_http", side_effect=DOWN), \

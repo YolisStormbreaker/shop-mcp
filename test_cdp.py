@@ -243,11 +243,15 @@ class TabTests(unittest.TestCase):
         self.assertEqual(ws.expressions(), ["document.readyState", "!!(document.querySelector('.card'))"] * 2)
 
     def test_goto_keeps_loads_on_one_site_min_gap_apart(self):
-        cdp._last_nav["shop"] = 999.0                  # one second ago
-        tab, _ = self.tab(OK, value("complete"))
-        tab.goto("https://shop.test/", "shop")
-        self.assertEqual(self.clock.slept[0], cdp.MIN_GAP - 1)
-        self.assertEqual(cdp._last_nav["shop"], 1000.0 + cdp.MIN_GAP - 1)
+        for ago in (1.0, 3.5):
+            with self.subTest(ago):
+                self.clock.slept.clear()
+                cdp._last_nav["shop"] = self.clock.now - ago
+                tab, _ = self.tab(OK, value("complete"))
+                start = self.clock.now
+                tab.goto("https://shop.test/", "shop")
+                self.assertEqual(self.clock.slept[0], cdp.MIN_GAP - ago)
+                self.assertEqual(cdp._last_nav["shop"], start + cdp.MIN_GAP - ago)
 
     def test_goto_does_not_wait_after_another_site(self):
         cdp._last_nav["other"] = 999.0
