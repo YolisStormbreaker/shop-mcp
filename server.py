@@ -158,8 +158,8 @@ def logged(fn):
         except Exception:
             log.exception("%s failed in %.1f s", call, time.time() - t)
             raise
-        if Path(__file__).stat().st_mtime != _STARTED and isinstance(out, str):
-            out = STALE + out          # tools are registered once, at start: a newer server.py needs a new process
+        if Path(__file__).stat().st_mtime != _STARTED:   # tools are registered once, at start: a newer server.py needs a new process
+            out = STALE + out if isinstance(out, str) else [STALE + out[0], *out[1:]]   # shop_images: its text comes first
         text = out if isinstance(out, str) else "\n".join(x for x in out if isinstance(x, str))  # shop_images: text + pictures
         warn = any(w in text for w in ("⚠️", "блокировку", "проверка Авито"))
         log.log(30 if warn else 20, "%s ok in %.1f s, %d lines: %s",

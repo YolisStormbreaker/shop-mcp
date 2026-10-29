@@ -102,11 +102,15 @@ class LoggedTests(unittest.TestCase):
     def test_pictures_answer_is_logged_by_its_text_and_returned_as_is(self):
         picture = object()
         answer = ["картинок: 1 из 1\n/cache/images/a.jpg\t10x10\thttps://a.test/a.jpg", picture]
-        with patch.object(server, "_STARTED", 0):      # the stale note is only added to text answers
-            out = self.tool(answer)()
+        out = self.tool(answer)()
         self.assertIs(out, answer)
-        self.assertEqual(out, ["картинок: 1 из 1\n/cache/images/a.jpg\t10x10\thttps://a.test/a.jpg", picture])
         self.assertEqual(self.log.log.call_args.args[-2:], (2, "картинок: 1 из 1"))
+
+    def test_stale_server_says_so_before_pictures_too(self):
+        picture = object()
+        with patch.object(server, "_STARTED", 0):
+            out = self.tool(["картинок: 1 из 1", picture])()
+        self.assertEqual(out, [server.STALE + "картинок: 1 из 1", picture])
 
     def test_tool_keeps_its_name_signature_and_description(self):
         # FastMCP builds the tool's schema and description from these
