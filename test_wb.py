@@ -430,10 +430,9 @@ class AddToCartTests(CartTests):
                 self.assertEqual(got, "у товара нет размеров, которые можно заказать: в корзину не положить")
                 self.assertEqual(self.sent(), opened)
 
-    def test_quantity_below_one_is_sent(self):
-        self.add(detail(101, P1), [view(), {"sync": {"state": 0}}, view(L1)], "101", quantity=0)
-        self.assertEqual(self.sent()[2], sync('[{"chrt_id": 555, "quantity": 0, "cod_1s": 101, "client_ts": 1700000000, '
-                                              '"op_type": 1, "target_url": "", "meta_json": null, "analytics_json": null}]'))
+    def test_quantity_below_one(self):
+        self.assertEqual([wb.add_to_cart("101", quantity=q) for q in (0, -2, "0")], ["quantity: целое число от 1"] * 3)
+        self.tab_for.assert_not_called()
 
 
 class RemoveFromCartTests(CartTests):

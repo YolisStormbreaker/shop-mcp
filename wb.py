@@ -351,6 +351,8 @@ def add_to_cart(id_or_url, size=None, quantity=1):
     nm = _nm(id_or_url)
     if not nm:
         return "нужен артикул WB или ссылка на товар"
+    if int(quantity) < 1:
+        return "quantity: целое число от 1"
     tab = tab_for("wildberries.ru")
     try:
         p = _product(capture(tab, "wb", f"https://www.wildberries.ru/catalog/{nm}/detail.aspx",
