@@ -172,6 +172,24 @@ def site_tab(domain: str, home: str, site: str, ready: str | None = None) -> Tab
     return tab
 
 
+def page_json(tab: Tab, method: str, path: str, body, home: str, site: str):
+    """JSON from fetch() inside the page, with its cookies, or None.  A non-JSON answer is usually the anti-bot's
+    403 page: a real load of the home page renews its cookies, then one more try."""
+    opts = {"method": method, "credentials": "include"}
+    if body is not None:
+        opts["headers"] = {"Content-Type": "application/json"}
+        opts["body"] = json.dumps(body)
+    for retried in (False, True):
+        r = tab.js(f"fetch({json.dumps(path)}, {json.dumps(opts)}).then(async r => ({{s: r.status, b: await r.text()}}))")
+        try:
+            return json.loads(r["b"])
+        except ValueError:
+            log.warning("%s %s %s: %s non-JSON%s", site, method, path, r["s"], " again after reload" if retried else "")
+        if not retried:
+            tab.goto(home, site, wait_js="document.readyState === 'complete'")
+    return None
+
+
 CHROME_APP = Path("/Applications/Google Chrome.app")
 AGENT = Path.home() / "Library/LaunchAgents/local.shop-chrome.plist"
 

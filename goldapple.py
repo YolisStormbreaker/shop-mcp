@@ -4,12 +4,11 @@ The site posts the user's city and delivery zones with every catalog call, so it
 the request and we take the JSON it got (capture.py). Prices and stock are for the user's city.
 """
 import html
-import json
 import re
 import urllib.parse
 
 from capture import capture
-from cdp import site_tab, tab_for
+from cdp import page_json, site_tab, tab_for
 from shoplog import log
 
 SORTS = ("relevance", "priceAsc", "priceDesc", "discountAmount", "byRating", "byNewest")  # the site's own ids
@@ -173,22 +172,8 @@ def _ga_tab():
     return site_tab("goldapple.ru", "https://goldapple.ru/", "goldapple")
 
 
-def _api(tab, method, path, body=None, retried=False):
-    opts = {"method": method, "credentials": "include"}
-    if body is not None:
-        opts["headers"] = {"Content-Type": "application/json"}
-        opts["body"] = json.dumps(body)
-    r = tab.js(f"fetch({json.dumps(path)}, {json.dumps(opts)}).then(async r => ({{s: r.status, b: await r.text()}}))")
-    try:
-        return json.loads(r["b"])
-    except ValueError:
-        pass
-    log.warning("goldapple %s %s: %s non-JSON%s", method, path, r["s"], " again after reload" if retried else "")
-    if retried:
-        return None
-    # As on Ozon: after a while fetch() gets 403 from the anti-bot; a real page load renews its cookies.
-    tab.goto("https://goldapple.ru/", "goldapple", wait_js="document.readyState === 'complete'")
-    return _api(tab, method, path, body, retried=True)
+def _api(tab, method, path, body=None):
+    return page_json(tab, method, path, body, "https://goldapple.ru/", "goldapple")
 
 
 def _items(d):

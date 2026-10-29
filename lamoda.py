@@ -7,7 +7,7 @@ import json
 import re
 import urllib.parse
 
-from cdp import site_tab, tab_for
+from cdp import page_json, site_tab, tab_for
 from shoplog import dump, log
 
 SORTS = ("default", "new", "price_asc", "price_desc", "new_sale", "discount")
@@ -176,21 +176,8 @@ def _lm_tab():
     return site_tab("lamoda.ru", "https://www.lamoda.ru/", "lamoda")
 
 
-def _api(tab, method, path, body=None, retried=False):
-    opts = {"method": method, "credentials": "include"}
-    if body is not None:
-        opts["headers"] = {"Content-Type": "application/json"}
-        opts["body"] = json.dumps(body)
-    r = tab.js(f"fetch({json.dumps(path)}, {json.dumps(opts)}).then(async r => ({{s: r.status, b: await r.text()}}))")
-    try:
-        return json.loads(r["b"])
-    except ValueError:
-        pass
-    log.warning("lamoda %s %s: %s non-JSON%s", method, path, r["s"], " again after reload" if retried else "")
-    if retried:
-        return None
-    tab.goto("https://www.lamoda.ru/", "lamoda", wait_js="document.readyState === 'complete'")  # renews anti-bot cookies
-    return _api(tab, method, path, body, retried=True)
+def _api(tab, method, path, body=None):
+    return page_json(tab, method, path, body, "https://www.lamoda.ru/", "lamoda")
 
 
 def _geo(tab):
