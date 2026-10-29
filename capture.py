@@ -85,10 +85,18 @@ def _on(ws, m, patterns, rewrite, pending, out):
     elif m.get("method") == "Network.loadingFinished" and p.get("requestId") in pending:
         pending[_send(ws, "Network.getResponseBody", requestId=p["requestId"])] = pending[p["requestId"]]
     elif m.get("id") in pending:
-        try:
-            out[pending[m["id"]]] = json.loads(m["result"]["body"])
-        except (KeyError, ValueError):
-            pass
+        _read(m, pending, out)
+
+
+def _read(m, pending, out):
+    """Our getResponseBody's answer into out.  A body that cannot be read (the page had moved on to another one,
+    or it is not JSON) frees its name, so the next response that matches can still bring it."""
+    name = pending.pop(m["id"])
+    try:
+        out[name] = json.loads(m["result"]["body"])
+    except (KeyError, ValueError):
+        for k in [k for k, v in pending.items() if v == name]:
+            del pending[k]
 
 
 def _matches(url, parts):

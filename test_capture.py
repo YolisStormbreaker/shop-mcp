@@ -151,6 +151,13 @@ class CaptureTests(unittest.TestCase):
                          finished("r2"), body("2")], {"x": ["/x"], "y": ["/y"]}, timeout=10)
         self.assertEqual(got, {"x": 1, "y": 2})
 
+    def test_a_body_that_cannot_be_read_frees_its_name_for_the_next_match(self):
+        # Золотое яблоко: the page goes on to a category before its search answer is read; the category's answer has the data
+        got, _, _ = run([response("r1", "https://api.test/search"), finished("r1"), body(error={"message": "No resource"}),
+                         response("r2", "https://api.test/cards"), finished("r2"), body('{"cards": 1}')],
+                        {"s": ["re:/(search|cards)"]}, timeout=10)
+        self.assertEqual(got, {"s": {"cards": 1}})
+
     def test_body_that_never_comes_leaves_the_name_missing(self):
         got, sent, _ = run([response("r1", "https://api.test/x"), finished("r1")], {"x": ["/x"]}, rewrite=("*", str))
         self.assertEqual(got, {})
