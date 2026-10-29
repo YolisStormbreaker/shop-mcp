@@ -290,27 +290,44 @@ def cart():
         c = _cart(tab)
     finally:
         tab.close()
-    if not c["basket"]:
+    return _cart_text(c["basket"])
+
+
+def _cart_text(basket):
+    if not basket:
         return "корзина ВкусВилла пуста"
     return ("корзина ВкусВилла\nid\tкол-во\tцена ₽\tсумма ₽\tназвание\n"
             + "\n".join(f"{i}\t{x['q']:g} {x['unit'] or ''}\t{x['price']}\t{x['total']}\t{x['name']}{'' if x['can'] in (True, 'Y', 'true') else ' — нельзя купить'}"
-                        for i, x in c["basket"].items()))
+                        for i, x in basket.items()))
 
 
 def _q(tab, pid):
     return (_cart(tab)["basket"].get(str(pid)) or {}).get("q") or 0
 
 
-def _click(tab, sel, pid, before, js=None):
-    """Click (by selector, or by a JS expression giving the element) and wait until the cart shows a new quantity."""
-    el = js or f"document.querySelector({json.dumps(sel)})"
+def _el(sel):
+    return f"document.querySelector({json.dumps(sel)})"
+
+
+def _click(tab, el, pid, before):
+    """Click the element the JS expression el gives and wait (up to 7 s) until the cart shows a new quantity; False when
+    there is no such element."""
     if not tab.js(f"(() => {{ const b = {el}; if (!b) return false; b.click(); return true }})()"):
         return False
     for _ in range(14):
         time.sleep(0.5)
         if _q(tab, pid) != before:
-            return True
+            break
     return True
+
+
+def _add_buttons(pid, start, quantity):
+    """The elements to click for quantity (1..30): the product's add button when it is not in the cart yet, its «+» for
+    the rest."""
+    add = f".js-delivery__basket--add[data-id='{pid}'], .js-delivery__basket--add[data-xmlid='{pid}']"
+    # «+» has no data of its own: it sits next to the product's add button, in the same CartButton block
+    plus = f"({_el(add)}?.closest('.CartButton, [class*=CartButton]:not([class*=CartButton__])') || document).querySelector('.Q_Up')"
+    return ([plus] if start else [_el(add)]) + [plus] * (max(1, min(int(quantity), 30)) - 1)
 
 
 def add_to_cart(id_or_url, quantity=1):
@@ -321,12 +338,8 @@ def add_to_cart(id_or_url, quantity=1):
         time.sleep(1.5)
         name = tab.js("document.querySelector('h1')?.innerText || ''")
         start = _q(tab, pid)
-        add = f".js-delivery__basket--add[data-id='{pid}'], .js-delivery__basket--add[data-xmlid='{pid}']"
-        # «+» has no data of its own: it sits next to the product's add button, in the same CartButton block
-        plus = f"(document.querySelector({json.dumps(add)})?.closest('.CartButton, [class*=CartButton]:not([class*=CartButton__])') || document).querySelector('.Q_Up')"
-        for i in range(max(1, min(int(quantity), 30))):
-            first = i == 0 and not start
-            if not _click(tab, add, pid, _q(tab, pid), None if first else plus):
+        for el in _add_buttons(pid, start, quantity):
+            if not _click(tab, el, pid, _q(tab, pid)):
                 break
         n = _q(tab, pid)
     finally:
@@ -342,10 +355,10 @@ def remove_from_cart(id_or_url):
     try:
         tab.goto(f"{SITE}/cart/", "vkusvill", wait_js="document.readyState === 'complete'")
         time.sleep(1.5)
-        row = f".js-delivery__basket--row[data-product-id='{pid}']"
+        minus = _el(f".js-delivery__basket--row[data-product-id='{pid}'] .Q_Down")
         for _ in range(40):
             q = _q(tab, pid)
-            if not q or not _click(tab, f"{row} .Q_Down", pid, q):
+            if not q or not _click(tab, minus, pid, q):
                 break
         time.sleep(5)                    # the site removes a line 4 s after its last «−» (undo window)
         left = _q(tab, pid)
@@ -378,10 +391,7 @@ def favorite(id_or_url, remove=False):
     pid = _id(id_or_url)
     tab = _tab()
     try:
-        r = tab.js(f"""fetch('/ajax/favorites/add-remove.php', {{method: 'POST', credentials: 'include',
-            headers: {{'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest'}},
-            body: new URLSearchParams({{id: {json.dumps(pid)}, xmlid: {json.dumps(pid)}, command: {json.dumps('remove' if remove else 'add')}, notNeedHtml: 'false'}})}})
-            .then(async r => ({{s: r.status, b: (await r.text()).slice(0, 300)}}))""")
+        r = tab.js(_favorite_js(pid, remove))
         ids = [x["id"] for x in tab.js(FAV_JS, timeout=40) or []]
     finally:
         tab.close()
@@ -389,3 +399,10 @@ def favorite(id_or_url, remove=False):
         log.warning("vkusvill favorite %s %s: %s", pid, remove, r)
         return "ВкусВилл не изменил избранное"
     return f"{'убрано из избранного' if remove else 'в избранном'} ВкусВилла: {pid}"
+
+
+def _favorite_js(pid, remove):
+    return f"""fetch('/ajax/favorites/add-remove.php', {{method: 'POST', credentials: 'include',
+            headers: {{'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest'}},
+            body: new URLSearchParams({{id: {json.dumps(pid)}, xmlid: {json.dumps(pid)}, command: {json.dumps('remove' if remove else 'add')}, notNeedHtml: 'false'}})}})
+            .then(async r => ({{s: r.status, b: (await r.text()).slice(0, 300)}}))"""
