@@ -74,7 +74,7 @@ class SearchTests(unittest.TestCase):
 
     def test_nothing_found(self):
         with stores(ka5=Store(found())):
-            self.assertEqual(grocery.search("5ka", ""), "Пятёрочка · «» · страница 1 · \n" + HEAD)
+            self.assertEqual(grocery.search("5ka", ""), "Пятёрочка · «» · страница 1 · \n" + HEAD + "\n(пусто)")
 
     def test_site_message_as_is(self):
         with stores(ka5=Store(BOT)):

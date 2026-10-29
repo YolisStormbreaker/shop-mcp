@@ -108,7 +108,7 @@ def search(store, query, tag=None, sort="popular", page=1, limit=30):
     if r.get("facets"):
         head.append("теги и фильтры сайта (передавай в tag): " + "; ".join(r["facets"][:40]))
     head.append(HEAD)
-    return "\n".join(head + [_row(i + 1, store, p) for i, p in enumerate(items)] or ["(пусто)"])
+    return "\n".join(head + ([_row(i + 1, store, p) for i, p in enumerate(items)] or ["(пусто)"]))
 
 
 STOP = {"без", "змж", "бзмж", "для", "или", "шт", "мл", "гр", "упаковка", "пэт", "россия", "из", "лавки"}
