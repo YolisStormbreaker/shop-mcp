@@ -94,10 +94,9 @@ def item(url, full=False):
     m = re.search(r"goldapple\.ru/(\d+)-", url)  # without the name part the site shows «страница не найдена»
     if not m:
         return "нужна ссылка на товар из goldapple_search: https://goldapple.ru/<артикул>-<название>"
-    sku = m.group(1)
     tab = tab_for("goldapple.ru")
     try:
-        got = capture(tab, "goldapple", url, {"c": ["/front/api/catalog/product-card/base/v3", sku],
+        got = capture(tab, "goldapple", url, {"c": ["/front/api/catalog/product-card/base/v3", m.group(1)],
                                               "deliv": ["/web/api/v1/delivery/calculate/item"]})
     finally:
         tab.close()
@@ -105,33 +104,56 @@ def item(url, full=False):
     if d is None:
         log.warning("goldapple item %s: no product-card response", url)
         return BLOCKED
-    x = d.get("data") or d
-    attrs = x.get("attributes") or {}
-    unit = (attrs.get("units") or {}).get("unit", "")
-    colors = {o["value"]: o["text"] for o in (attrs.get("colors") or {}).get("options") or []}
-    variants, photos = [], []
-    for v in x.get("variants") or []:
-        av = v.get("attributesValue") or {}
-        label = " ".join(s for s in (f"{av['units']} {unit}".strip() if av.get("units") else "", colors.get(av.get("colors"), "")) if s)
-        price = v.get("price") or {}
-        actual, old = _rub(price, "actual"), _rub(price, "old")
-        pct = (price.get("viewOptions") or {}).get("discountPercent")
-        variants.append(f"{label or v.get('itemId')} — {actual} ₽" + (f" (было {old}, −{pct}%)" if old and old != actual else "")
-                        + ("" if v.get("inStock") else ", нет в наличии") + f", артикул {v.get('itemId')}")
-        if str(v.get("itemId")) == sku or not photos:
-            photos = [_img(i) for i in v.get("imageUrls") or []]
+    return _card(d.get("data") or d, m.group(1), url, got.get("deliv"), full)
+
+
+def _card(x, sku, url, deliv, full):
     lines = [f"{x.get('brand', '')} {x.get('name', '')} ({x.get('productType', '')})", url.split("?")[0],
-             f"артикул: {x.get('itemId')}", "варианты: " + "; ".join(variants)]
-    deliv = _delivery(got.get("deliv"))
+             f"артикул: {x.get('itemId')}", "варианты: " + "; ".join(_variants(x))]
+    deliv = _delivery(deliv)
     if deliv:
         lines.append("доставка: " + "; ".join(deliv))
+    photos = _photos(x.get("variants") or [], sku)
     if photos:
         lines.append("фото (shop_images): " + " ".join(photos[:10]))
     lines.append("отзывы: goldapple_reviews")
-    text = "\n".join(f"{s.get('text')}: {_text(s.get('content'))}" for s in x.get("productDescription") or []
-                     if s.get("type") != "Brand" and s.get("content"))
+    text = _description(x)
     lines.append("\n" + (text if full else text[:2500]))
     return "\n".join(lines)
+
+
+def _variants(x):
+    attrs = x.get("attributes") or {}
+    unit = (attrs.get("units") or {}).get("unit", "")
+    colors = {o["value"]: o["text"] for o in (attrs.get("colors") or {}).get("options") or []}
+    return [_variant(v, unit, colors) for v in x.get("variants") or []]
+
+
+def _variant(v, unit, colors):
+    price = v.get("price") or {}
+    actual, old = _rub(price, "actual"), _rub(price, "old")
+    pct = (price.get("viewOptions") or {}).get("discountPercent")
+    return (f"{_label(v, unit, colors) or v.get('itemId')} — {actual} ₽" + (f" (было {old}, −{pct}%)" if old and old != actual else "")
+            + ("" if v.get("inStock") else ", нет в наличии") + f", артикул {v.get('itemId')}")
+
+
+def _label(v, unit, colors):
+    """volume and color, e.g. '7.5 г 0.5, Porcelain'"""
+    av = v.get("attributesValue") or {}
+    return " ".join(s for s in (f"{av['units']} {unit}".strip() if av.get("units") else "", colors.get(av.get("colors"), "")) if s)
+
+
+def _photos(variants, sku):
+    photos = []
+    for v in variants:
+        if str(v.get("itemId")) == sku or not photos:
+            photos = [_img(i) for i in v.get("imageUrls") or []]
+    return photos
+
+
+def _description(x):
+    return "\n".join(f"{s.get('text')}: {_text(s.get('content'))}" for s in x.get("productDescription") or []
+                     if s.get("type") != "Brand" and s.get("content"))
 
 
 REVIEW_SORTS = {"useful": "ByUsefulness", "new": "ByNewest", "high": "ByHighestStars", "low": "ByLowestStars"}

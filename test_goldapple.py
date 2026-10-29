@@ -96,5 +96,69 @@ class GoldAppleSearchTests(unittest.TestCase):
         tab.close.assert_called_once()
 
 
+def picture(path, formats=("webp", "jpg")):
+    return {"url": f"https://cdn-01.goldapple.ru/p/p/{path}/${{screen}}.${{format}}", "format": list(formats), "screen": ["fullhd", "mobile"]}
+
+
+APPLY = "Наносить спонжем. " * 200
+CARD = {"data": {
+    "itemId": "19000163536", "brand": "Brand A", "name": "Кушон", "productType": "тональный кушон",
+    "attributes": {"units": {"unit": "г"}, "colors": {"options": [{"value": "c1", "text": "0.5, Porcelain"}, {"value": "c2", "text": "02, Beige"}]}},
+    "variants": [
+        {"itemId": "19000163535", "attributesValue": {"units": "7.5", "colors": "c2"}, "inStock": True, "imageUrls": [picture("35")],
+         "price": {"actual": {"amount": 2150}, "old": {"amount": 3070}, "viewOptions": {"discountPercent": 30}}},
+        {"itemId": 19000163536, "attributesValue": {"units": "7.5", "colors": "c1"}, "inStock": False,
+         "imageUrls": [picture(f"36/{i}", ["webp"]) for i in range(12)], "price": {"actual": {"amount": 2150}, "old": {"amount": 2150}}},
+        {"itemId": "19000163537", "attributesValue": {}, "price": None, "inStock": True, "imageUrls": [picture("37")]}],
+    "productDescription": [{"type": "Description", "text": "Описание", "content": "<p>Лёгкий&nbsp;кушон</p>"},
+                           {"type": "Brand", "text": "О бренде", "content": "О бренде"}, {"type": "Composition", "text": "Состав", "content": ""},
+                           {"type": "Application", "text": "Применение", "content": APPLY}]}}
+CARD_URL = "https://goldapple.ru/19000163536-cushion"
+
+
+class GoldAppleItemTests(unittest.TestCase):
+    def item(self, answer, url=CARD_URL + "?utm_source=x", full=False):
+        tab = MagicMock()
+        with patch.object(goldapple, "tab_for", return_value=tab), patch.object(goldapple, "capture", return_value=answer) as capture, \
+                patch.object(goldapple, "log") as log:
+            return goldapple.item(url, full), capture, tab, log
+
+    def test_full_card(self):
+        got, capture, tab, _ = self.item({"c": CARD, "deliv": DELIVERY})
+        description = "Описание: Лёгкий кушон\nПрименение: " + APPLY.strip()
+        self.assertEqual(got, "Brand A Кушон (тональный кушон)\n" + CARD_URL + "\nартикул: 19000163536\n"
+                              "варианты: 7.5 г 02, Beige — 2150 ₽ (было 3070, −30%), артикул 19000163535; "
+                              "7.5 г 0.5, Porcelain — 2150 ₽, нет в наличии, артикул 19000163536; 19000163537 — None ₽, артикул 19000163537\n"
+                              "доставка: экспресс-доставка — сегодня за 3 часа, 99 ₽; "
+                              "самовывоз из магазина — 2026-10-30, бесплатно (при заказе от 1000 ₽ — бесплатно); курьер — \n"
+                              "фото (shop_images): " + " ".join(f"https://cdn-01.goldapple.ru/p/p/36/{i}/fullhd.webp" for i in range(10)) + "\n"
+                              "отзывы: goldapple_reviews\n\n" + description[:2500])
+        self.assertEqual(capture.call_args.args, (tab, "goldapple", CARD_URL + "?utm_source=x",
+                                                  {"c": ["/front/api/catalog/product-card/base/v3", "19000163536"],
+                                                   "deliv": ["/web/api/v1/delivery/calculate/item"]}))
+        tab.close.assert_called_once()
+
+    def test_full_description(self):
+        self.assertTrue(self.item({"c": CARD}, full=True)[0].endswith("\n\nОписание: Лёгкий кушон\nПрименение: " + APPLY.strip()))
+
+    def test_bare_card_by_relative_link(self):
+        got, capture, _, _ = self.item({"c": {"itemId": "1"}}, "/1-x")
+        self.assertEqual(capture.call_args.args[2], "https://goldapple.ru/1-x")
+        self.assertEqual(got, "  ()\nhttps://goldapple.ru/1-x\nартикул: 1\nварианты: \nотзывы: goldapple_reviews\n\n")
+
+    def test_this_variant_without_photos_gives_way_to_the_next_with_photos(self):
+        card = {"itemId": "2", "variants": [{"itemId": "1", "imageUrls": [picture("1")]}, {"itemId": "2"}, {"itemId": "3", "imageUrls": [picture("3")]}]}
+        self.assertIn("фото (shop_images): https://cdn-01.goldapple.ru/p/p/3/fullhd.jpg\n", self.item({"c": card}, "https://goldapple.ru/2-x")[0])
+
+    def test_link_without_the_name_part(self):
+        self.assertEqual(goldapple.item("19000163536"), "нужна ссылка на товар из goldapple_search: https://goldapple.ru/<артикул>-<название>")
+
+    def test_blocked(self):
+        got, _, tab, log = self.item({})
+        self.assertEqual(got, goldapple.BLOCKED)
+        self.assertEqual(log.warning.call_args.args, ("goldapple item %s: no product-card response", CARD_URL + "?utm_source=x"))
+        tab.close.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
