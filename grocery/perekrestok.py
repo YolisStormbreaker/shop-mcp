@@ -251,7 +251,9 @@ def _extra(p, delivery, info):
 def _weighed(md, pt):
     if md.get("unitName") != "кг" or not md.get("quantum"):
         return ""
-    return f"весовой товар: цена за кг, шаг продажи {md['quantum'] / 1000:g} кг (≈ {round(_rub(pt.get('price')) * md['quantum'] / 1000)} ₽ за шаг)"
+    price = _rub(pt.get("price"))
+    return (f"весовой товар: цена за кг, шаг продажи {md['quantum'] / 1000:g} кг"
+            + (f" (≈ {round(price * md['quantum'] / 1000)} ₽ за шаг)" if price is not None else ""))
 
 
 def _delivery(delivery):

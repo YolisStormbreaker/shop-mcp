@@ -79,6 +79,10 @@ class ProductTests(unittest.TestCase):
             "composition": "", "nutrition": {}, "composition_extra": "",
             "extra": ["весовой товар: цена за кг, шаг продажи 0.5 кг (≈ 250 ₽ за шаг)"]})
 
+    def test_weighed_card_without_a_price(self):
+        got, _ = run(pk.product, {"/catalog/product/plu42": {**WEIGHED, "priceTag": {}}}, "42")
+        self.assertEqual((got["price"], got["extra"]), (None, ["весовой товар: цена за кг, шаг продажи 0.5 кг"]))
+
     def test_labels_without_text(self):
         card = {"masterData": {"plu": 7}, "priceTag": {"labels": [{}]}, "features": [{"title": "Состав", "items": [{"key": "sostav"}]}]}
         got, _ = run(pk.product, {"/catalog/product/plu7": card, "/delivery/switcher": {}}, "plu7")
