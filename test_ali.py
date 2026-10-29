@@ -1,4 +1,4 @@
-"""AliExpress read paths: the site's API JSON and the product page's text -> the text the tools return.
+"""AliExpress: the site's API JSON and the pages' text -> the text the tools return, and what the cart tools do.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_ali"""
 import datetime
 import json
@@ -351,6 +351,59 @@ class ReviewsTests(unittest.TestCase):
         with patch.object(ali, "_tab") as tab:
             self.assertEqual(ali.reviews(ITEM, sort="date"), "sort: одно из useful, new, high, low")
         tab.assert_not_called()
+
+
+def cart_row(cart_id, link, checked, *lines):
+    """One cart line as CART_ROWS_JS reads it from the page."""
+    return {"cart_id": cart_id, "link": link, "checked": checked, "lines": list(lines)}
+
+
+CART_TITLE = "PD 60 Вт USB C кабель " + "длинное название " * 6
+ROWS = [cart_row("2001", f"https://aliexpress.ru/item/{ITEM}.html?sku_id=12000035460442808", True, CART_TITLE, "Цвет: черный",
+                 "88 ₽", "180 ₽", "Бесплатная доставка", "Доставка 9–12 ноября", "12"),
+        cart_row("2002", "https://aliexpress.ru/item/1005_1005008606048009.html", False, "Toocki Кабель", "Нет в наличии"),
+        cart_row("2003", "", False)]
+CART_HEAD = "корзина AliExpress (✓ = выбран к оформлению)\ncart_id\t✓\tid товара\tшт\tцена\tназвание\tдоставка"
+ROW_LINES = [f"2001\t✓\t{ITEM}\t12\t88 ₽\t{CART_TITLE[:90]}\tДоставка 9–12 ноября",
+             "2002\t\t1005008606048009\t\t\tToocki Кабель\t",
+             "2003\t\t\t\t\t\t"]
+CART_BODY = "Корзина\n  \nВыбрать всё\nТовары, 2 шт.\n1 234 ₽\nИтого\n1 134 ₽\n  К оформлению \nВам может понравиться"
+CART_URL = ("https://aliexpress.ru/cart", "ali")
+CART_READY = {"wait_js": "document.body.innerText.includes('Корзина')"}
+
+
+def cart_tab(*rows, body=CART_BODY):
+    """The cart page: CART_ROWS_JS answers with the next list of rows (one per page load), the page text with body."""
+    loads = iter(rows)
+    tab = MagicMock()
+    tab.js.side_effect = lambda expr, **_: next(loads) if expr == ali.CART_ROWS_JS else {"document.body.innerText": body}[expr]
+    return tab
+
+
+class CartTests(unittest.TestCase):
+    def cart(self, tab):
+        with patch.object(ali, "_tab", return_value=tab), patch.object(ali.time, "sleep") as sleep:
+            out = ali.cart()
+        tab.goto.assert_called_once_with(*CART_URL, **CART_READY)
+        sleep.assert_called_once_with(1.5)
+        tab.close.assert_called_once()
+        return out
+
+    def test_lines_and_the_total_to_check_out(self):
+        self.assertEqual(self.cart(cart_tab(ROWS)), "\n".join([CART_HEAD, *ROW_LINES,
+                                                                "итого к оформлению: Товары, 2 шт. · 1 234 ₽ · Итого · 1 134 ₽"]))
+
+    def test_total_near_the_top_of_the_page(self):
+        out = self.cart(cart_tab(ROWS[:1], body="Итого\n88 ₽\nК оформлению"))
+        self.assertEqual(out.splitlines()[-1], "итого к оформлению: Итого · 88 ₽")
+
+    def test_no_total_on_the_page(self):
+        self.assertEqual(self.cart(cart_tab(ROWS, body="Корзина\nИтого\n0 ₽")), "\n".join([CART_HEAD, *ROW_LINES]))
+
+    def test_empty_cart(self):
+        tab = cart_tab([])
+        self.assertEqual(self.cart(tab), "корзина AliExpress пуста")
+        self.assertEqual([c.args[0] for c in tab.js.call_args_list], [ali.CART_ROWS_JS])
 
 
 if __name__ == "__main__":
