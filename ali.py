@@ -295,7 +295,7 @@ def reviews(id_or_url, sort="useful", with_media=False, page=1, query=None):
             if r.get("error"):
                 break
             batch = (r.get("data") or {}).get("reviews") or []
-            scanned, pages = scanned + len(batch), pages + 1
+            scanned, pages = scanned + len(batch), pages + bool(batch)   # an empty last page is not a page read
             rows += _review_rows(batch, alts)
             if not query or len(rows) >= 30 or len(batch) < 10 or pages >= QUERY_PAGES:
                 break
@@ -305,7 +305,8 @@ def reviews(id_or_url, sort="useful", with_media=False, page=1, query=None):
     if r.get("error") and not pages:
         return f"AliExpress не отдал отзывы: {r['error'].get('message')}"
     total = int(data.get("reviews") or 0)
-    where = (f"страницы {page}–{page + pages - 1}: «{query}» нашлось в {len(rows)} из {scanned}"
+    where = ((f"страницы {page}–{page + pages - 1}" if pages > 1 else f"страница {page}")
+             + f": «{query}» нашлось в {len(rows)} из {scanned}"
              + (f"; дальше сайт ответил «{r['error'].get('message')}»" if r.get("error") else "")
              if query else f"страница {page} из {max(1, -(-total // 10))} (по 10; с фильтром страниц меньше)")
     head = (f"AliExpress · товар {item_id}: рейтинг {(data.get('rating') or {}).get('middle') or '—'}, отзывов {total}\n"

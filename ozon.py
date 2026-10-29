@@ -255,7 +255,7 @@ def reviews(sku_or_url, sort="useful", with_media=False, page=1, this_variant=Fa
             lr = _list_reviews(pg)
             products.update(lr.get("products") or {})
             batch = lr.get("reviews") or []
-            scanned, pages = scanned + len(batch), pages + 1
+            scanned, pages = scanned + len(batch), pages + bool(batch)   # an empty last page is not a page read
             rows += _rows(batch, products, with_media, alts)
             if not query or len(rows) >= 30 or not batch \
                     or pages >= QUERY_PAGES or not pg.get("nextPage"):
@@ -266,7 +266,8 @@ def reviews(sku_or_url, sort="useful", with_media=False, page=1, this_variant=Fa
     score = next(iter(_widgets(first, "webReviewProductScore-")), {})
     total = (_list_reviews(first).get("paging") or {}).get("total") or score.get("reviewsCount") or 0
     stars = " ".join(f"{x.get('title')}: {x.get('value')}" for x in score.get("score") or [])
-    where = (f"страницы {page}–{page + pages - 1}: «{query}» нашлось в {len(rows)} из {scanned}"
+    where = ((f"страницы {page}–{page + pages - 1}" if pages > 1 else f"страница {page}")
+             + f": «{query}» нашлось в {len(rows)} из {scanned}"
              if query else f"страница {page} из {max(1, -(-total // 30))} (по 30)")
     head = (f"Ozon · sku {sku}: рейтинг {score.get('totalScore', '?')}, отзывов {score.get('reviewsCount', '?')} · {stars}\n"
             f"{'только этот вариант' if this_variant else 'все варианты товара'}: {total} отзывов, {where}, "
