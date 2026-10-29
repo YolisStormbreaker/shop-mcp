@@ -250,7 +250,10 @@ def _photos(images):
     return [i["cropUrlTemplate"].replace("%s", "800x800-fit") for i in images or [] if i.get("cropUrlTemplate")]
 
 
-SORTS = {"useful": {}, "new": {}, "high": {"ratingFrom": 500, "ratingTo": 500}, "low": {"ratingFrom": 100, "ratingTo": 200}}
+# sort: (the site's star filter, the order the page shows)
+SORTS = {"useful": ({}, "новые сверху (другой сортировки у сайта нет)"), "new": ({}, "новые сверху"),
+         "high": ({"ratingFrom": 500, "ratingTo": 500}, "только 5★"), "low": ({"ratingFrom": 100, "ratingTo": 200}, "только 1–2★")}
+STARS = ((5, "five"), (4, "four"), (3, "three"), (2, "two"), (1, "one"))
 
 
 def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=40):
@@ -258,32 +261,37 @@ def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=40):
     if sort not in SORTS:
         return f"sort: одно из {', '.join(SORTS)}"
     plu = _plu(id_or_url)
-    q = urllib.parse.urlencode({"page": page, "perPage": limit, **SORTS[sort]})
+    q = urllib.parse.urlencode({"page": page, "perPage": limit, **SORTS[sort][0]})
     tab = _tab()
     try:
         cnt = _call(tab, "get", f"/catalog/product/plu{plu}/review/count") or {}
         d = _call(tab, "get", f"/catalog/product/plu{plu}/review?{q}") or {}
     finally:
         tab.close()
-    rows = []
-    for x in d.get("items") or []:
-        photos = [i["cropUrlTemplate"].replace("%s", "800x800-fit") for i in x.get("approvedImages") or [] if i.get("cropUrlTemplate")]
-        if with_media and not photos:
-            continue
-        ts = x.get("createdAt")
-        if isinstance(ts, (int, float)) and ts > 1e11:   # milliseconds
-            ts /= 1000
-        date = time.strftime("%Y-%m-%d", time.localtime(ts)) if isinstance(ts, (int, float)) else str(ts or "")[:10]
-        rows.append(f"{date}\t{(x.get('rating') or 0) / 100:g}\t{x.get('username') or ''}\t"
-                    f"{' '.join((x.get('comment') or '').split())}\t{' '.join(photos)}")
-    stars = " ".join(f"{i}★ {cnt.get(w, 0)}" for i, w in ((5, "five"), (4, "four"), (3, "three"), (2, "two"), (1, "one")))
-    head = (f"Перекрёсток · plu {plu}: отзывов {cnt.get('total', '?')} · {stars}\n"
-            f"страница {page} по {limit}, " + {"useful": "новые сверху (другой сортировки у сайта нет)", "new": "новые сверху",
-                                                "high": "только 5★", "low": "только 1–2★"}[sort]
-            + (", только с фото — из этой страницы" if with_media else "")
-            + ("; есть ещё: page=" + str(page + 1) if (d.get("paginator") or {}).get("nextPageExists") else "")
-            + "\nдата\t★\tавтор\tтекст\tфото (shop_images)")
-    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
+    rows = "\n".join(filter(None, (_review(x, with_media) for x in d.get("items") or [])))
+    return (f"Перекрёсток · plu {plu}: отзывов {cnt.get('total', '?')} · " + " ".join(f"{i}★ {cnt.get(w, 0)}" for i, w in STARS)
+            + f"\nстраница {page} по {limit}, {SORTS[sort][1]}" + (", только с фото — из этой страницы" if with_media else "")
+            + (f"; есть ещё: page={page + 1}" if _more(d) else "")
+            + "\nдата\t★\tавтор\tтекст\tфото (shop_images)\n" + (rows or "(отзывов нет)"))
+
+
+def _more(d):
+    return (d.get("paginator") or {}).get("nextPageExists")
+
+
+def _review(x, with_media):
+    """One review's line; empty when only reviews with photos are wanted and it has none."""
+    photos = _photos(x.get("approvedImages"))
+    if with_media and not photos:
+        return ""
+    return (f"{_date(x.get('createdAt'))}\t{(x.get('rating') or 0) / 100:g}\t{x.get('username') or ''}\t"
+            f"{' '.join((x.get('comment') or '').split())}\t{' '.join(photos)}")
+
+
+def _date(ts):
+    if isinstance(ts, (int, float)) and ts > 1e11:   # milliseconds
+        ts /= 1000
+    return time.strftime("%Y-%m-%d", time.localtime(ts)) if isinstance(ts, (int, float)) else str(ts or "")[:10]
 
 
 def cart():
