@@ -200,6 +200,7 @@ def _price_line(r):
 # (element.click() works in a hidden tab); more reviews load on scroll, which a hidden tab never
 # does, so each sort gives its first 10.
 REVIEW_SORTS = {"useful": "relevance-1", "new": "date-1", "high": "grade-1", "low": "grade-0"}
+REVIEW_ITEMS = "document.querySelectorAll('[data-auto=\"review-item\"]')"
 REVIEWS_JS = r"""
 (() => {
   const t = s => (s || '').replace(/\s+/g, ' ').trim();
@@ -227,42 +228,53 @@ REVIEWS_JS = r"""
 def reviews(url, sort="useful", with_media=False, this_variant=False):
     if sort not in REVIEW_SORTS:
         return f"sort: одно из {', '.join(REVIEW_SORTS)}"
-    if url.startswith("/"):
-        url = "https://market.yandex.ru" + url
-    if "market.yandex.ru/card/" not in url:
+    url = _reviews_url(url)
+    if not url:
         return "нужна ссылка на товар Яндекс Маркета (https://market.yandex.ru/card/...)"
-    url = url.split("?")[0].rstrip("/").removesuffix("/reviews") + "/reviews"
-    items = "document.querySelectorAll('[data-auto=\"review-item\"]')"
-    tab = tab_for("market.yandex.ru")
-    try:
-        tab.goto(url, "ym", wait_js=f"{_new_page(tab)} && ({items}.length > 0 || /нет отзывов|Отзывов пока нет/i.test(document.body.innerText) || {CAPTCHA_JS})")
-        if _captcha(tab, f"reviews {url}"):
-            return BLOCKED
-        def redraw(js):
-            first = tab.js(f"{items}[0]?.innerText || ''")
-            tab.js(js)
-            for _ in range(20):
-                time.sleep(0.4)
-                if tab.js(f"({items}[0]?.innerText || '') !== {json.dumps(first)}"):
-                    break
-        if this_variant:
-            redraw("document.querySelector('[data-zone-name=thisOptionTab]')?.querySelector('button,a,input,label')?.click()"
-                   " || document.querySelector('[data-zone-name=thisOptionTab]')?.click()")
-        if sort != "useful":
-            tab.js("document.querySelector('[data-auto=\"product-reviews-sort\"]')?.click()")
-            time.sleep(0.8)
-            redraw(f"document.querySelector('[data-auto=\"more-actions-{REVIEW_SORTS[sort]}\"]')?.click()")
-        r = tab.js(REVIEWS_JS)
-    finally:
-        tab.close()
-    rows = [x for x in r["reviews"] if x["photos"] or not with_media]
+    r = _read(url, "reviews", f"{REVIEW_ITEMS}.length > 0 || /нет отзывов|Отзывов пока нет/i.test(document.body.innerText)",
+              lambda tab: _sorted_reviews(tab, sort, this_variant))
+    return BLOCKED if r is None else _reviews_text(r, url, sort, with_media, this_variant)
+
+
+def _reviews_url(url):
+    """The card's reviews page, or None for a link that is not a card."""
+    url = _absolute(url)
+    return url.split("?")[0].rstrip("/").removesuffix("/reviews") + "/reviews" if "market.yandex.ru/card/" in url else None
+
+
+def _sorted_reviews(tab, sort, this_variant):
+    if this_variant:
+        _redraw(tab, "document.querySelector('[data-zone-name=thisOptionTab]')?.querySelector('button,a,input,label')?.click()"
+                     " || document.querySelector('[data-zone-name=thisOptionTab]')?.click()")
+    if sort != "useful":
+        tab.js("document.querySelector('[data-auto=\"product-reviews-sort\"]')?.click()")
+        time.sleep(0.8)
+        _redraw(tab, f"document.querySelector('[data-auto=\"more-actions-{REVIEW_SORTS[sort]}\"]')?.click()")
+    return tab.js(REVIEWS_JS)
+
+
+def _redraw(tab, js):
+    """Run js (a click), then wait up to 8 s for the list to show another first review."""
+    first = tab.js(f"{REVIEW_ITEMS}[0]?.innerText || ''")
+    tab.js(js)
+    for _ in range(20):
+        time.sleep(0.4)
+        if tab.js(f"({REVIEW_ITEMS}[0]?.innerText || '') !== {json.dumps(first)}"):
+            break
+
+
+def _reviews_text(r, url, sort, with_media, this_variant):
+    rows = [_review_row(x) for x in r["reviews"] if x["photos"] or not with_media]
     head = (f"Яндекс Маркет · {url}\n{r['summary']}" + (f" · {r['dist']}" if r["dist"] else "") + "\n"
             f"{'только этот вариант' if this_variant else 'все варианты'}, сортировка {sort}"
             f"{', только с фото' if with_media else ''}. Видны первые 10 отзывов на сортировку: "
             "следующие сайт подгружает прокруткой видимой страницы, а браузер скрыт. Год у дат текущего года сайт не пишет.\n"
             "дата\t★\tполезно +/−\tвариант\tавтор\tтекст\tфото (shop_images)")
-    return head + "\n" + ("\n".join(f"{x['date']}\t{x['grade']}\t+{x['up']}/−{x['down']}\t{x['variant']}\t{x['author']}\t{x['text']}\t{' '.join(x['photos'])}"
-                                    for x in rows) if rows else "(отзывов нет)")
+    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
+
+
+def _review_row(x):
+    return f"{x['date']}\t{x['grade']}\t+{x['up']}/−{x['down']}\t{x['variant']}\t{x['author']}\t{x['text']}\t{' '.join(x['photos'])}"
 
 
 # Cart. Reading works from a background tab; adding and removing are clicks (the site's cart calls
