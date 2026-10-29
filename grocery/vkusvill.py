@@ -51,15 +51,17 @@ def _clean(s):
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", (s or "").replace("&nbsp;", " ").replace("&quot;", '"'))).strip()
 
 
-def _listed(p):
-    pr, w, rt = p.get("price") or {}, p.get("weight") or {}, p.get("rating") or {}
-    size = ""
+def _size(p):
+    w = p.get("weight") or {}
     if w.get("value"):
         v = float(w["value"])
-        size = f"{v:g} {w.get('unit')}" if w.get("unit") != "кг" or v >= 1 else f"{v * 1000:g} г"
-    if not size and p.get("unit") == "кг":      # sold by weight: the price is per kilogram
-        size = "1 кг"
-    return {"id": str(p["id"]), "name": _clean(p.get("name")), "brand": p.get("brand") or "", "size": size,
+        return f"{v:g} {w.get('unit')}" if w.get("unit") != "кг" or v >= 1 else f"{v * 1000:g} г"
+    return "1 кг" if p.get("unit") == "кг" else ""      # sold by weight: the price is per kilogram
+
+
+def _listed(p):
+    pr, rt = p.get("price") or {}, p.get("rating") or {}
+    return {"id": str(p["id"]), "name": _clean(p.get("name")), "brand": p.get("brand") or "", "size": _size(p),
             "price": pr.get("current"), "old": pr.get("old"), "available": True,
             "url": p.get("url") or f"{SITE}/goods/{p.get('slug', 'x')}-{p['id']}/",
             "rating": rt.get("average") and round(rt["average"], 2), "reviews": rt.get("count"), "ean": None}
