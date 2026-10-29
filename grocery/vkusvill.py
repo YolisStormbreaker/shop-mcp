@@ -189,34 +189,53 @@ def _id(id_or_url):
 
 
 def product(id_or_url):
-    pid = _id(id_or_url)
-    d = _mcp("vkusvill_product_details", {"id": int(pid)})
+    d = _mcp("vkusvill_product_details", {"id": int(_id(id_or_url))})
     p = _listed(d)
+    return _card(p, d, _site(p["url"]))
+
+
+def _card(p, d, st):
     props = {_clean(x.get("name")): x.get("value") or "" for x in d.get("properties") or []}
-    comp_raw = next((v for k, v in props.items() if k.startswith("Состав")), "")
-    # «<Supplier>:<text>;<br>[<Supplier2>:…]» — one composition per supplier; keep the first, mention the others
-    parts = [re.sub(r"^[^:]{2,80}?:", "", _clean(x), count=1).strip(" ;") for x in re.split(r"<br\s*/?>", comp_raw) if _clean(x)]
-    nut_raw = next((v for k, v in props.items() if k.startswith("Пищевая")), "")
-    nut = nutrition_from_text(_clean(nut_raw))
-    extra = []
-    pr = d.get("price") or {}
-    if pr.get("discount_info") or pr.get("discount_percent"):
-        extra.append(f"скидка {pr.get('discount_percent') or ''}% {_clean(pr.get('discount_info'))}".strip())
-    st = _site(p["url"])
+    parts, nut_raw = _compositions(_prop(props, "Состав")), _prop(props, "Пищевая")
     if st:
         p["available"] = not _gone(st.get("rest"), st.get("max"))
-        extra.append("на адрес пользователя: " + (st.get("rest") or "наличие не указано")
-                     + (f"; доставка: {st['delivery']}" if st.get("delivery") else ""))
-    if len(parts) > 1:
-        extra.append(f"поставщиков {len(parts)}, у остальных состав: " + " || ".join(parts[1:])[:600])
-    for k in ("Аллергены по производителям", "Срок годности", "Страна производства", "Изготовитель"):
-        v = next((v for kk, v in props.items() if kk.startswith(k)), "")
-        if v:
-            extra.append(f"{k}: {_clean(v)[:200]}")
-    p.update(brand=d.get("brand") or "", photos=[i.get("large") for i in d.get("images") or [] if i.get("large")],
-             description=_clean(d.get("description")), composition=parts[0] if parts else "", nutrition=nut, extra=extra,
-             composition_extra=_clean(nut_raw) if "сахар" in nut_raw.lower() else "")
+    p.update(photos=[i.get("large") for i in d.get("images") or [] if i.get("large")], description=_clean(d.get("description")),
+             composition=parts[0] if parts else "", nutrition=nutrition_from_text(_clean(nut_raw)),
+             composition_extra=_clean(nut_raw) if "сахар" in nut_raw.lower() else "",
+             extra=[x for x in (_discount(d), _stock(st), _suppliers(parts), *_facts(props)) if x])
     return p
+
+
+def _prop(props, name):
+    return next((v for k, v in props.items() if k.startswith(name)), "")
+
+
+def _compositions(raw):
+    # «<Supplier>:<text>;<br>[<Supplier2>:…]» — one composition per supplier
+    return [re.sub(r"^[^:]{2,80}?:", "", _clean(x), count=1).strip(" ;") for x in re.split(r"<br\s*/?>", raw) if _clean(x)]
+
+
+def _suppliers(parts):
+    """The card keeps the first supplier's composition and mentions the others."""
+    return len(parts) > 1 and f"поставщиков {len(parts)}, у остальных состав: " + " || ".join(parts[1:])[:600]
+
+
+def _discount(d):
+    pr = d.get("price") or {}
+    if not (pr.get("discount_info") or pr.get("discount_percent")):
+        return ""
+    return f"скидка {pr.get('discount_percent') or ''}% {_clean(pr.get('discount_info'))}".strip()
+
+
+def _stock(st):
+    return st and "на адрес пользователя: " + (st.get("rest") or "наличие не указано") + (f"; доставка: {st['delivery']}" if st.get("delivery") else "")
+
+
+FACTS = ("Аллергены по производителям", "Срок годности", "Страна производства", "Изготовитель")
+
+
+def _facts(props):
+    return [f"{k}: {_clean(v)[:200]}" for k in FACTS if (v := _prop(props, k))]
 
 
 REVIEW_SORTS = {"useful": "pr__likes_max", "new": "pr__comment_new", "high": "pr__rating_max", "low": "pr__rating_min"}
