@@ -118,6 +118,9 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(got, {"items": [row(7, "Тофу", 120.0)], "total": None, "facets": FACETS,
                                "note": DEFAULT + "\nраздел сайта «Веган, без глютена»", "url": "https://5ka.ru/search/?text="})
 
+    def test_tag_section_the_site_did_not_answer_is_a_block_not_an_empty_shelf(self):
+        self.assertEqual(self.search({}, query="кефир", tag="лактоз")[0], pyaterochka.BLOCKED)
+
     def test_site_sections_are_read_once_per_store(self):
         self.search({"&offset=0": {"products": []}})
         _, urls = self.search({"&offset=0": {"products": []}})
@@ -208,11 +211,14 @@ class ReviewsTests(unittest.TestCase):
                               "есть ещё: page=3")
 
     def test_no_reviews(self):
-        got, urls = self.reviews(None, None, "https://5ka.ru/product/voda--5/")
+        got, urls = self.reviews(None, {"items": [], "has_next_page": False}, "https://5ka.ru/product/voda--5/")
         self.assertEqual(urls[1], f"{REVIEWS}/product-reviews?plu_id=5&page=1&page_size=20&sort=useful")
         self.assertEqual(got, "Пятёрочка · plu 5: рейтинг — (0 оценок), отзывов с текстом 0 · 5★ 0 4★ 0 3★ 0 2★ 0 1★ 0\n"
                               "страница 1 по 20, сортировка useful. Фото и имён авторов у отзывов Пятёрочки нет\n"
                               "дата\t★\tполезно +/−\tтекст\n(отзывов нет)")
+
+    def test_reviews_the_site_did_not_answer_are_a_block_not_none(self):
+        self.assertEqual(self.reviews(COUNT, None, "97001")[0], pyaterochka.BLOCKED)
 
     def test_unknown_sort(self):
         with patch.object(pyaterochka, "_tab") as tab:

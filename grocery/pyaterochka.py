@@ -111,13 +111,10 @@ def search(query, tag=None, sort="popular", page=1, limit=30):
         if tag and not section:
             note += f"\nтега «{tag}» среди разделов сайта нет — искал «{query} {tag}» текстом"
             query = f"{query} {tag}".strip()
-        if section:
-            rows, more = _section_rows(_section_products(tab, store, tags[section], sort, page), section, query)
-        else:
-            products = _search_products(tab, store, query, page, limit)
-            if products is None:
-                return BLOCKED
-            rows, more = _search_rows(products, sort)
+        products = _section_products(tab, store, tags[section], sort, page) if section else _search_products(tab, store, query, page, limit)
+        if products is None:
+            return BLOCKED
+        rows, more = _section_rows(products, section, query) if section else _search_rows(products, sort)
     finally:
         tab.close()
     return {"items": rows[:limit], "total": None, "facets": [n for n in tags if DIET.search(n)], "note": (note + more).strip(),
@@ -134,6 +131,8 @@ def _section_products(tab, store, cat, sort, page):
     products = []
     for off in range((page - 1) * 36, page * 36, 12):
         d = _get(tab, f"{base}&limit=12&offset={off}")
+        if d is None and not products:
+            return None                   # the site did not answer: a bot check, not an empty section
         if not d or not d.get("products"):
             break
         products += d["products"]
@@ -259,9 +258,11 @@ def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=20):
     tab = _tab()
     try:
         cnt = _get(tab, f"{REVIEWS}/product-reviews/count?plu_id={plu}") or {}
-        d = _get(tab, f"{REVIEWS}/product-reviews?plu_id={plu}&page={page}&page_size={limit}&sort={SORTS[sort]}") or {}
+        d = _get(tab, f"{REVIEWS}/product-reviews?plu_id={plu}&page={page}&page_size={limit}&sort={SORTS[sort]}")
     finally:
         tab.close()
+    if d is None:
+        return BLOCKED
     return _reviews_head(plu, cnt.get("content") or {}, sort, page, limit, with_media) + "\n" + _review_rows(d, page)
 
 
