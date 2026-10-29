@@ -312,63 +312,64 @@ def _relevant(name, query):
     return all(st in (name or "").lower().replace("ё", "е") for st in (x.replace("ё", "е") for x in stems))
 
 
+def _ids(s, query, tag, limit, strict):
+    """One store's product ids for compare_details, or the site's message."""
+    r = STORES[s].search(query, tag=tag, sort="popular", page=1, limit=max(limit * 4, 20))
+    if isinstance(r, str):
+        return r
+    hits = _hits(r, query, strict) or r["items"][:min(limit, 3)]
+    return [p["id"] for p in hits[:limit]] or f"по «{query}» ничего не нашлось"
+
+
+def _from_search(query, stores, tag, limit, strict):
+    """({store: [id]}, notes) from the first search results of every store."""
+    found = _each(_keys(stores), lambda s: _ids(s, query, tag, limit, strict))
+    return {s: v for s, v in found if not isinstance(v, str)}, _notes(found)
+
+
+def _wanted(items):
+    """{store: [id]} from ["store:id", …]."""
+    wanted = {}
+    for x in items:
+        s, _, pid = x.partition(":")
+        wanted.setdefault(_store(s), []).append(pid.strip())
+    return wanted
+
+
+def _cards(s, ids):
+    """[(store, id, card or message)], one card after another: the store's tab is shared."""
+    return [(s, pid, _safe(STORES[s].product, pid)) for pid in ids]
+
+
+def _share(p, rank):
+    """« · какао: 72%» when ranked by an ingredient's share."""
+    if not rank.startswith("%"):
+        return ""
+    word = rank.lstrip("%")
+    v = composition.percent_of(word, _all_text(p))
+    return f" · {word}: {v:g}%" if v is not None else f" · {word}: % не указан"
+
+
+def _details(i, s, p, rank):
+    """One product of the composition comparison: its line, link and composition."""
+    head = (f"\n{i}. {NAMES[s]} · {p.get('name', '')} · {p.get('price')} ₽" + (f" ({unit_price(p)})" if unit_price(p) else "")
+            + ("" if p.get("available", True) else " · нет в наличии") + _share(p, rank)
+            + (f" · рейтинг {_rating(p)}" if _rating(p) else "") + f" · {s}:{p.get('id')}")
+    return [head, f"   {p.get('url', '')}"] + ["   " + x for x in _describe(p)]
+
+
 def compare_details(query=None, stores=None, tag=None, limit=5, rank="price", items=None, strict=True):
     """Composition and nutrition side by side: either the first `limit` search results of every store,
     or the given items ["store:id", …]. Ranked by `rank` (see RANKS, or "%word" — share of that ingredient)."""
     if rank not in RANKS and not rank.startswith("%"):
         return f"rank: одно из {', '.join(RANKS)} или «%ингредиент» (например %какао, %томат, %мясо)"
-    if items:
-        wanted = {}
-        for x in items:
-            s, _, pid = x.partition(":")
-            wanted.setdefault(_store(s), []).append(pid.strip())
-    else:
-        found = {}
-        keys = [_store(s) for s in stores] if stores else list(STORES)
-
-        def one(s):
-            try:
-                r = STORES[s].search(query, tag=tag, sort="popular", page=1, limit=max(limit * 4, 20))
-                if isinstance(r, str):
-                    return s, r
-                hits = [p for p in r["items"] if not strict or _relevant(p.get("name"), query)] or r["items"][:min(limit, 3)]
-                return s, [p["id"] for p in hits[:limit]] or f"по «{query}» ничего не нашлось"
-            except Exception as e:
-                return s, f"ошибка: {str(e)[:150]}"
-        with ThreadPoolExecutor(len(keys)) as ex:
-            found = dict(ex.map(one, keys))
-        wanted = {s: v for s, v in found.items() if not isinstance(v, str)}
-    notes = [f"{NAMES[s]}: {v.splitlines()[0]}" for s, v in (found.items() if not items else []) if isinstance(v, str)]
-
-    def details(s):
-        out = []
-        for pid in wanted[s]:                 # one store's cards one after another: its tab is shared
-            try:
-                p = STORES[s].product(pid)
-            except Exception as e:
-                p = f"ошибка: {str(e)[:150]}"
-            out.append((s, pid, p))
-        return out
-    with ThreadPoolExecutor(max(1, len(wanted))) as ex:
-        got = [x for chunk in ex.map(details, list(wanted)) for x in chunk]
-    ok = [(s, p) for s, pid, p in got if not isinstance(p, str)]
+    wanted, notes = (_wanted(items), []) if items else _from_search(query, stores, tag, limit, strict)
+    got = [x for _, cards in _each(list(wanted), lambda s: _cards(s, wanted[s])) for x in cards]
     notes += [f"{NAMES[s]} {pid}: {p.splitlines()[0]}" for s, pid, p in got if isinstance(p, str)]
-    ok.sort(key=lambda x: _rank_value(x[1], rank))
+    ok = sorted(((s, p) for s, _, p in got if not isinstance(p, str)), key=lambda x: _rank_value(x[1], rank))
     head = (f"Сравнение состава" + (f" «{query}»" if query else "") + f" · порядок: {RANKS.get(rank) or 'доля «' + rank.lstrip('%') + '» ↓'}"
             + f" · товаров {len(ok)}")
-    lines = [head] + notes
-    for i, (s, p) in enumerate(ok, 1):
-        price = p.get("price")
-        val = ""
-        if rank.startswith("%"):
-            v = composition.percent_of(rank.lstrip("%"), "; ".join((p.get("composition") or "", p.get("composition_extra") or "", p.get("name") or "")))
-            val = f" · {rank.lstrip('%')}: {v:g}%" if v is not None else f" · {rank.lstrip('%')}: % не указан"
-        rating = f" · рейтинг {p['rating']}" + (f" ({p['reviews']})" if p.get("reviews") else "") if p.get("rating") else ""
-        lines.append(f"\n{i}. {NAMES[s]} · {p.get('name', '')} · {price} ₽" + (f" ({unit_price(p)})" if unit_price(p) else "")
-                     + ("" if p.get("available", True) else " · нет в наличии") + val + rating + f" · {s}:{p.get('id')}")
-        lines.append(f"   {p.get('url', '')}")
-        lines += ["   " + x for x in composition.describe(p.get("composition"), p.get("nutrition"), p.get("composition_extra"))]
-    return "\n".join(lines)
+    return "\n".join([head] + notes + [x for i, (s, p) in enumerate(ok, 1) for x in _details(i, s, p, rank)])
 
 
 def call(store, fn, *args, **kwargs):
