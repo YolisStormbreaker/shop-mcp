@@ -127,12 +127,14 @@ def _sections(cats, tag):
 
 def _in_sections(tab, hit, tag, query):
     """(products of the tag's categories whose names have the query's words, note, query)"""
-    ids = []
-    for c in hit[:8]:                    # the tree has no products: each category's own call lists them
-        ids += _ids(_call(tab, "categoryByIdOrSlug", {"categoryIdOrSlug": c.get("slug") or c["id"], "filters": {}, "limit": 100}) or {})
-    ids = list(dict.fromkeys(ids))
+    # the tree has no products: each category's own call lists them
+    answers = [_call(tab, "categoryByIdOrSlug", {"categoryIdOrSlug": c.get("slug") or c["id"], "filters": {}, "limit": 100})
+               for c in hit[:8]]
+    ids = list(dict.fromkeys(i for a in answers for i in _ids(a or {})))
     got = _call(tab, "productsByIds", {"showcaseId": "SC", "productIds": ids[:200]}) if ids else []
-    return (_named(got or [], query),
+    if got is None or all(a is None for a in answers):
+        return None                      # requests failed (the bot check), not an empty shelf
+    return (_named(got, query),
             f"разделы Самоката «{tag}» ({len(hit)})" + (f", названия со словами «{query}»" if (query or "").split() else ""), query)
 
 

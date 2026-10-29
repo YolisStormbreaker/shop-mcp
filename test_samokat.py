@@ -129,7 +129,7 @@ SECTIONS = {
     "bez-laktozy": {"categories": [{"productIds": ["p1", "p2"], "children": [{"productIds": ["p3"]}]}, {"productIds": ["p2", "p4"]}],
                     "products": [{"id": "p5"}, {"id": "p1"}]},
     "c2": {"products": [{"id": "p4"}, {"id": "p6"}]},
-    "med": None}
+    "med": {}}
 PRODUCTS = [
     {"id": "p1", "slug": "moloko-bez-laktozy-1-l", "name": "Молоко без лактозы 1 л", "price": 14500, "oldPrice": 16900, "isAvailable": True},
     {"id": "p2", "name": "Коктейль молочный", "price": 9900},
@@ -171,9 +171,23 @@ class SamokatSearchTests(unittest.TestCase):
 
     def test_tag_reads_at_most_eight_sections(self):
         cats = [{"id": f"x{i}", "name": f"Без лактозы {i}"} for i in range(9)]
-        got, calls = search({"categoriesList": cats, "categoryByIdOrSlug": {}}, "сыр", tag="без лактозы")
+        got, calls = search({"categoriesList": cats, "categoryByIdOrSlug": {f"x{i}": {} for i in range(9)}}, "сыр", tag="без лактозы")
         self.assertEqual([c[0] for c in calls], ["categoriesList"] + ["categoryByIdOrSlug"] * 8)
         self.assertEqual((got["items"], got["note"]), ([], "разделы Самоката «без лактозы» (9), названия со словами «сыр»"))
+
+    def test_tag_search_with_every_section_request_failed_is_a_block_not_an_empty_shelf(self):
+        got, _ = search({"categoriesList": CATS, "categoryByIdOrSlug": {}, "productsByIds": PRODUCTS}, "молоко", tag="без лактозы")
+        self.assertEqual(got, samokat.BLOCKED)
+
+    def test_tag_search_with_the_products_request_failed_is_a_block(self):
+        got, _ = search({"categoriesList": CATS, "categoryByIdOrSlug": SECTIONS, "productsByIds": None}, "молоко", tag="без лактозы")
+        self.assertEqual(got, samokat.BLOCKED)
+
+    def test_tag_search_lists_what_the_sections_that_answered_hold(self):
+        got, calls = search({"categoriesList": CATS, "categoryByIdOrSlug": {"c2": SECTIONS["c2"]}, "productsByIds": PRODUCTS},
+                            "молоко", tag="без лактозы")
+        self.assertEqual(calls[-1], ("productsByIds", {"showcaseId": "SC", "productIds": ["p4", "p6"]}))
+        self.assertEqual(got["items"], [MILK, CHEESE])
 
     def test_tag_the_site_lacks_goes_into_the_text_search(self):
         found = [{"type": "PRODUCT", "id": "p9", "slug": "kefir-1", "name": "Кефир 1%", "price": 9900, "isAvailable": False},
