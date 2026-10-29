@@ -341,7 +341,7 @@ def remove_from_cart(size_sku):
         d = _api(tab, "GET", "/api/v1/cart/get")
         if d is None:
             return BLOCKED
-        if not any(i["size"].get("sku") == size_sku for i in _lines(d)):
+        if not _has(d, size_sku):
             return "такого sku размера в корзине нет\n" + _cart_text(d)
         _api(tab, "POST", "/api/v1/cart/remove", {"skus": [size_sku], "geo": _geo(tab)})
         d = _api(tab, "GET", "/api/v1/cart/get")
@@ -349,5 +349,5 @@ def remove_from_cart(size_sku):
         tab.close()
     if d is None:
         return BLOCKED
-    gone = not any(i["size"].get("sku") == size_sku for i in _lines(d))
+    gone = not _has(d, size_sku)
     return f"{'удалено' if gone else '⚠️ Lamoda не подтвердила удаление'}: {size_sku}\n" + _cart_text(d)
