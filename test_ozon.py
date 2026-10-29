@@ -1,5 +1,6 @@
 """Ozon read paths: the site's composer JSON (widgetStates) -> the text the tools return.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_ozon"""
+import calendar
 import json
 import time
 import unittest
@@ -236,6 +237,103 @@ class ItemTests(unittest.TestCase):
     def test_no_sku_in_the_link(self):
         with self.assertRaisesRegex(ValueError, "не нашёл sku"):
             ozon.item("https://www.ozon.ru/category/kabeli/")
+
+
+def review(comment, score=5, item_id=111, day=1, **content):
+    """A review as the list widget gives it; created at noon UTC so the date is the same in any time zone."""
+    return {"content": {"comment": comment, "score": score, **content}, "itemId": item_id,
+            "createdAt": calendar.timegm((2026, 6, day, 12, 0, 0))}
+
+
+def reviews_page(reviews, paging=None, score=None, next_page=None, products=None):
+    w = {"webListReviews-1": {"reviews": reviews, "paging": paging or {}, "products": products or {}}}
+    if score:
+        w["webReviewProductScore-2"] = score
+    return page(w, next_page)
+
+
+RICH = review("в целом  хорошо\nберу ещё", 4, positive="быстро заряжает", negative="коротковат",
+              photos=[{"url": "https://ir.ozone.ru/r/1.jpg"}, {"id": "без url"}],
+              videos=[{"url": "https://v.ozone.ru/v/1.mp4", "duration": "0:12", "previewUrl": "https://ir.ozone.ru/r/p.jpg"},
+                      {"duration": "0:05"}])
+RICH.update(usefulness={"useful": 3, "unuseful": 1}, author={"firstName": "Анна"})
+RICH_ROW = ("2026-06-01\t4\t+3/−1\tчерный, 1 м\tАнна\t+ быстро заряжает | − коротковат | в целом хорошо беру ещё\t"
+            "https://ir.ozone.ru/r/1.jpg видео 0:12: https://v.ozone.ru/v/1.mp4 превью https://ir.ozone.ru/r/p.jpg")
+PLAIN = {"content": {"comment": "норм", "score": 5}, "itemId": 222, "publishedAt": calendar.timegm((2026, 6, 2, 12, 0, 0))}
+VIDEO_ONLY = review("видео", videos=[{"url": "https://v.ozone.ru/v/2.mp4"}], day=3)
+PRODUCTS = {"111": {"variants": [{"value": "черный"}, {"value": "1 м"}]}}
+SCORE = {"totalScore": 4.9, "reviewsCount": 336097, "score": [{"title": "5 звёзд", "value": 312142}, {"title": "4 звезды", "value": 18612}]}
+REVIEWS_HEAD = "дата\t★\tполезно +/−\tвариант\tавтор\tтекст\tфото (shop_images), видео"
+BASE = f"/product/{SKU}/reviews/?sort=usefulness_desc&reviewsVariantMode=2"
+
+
+class ReviewsTests(unittest.TestCase):
+    def reviews(self, pages, **kw):
+        tab = MagicMock()
+        with patch.object(ozon, "_tab", return_value=tab), patch.object(ozon, "_page", side_effect=pages) as get:
+            out = ozon.reviews(SKU, **kw)
+        tab.close.assert_called_once()
+        return out, [c.args[1] for c in get.call_args_list]
+
+    def test_one_page_of_all_variants(self):
+        out, urls = self.reviews([reviews_page([RICH, PLAIN], {"total": 95}, SCORE, products=PRODUCTS)])
+        self.assertEqual(urls, [BASE])
+        self.assertEqual(out, f"Ozon · sku {SKU}: рейтинг 4.9, отзывов 336097 · 5 звёзд: 312142 4 звезды: 18612\n"
+                              "все варианты товара: 95 отзывов, страница 1 из 4 (по 30), сортировка useful\n"
+                              f"{REVIEWS_HEAD}\n{RICH_ROW}\n2026-06-02\t5\t+0/−0\t\t\tнорм\t")
+
+    def test_this_variant_with_media_lowest_first(self):
+        out, urls = self.reviews([reviews_page([RICH, PLAIN, VIDEO_ONLY], {"total": 3}, products=PRODUCTS)],
+                                 sort="low", with_media=True, this_variant=True)
+        self.assertEqual(urls, [f"/product/{SKU}/reviews/?sort=score_asc&reviewsVariantMode=1"])
+        self.assertEqual(out.splitlines(), [
+            f"Ozon · sku {SKU}: рейтинг ?, отзывов ? · ",
+            "только этот вариант: 3 отзывов, страница 1 из 1 (по 30), сортировка low; только с фото или видео — из этой страницы",
+            REVIEWS_HEAD, RICH_ROW, "2026-06-03\t5\t+0/−0\tчерный, 1 м\t\tвидео\tвидео : https://v.ozone.ru/v/2.mp4 превью "])
+
+    def test_later_page_uses_the_page_key_from_page_one(self):
+        first = reviews_page([PLAIN], {"total": 95, "nextPage": f"/product/{SKU}/reviews/?page=2&page_key=K2xyz&sort=usefulness_desc"})
+        out, urls = self.reviews([first, reviews_page([RICH], products=PRODUCTS)], page=3)
+        self.assertEqual(urls, [BASE, BASE + "&page=3&page_key=K2xyz"])
+        self.assertEqual(out.splitlines()[1:], ["все варианты товара: 95 отзывов, страница 3 из 4 (по 30), сортировка useful",
+                                                REVIEWS_HEAD, RICH_ROW])
+
+    def test_later_page_without_a_page_key(self):
+        out, urls = self.reviews([reviews_page([PLAIN], score={"reviewsCount": 40})], page=2)
+        self.assertEqual(urls, [BASE])
+        self.assertEqual(out.splitlines()[1:], ["все варианты товара: 40 отзывов, страница 2 из 2 (по 30), сортировка useful",
+                                                REVIEWS_HEAD, "(отзывов нет)"])
+
+    def test_query_matches_the_variant_until_the_last_page(self):
+        out, urls = self.reviews([reviews_page([RICH, PLAIN], products=PRODUCTS, next_page="/p2"),
+                                  reviews_page([review("не тот", item_id=222)])], query="черный")
+        self.assertEqual(urls, [BASE, "/p2"])
+        self.assertEqual(out.splitlines()[1:], ["все варианты товара: 0 отзывов, страницы 1–2: «черный» нашлось в 1 из 3, сортировка useful",
+                                                REVIEWS_HEAD, RICH_ROW])
+
+    def test_query_stops_at_30_rows(self):
+        out, urls = self.reviews([reviews_page([review("ок")] * 30, next_page="/p2")], query="ок")
+        self.assertEqual(len(urls), 1)
+        self.assertIn("страница 1: «ок» нашлось в 30 из 30", out)
+
+    def test_query_reads_at_most_ten_pages(self):
+        out, urls = self.reviews([reviews_page([review("ок")], next_page=f"/p{n}") for n in range(2, 14)], query="ок")
+        self.assertEqual(len(urls), ozon.QUERY_PAGES)
+        self.assertIn("страницы 1–10: «ок» нашлось в 10 из 10", out)
+
+    def test_later_page_failing_reaches_the_caller(self):
+        tab = MagicMock()
+        with patch.object(ozon, "_tab", return_value=tab), \
+                patch.object(ozon, "_page", side_effect=[reviews_page([PLAIN], next_page="/p2"), RuntimeError("Ozon ответил 403")]):
+            with self.assertRaisesRegex(RuntimeError, "403"):
+                ozon.reviews(SKU, query="ок")
+        tab.close.assert_called_once()
+
+    def test_unknown_sort(self):
+        with patch.object(ozon, "_tab") as tab:
+            self.assertEqual(ozon.reviews(SKU, sort="new"),
+                             "sort: одно из useful, high, low (сортировки по дате на Ozon нет: useful — «новые и полезные»)")
+        tab.assert_not_called()
 
 
 if __name__ == "__main__":
