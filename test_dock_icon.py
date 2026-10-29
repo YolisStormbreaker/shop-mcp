@@ -74,6 +74,11 @@ class RepaintTests(unittest.TestCase):
         th = colorsys.rgb_to_hsv(*(c / 255 for c in rgb(dock_icon.PALETTE[0])))[0]
         self.assertAlmostEqual(colorsys.rgb_to_hsv(*(c / 255 for c in glow[:3]))[0], th, delta=0.02)
 
+    def test_saturation_exactly_at_the_threshold_is_repainted(self):
+        for pixel in ((160, 120, 120, 255), (200, 184, 184, 128)):   # s exactly 0.25 opaque, 0.08 translucent
+            with self.subTest(pixel):
+                self.assertNotEqual(repaint(pixel)[0], pixel)
+
 
 class MainTests(unittest.TestCase):
     SOURCE = [chrome(0), (255, 255, 255, 255), chrome(215), (0, 0, 0, 0)]

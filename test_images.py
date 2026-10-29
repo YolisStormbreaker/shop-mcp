@@ -91,7 +91,7 @@ class FetchTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.dir = Path(tmp.name) / "images"           # made on first save
+        self.dir = Path(tmp.name) / "cache" / "images"  # made on first save, cache/ too (gitignored, absent in a fresh checkout)
         for p in (patch.object(images, "DIR", self.dir), patch.object(images.socket, "getaddrinfo", side_effect=getaddrinfo)):
             self.addCleanup(p.stop)
             p.start()
@@ -188,6 +188,10 @@ class ImagesTests(unittest.TestCase):
         self.assertEqual([u for u, _ in self.fetched], urls[:6])
         self.assertEqual(out[0].split("\n")[0], "картинок: 6 из 6 (файл\tразмер\tссылка); ещё 2 не загружено — вызови ещё раз с ними")
         self.assertEqual(len(out), 7)
+
+    def test_six_links_are_all_fetched(self):
+        out = self.images([f"https://a.test/{i}.jpg" for i in range(1, 7)])
+        self.assertEqual(out[0].split("\n")[0], "картинок: 6 из 6 (файл\tразмер\tссылка)")
 
     def test_no_links(self):
         self.assertEqual(self.images([]), ["картинок: 0 из 0 (файл\tразмер\tссылка)"])
