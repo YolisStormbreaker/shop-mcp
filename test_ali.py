@@ -283,5 +283,75 @@ class VariantTests(unittest.TestCase):
                                            "Цвет: as the pictures show; Длина: 2 м | ")
 
 
+FULL_REVIEW = {"root": {"text": "Хороший  кабель\nзаряжает быстро", "grade": 5, "date": "1 июня 2026",
+                        "images": [{"url": "https://ae01.alicdn.com/kf/r1.jpg"}, {"id": "без url"}],
+                        "comments": [{"text": "Спасибо за отзыв!"}, {"text": ""}]},
+               "additional": {"text": "через месяц работает", "images": [{"url": "https://ae01.alicdn.com/kf/r2.jpg"}]},
+               "product": {"skuProperties": "Цвет: черный, Длина: 1m"}, "interaction": {"likesAmount": 7}, "reviewer": {"name": "A***a"}}
+FULL_ROW = ("1 июня 2026\t5\t7\tЦвет: черный, Длина: 1m\tA***a\tХороший кабель заряжает быстро | дополнение: через месяц работает"
+            " | ответ: Спасибо за отзыв!\thttps://ae01.alicdn.com/kf/r1.jpg https://ae01.alicdn.com/kf/r2.jpg")
+PLAIN_REVIEW = {"root": {"text": "норм", "grade": 4, "date": "2 июня 2026"}}
+ALI_REVIEWS_HEAD = "дата\t★\tполезно\tвариант\tавтор\tтекст\tфото (shop_images)"
+
+
+def feedback(reviews):
+    return {"data": {"reviews": reviews}}
+
+
+class ReviewsTests(unittest.TestCase):
+    def reviews(self, answers, **kw):
+        tab = MagicMock()
+        with patch.object(ali, "_tab", return_value=tab), patch.object(ali, "_fetch", side_effect=answers) as fetch, \
+                patch.object(ali, "_product_data", return_value={"data": {"reviews": 1657, "rating": {"middle": 4.8}}}), \
+                patch.object(ali.time, "sleep") as sleep:
+            out = ali.reviews(ITEM, **kw)
+        tab.close.assert_called_once()
+        self.assertEqual({c.args[1] for c in fetch.call_args_list}, {"/aer-jsonapi/review/v5/desktop/product-reviews"})
+        self.assertEqual(sleep.call_count, fetch.call_count - 1)       # a pause before every page after the first
+        return out, [c.args[2] for c in fetch.call_args_list]
+
+    def test_one_page(self):
+        out, bodies = self.reviews([feedback([FULL_REVIEW, PLAIN_REVIEW])])
+        self.assertEqual(bodies, [{"productKey": {"id": ITEM, "sourceId": 0}, "pagination": {"pageNum": 1, "pageSize": 10},
+                                   "sort": 1, "filters": [], "skuFilter": []}])
+        self.assertEqual(out, f"AliExpress · товар {ITEM}: рейтинг 4.8, отзывов 1657\n"
+                              "страница 1 из 166 (по 10; с фильтром страниц меньше), сортировка useful. "
+                              "У отзывов в ответе API только фото, видео нет.\n"
+                              f"{ALI_REVIEWS_HEAD}\n{FULL_ROW}\n2 июня 2026\t4\t0\t\t\tнорм\t")
+
+    def test_newest_with_photos_from_page_three(self):
+        out, bodies = self.reviews([feedback([FULL_REVIEW])], sort="new", with_media=True, page=3)
+        self.assertEqual((bodies[0]["pagination"], bodies[0]["sort"], bodies[0]["filters"]), ({"pageNum": 3, "pageSize": 10}, 2, [1]))
+        self.assertEqual(out.splitlines()[1], "страница 3 из 166 (по 10; с фильтром страниц меньше), сортировка new, только с фото. "
+                                              "У отзывов в ответе API только фото, видео нет.")
+
+    def test_site_refuses_the_first_page(self):
+        out, _ = self.reviews([{"error": {"message": "Неверный запрос"}}])
+        self.assertEqual(out, "AliExpress не отдал отзывы: Неверный запрос")
+
+    def test_site_refuses_a_later_page_of_a_query(self):
+        out, bodies = self.reviews([feedback([FULL_REVIEW] + [PLAIN_REVIEW] * 9), {"error": {"message": "Слишком много запросов"}}],
+                                   query="месяц")
+        self.assertEqual([b["pagination"]["pageNum"] for b in bodies], [1, 2])
+        self.assertEqual(out.splitlines()[1:], ["страница 1: «месяц» нашлось в 1 из 10; дальше сайт ответил «Слишком много запросов», "
+                                                "сортировка useful. У отзывов в ответе API только фото, видео нет.",
+                                                ALI_REVIEWS_HEAD, FULL_ROW])
+
+    def test_query_stops_at_30_rows(self):
+        out, bodies = self.reviews([feedback([FULL_REVIEW] * 10)] * 4, query="черный")
+        self.assertEqual(len(bodies), 3)
+        self.assertIn("страницы 1–3: «черный» нашлось в 30 из 30", out)
+
+    def test_query_reads_at_most_eight_pages(self):
+        out, bodies = self.reviews([feedback([FULL_REVIEW] + [PLAIN_REVIEW] * 9)] * 10, query="черный")
+        self.assertEqual(len(bodies), ali.QUERY_PAGES)
+        self.assertIn("страницы 1–8: «черный» нашлось в 8 из 80", out)
+
+    def test_unknown_sort(self):
+        with patch.object(ali, "_tab") as tab:
+            self.assertEqual(ali.reviews(ITEM, sort="date"), "sort: одно из useful, new, high, low")
+        tab.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
