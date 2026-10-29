@@ -196,7 +196,8 @@ def ozon_orders(query=None, year=None, limit=30, max_new=60):
                     o = {"id": oid, "total": total, "products": products}
                     if active:
                         o["at"] = time.time()
-                    _put({key: o})
+                    if products:     # a page without them (a check, half loaded) is read again next time, as on Ali
+                        _put({key: o})
                 o = dict(o, when=status + ("" if active else f" ({tag.split()[-1]})"))
                 scanned += 1
                 if _match(o, alts):

@@ -148,6 +148,15 @@ class OzonOrdersTests(CacheInTempDir):
         self.assertNotIn("at", c["ozon:" + F26])          # a finished order is never read again
         self.assertEqual(len(c), 7)
 
+    def test_an_order_page_without_products_is_not_cached_as_final(self):
+        # an answer without the shipment widget (a check page, a half-loaded one) is read again next time, as on Ali;
+        # in the real cache (63 orders, 2026-10-29) no order is without products
+        pages = {**OZON, "/my/orderdetails/?order=" + F25: page({})}
+        self.ozon_orders(pages)
+        self.assertNotIn("ozon:" + F25, self.cached())
+        _, urls = self.ozon_orders()
+        self.assertEqual(urls, ["/my/orderdetails/?order=" + F25])
+
     def test_second_call_makes_no_requests(self):
         first, _ = self.ozon_orders()
         out, urls = self.ozon_orders()
