@@ -414,5 +414,18 @@ class YmRemoveFromCartTests(unittest.TestCase):
                 self.assertEqual(got, ym.BLOCKED)
                 self.assertEqual(log, TAB + steps + CLOSE)
 
+
+class OtherSitesTests(unittest.TestCase):
+    """The Market tab, logged in, never goes to another site: the host decides, not a substring of the link."""
+    LINKS = ("https://market.yandex.ru.evil.test/card/x/1", "https://evil.test/?u=https://market.yandex.ru/card/x/1",
+             "https://evil.test/market.yandex.ru/card/x/1")
+
+    def test_links_to_other_hosts_are_refused_without_a_tab(self):
+        for fn in (ym.item, ym.add_to_cart, ym.reviews):
+            for url in self.LINKS:
+                with self.subTest(fn=fn.__name__, url=url), patch.object(ym, "tab_for") as tab_for:
+                    self.assertEqual(fn(url), ym.NOT_A_CARD)
+                    tab_for.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

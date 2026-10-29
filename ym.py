@@ -149,9 +149,17 @@ def _absolute(url):
     return "https://market.yandex.ru" + url if url.startswith("/") else url
 
 
-def item(url, full=False):
+def _market(url):
+    """The link made absolute if it is on market.yandex.ru, else None: the logged-in Market tab never goes to
+    another site, whatever the link's text contains."""
     url = _absolute(url)
-    if "market.yandex.ru" not in url:
+    host = urllib.parse.urlsplit(url).hostname or ""
+    return url if host == "market.yandex.ru" or host.endswith(".market.yandex.ru") else None
+
+
+def item(url, full=False):
+    url = _market(url)
+    if not url:
         return NOT_A_CARD
     r = _read(url, "item", "!!document.querySelector('h1')", lambda tab: tab.js(ITEM_JS))
     return BLOCKED if r is None else _card(_item(r), url, full)
@@ -246,8 +254,8 @@ def reviews(url, sort="useful", with_media=False, this_variant=False):
 
 def _reviews_url(url):
     """The card's reviews page, or None for a link that is not a card."""
-    url = _absolute(url)
-    return url.split("?")[0].rstrip("/").removesuffix("/reviews") + "/reviews" if "market.yandex.ru/card/" in url else None
+    url = _market(url)
+    return url.split("?")[0].rstrip("/").removesuffix("/reviews") + "/reviews" if url and "/card/" in url else None
 
 
 def _sorted_reviews(tab, sort, this_variant):
@@ -347,8 +355,8 @@ def cart():
 
 
 def add_to_cart(url):
-    url = _absolute(url)
-    if "market.yandex.ru" not in url:  # the same rule as item(): never drive the Market tab to another site
+    url = _market(url)
+    if not url:
         return NOT_A_CARD
     return _in_tab(lambda tab: _add(tab, url))
 
