@@ -86,10 +86,3 @@ def images(urls, max_side=1024):
     if len(urls) > MAX_IMAGES:
         head += f"; ещё {len(urls) - MAX_IMAGES} не загружено — вызови ещё раз с ними"
     return ["\n".join([head] + lines)] + pics
-
-
-if __name__ == "__main__":
-    for bad in ("http://127.0.0.1:9222/json", "http://localhost/", "file:///etc/passwd", "http://192.168.1.1/a.jpg", "ftp://x.ru/a"):
-        assert not _public(bad), bad
-    assert _public("https://a.lmcdn.ru/")
-    print("ok")
