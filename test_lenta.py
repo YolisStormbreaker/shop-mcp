@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 from grocery import lenta
 
 ITEM = {"id": 84812, "slug": "kefir-25-930g", "name": "кефир", "display": {"name": "Кефир 2,5%", "package": "930 г"},
-        "prices": {"price": 10999, "priceRegular": 12499, "cost": 11827}, "features": {"isWeight": False}, "count": 3,
+        "prices": {"price": 10999, "priceRegular": 12499, "cost": 11827}, "features": {"isWeight": False}, "count": 1,
         "rating": {"rate": 4.9, "votes": 2846}}
 WEIGHED = {"id": 3001, "slug": "banany", "display": {"name": "Бананы"}, "prices": {"price": 8999, "priceRegular": 8999, "cost": 17998},
            "features": {"isWeight": True}, "units": {"saleUnitQuantity": 0.5}, "count": 0}
@@ -101,6 +101,9 @@ class LentaSearchTests(unittest.TestCase):
         _, sent = self.search([FOUND], "кефир", here=KEFIR)
         self.assertEqual(sent[0][0], KEFIR[:-1] + "%20/")
 
+    def test_a_full_last_page_has_no_next(self):
+        self.assertEqual(self.search([dict(FOUND, total=30)], "кефир")[0]["note"], "")
+
     def test_last_page_sort_and_limit_over_40(self):
         got, sent = self.search([FOUND], "кефир", sort="price_desc", page=2, limit=100)
         self.assertEqual(sent, [(KEFIR, body(sort=("price", "desc"), limit=40, offset=40))])
@@ -156,6 +159,7 @@ class LentaProductTests(CardSite):
         self.tabs[0].close.assert_called_once()
         self.tabs[1].close.assert_not_called()
         self.clock.sleep.assert_not_called()
+        self.log.warning.assert_not_called()
 
     def test_weighed_card_from_a_link_with_every_zone_when_none_is_selected(self):
         zones = [dict(z, selected=False) for z in ZONES]
@@ -165,6 +169,10 @@ class LentaProductTests(CardSite):
             "весовой товар: 179.98 ₽/кг, шаг 0.5 кг",
             "доставка: Супер Лента ~ 2 часа, заказ от 500 ₽, доставка 199 ₽ от 500 ₽; "
             "Гипер Лента ~ 40 минут, заказ от 1000 ₽, доставка 79 ₽ от 1000 ₽, 0 ₽ от 4300 ₽"]))
+
+    def test_another_card_is_left_by_going_to_this_one(self):
+        self.product(CARD, here="/product/kefir-1-930g-69170/")
+        self.assertEqual([c.args[0] for c in self.tabs[0].js.call_args_list], ["location.pathname", lenta.ZONES_JS])
 
     def test_the_same_card_again_leaves_it_first(self):
         self.product(CARD, here="/product/kefir-25-930g-84812/")

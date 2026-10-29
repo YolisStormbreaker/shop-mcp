@@ -84,7 +84,7 @@ def _listed(p):
             "_per_kg": _rub(pr.get("cost")) if _weighed(p) else None}
 
 
-def _search(tab, query, mc=None, cat=None, sort="popular", limit=40, offset=0):
+def _search(tab, query, sort, limit, offset, mc=None, cat=None):
     body = {"query": query, "filters": {"checkbox": [], "multicheckbox": mc or [], "range": []},
             "sort": {"type": SORT[sort][0], "order": SORT[sort][1]}, "limit": limit, "offset": offset}
     if cat:
