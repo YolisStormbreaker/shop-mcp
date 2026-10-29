@@ -374,34 +374,40 @@ def add_to_cart(url):
 
 def remove_from_cart(sku):
     sku = str(sku).strip()
-    tab = tab_for("market.yandex.ru")
-    try:
-        rows = _open_cart(tab)
-        if rows is None:
-            return BLOCKED
-        row = next((r for r in rows if r["sku"] == sku), None)
-        if not row:
-            return "такого sku в корзине нет\n" + _cart_text(rows)
-        if not tab.visible():
-            return "не удалено: " + NOT_ON_SCREEN
-        # «−» at the row's own quantity field: each click takes one off, the last one removes the line
-        minus = f"""(() => {{ const r = (window.__ymRows || []).find(r => r.sku === {json.dumps(sku)}); if (!r) return null;
-            const q = r.el.querySelector('input[type=number]'); if (!q) return null;
-            const b = [...r.el.querySelectorAll('button')].filter(b => b.compareDocumentPosition(q) & Node.DOCUMENT_POSITION_FOLLOWING).pop();  // «−» sits right before the field
-            if (!b) return null; b.scrollIntoView({{block: 'center'}}); window.__ymMinus = b; return true; }})()"""
-        for _ in range(int(row["qty"] or 1)):
-            if not tab.js(minus):
-                break
-            time.sleep(0.6)
-            x, y = tab.js("(() => { const r = window.__ymMinus.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()")
-            for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
-                tab.call("Input.dispatchMouseEvent", type=typ, x=x, y=y, button="left", clickCount=1)
-            time.sleep(1.5)
-            tab.js(ROWS_JS)  # the line re-renders after each change
-        rows = _open_cart(tab)
-    finally:
-        tab.close()
+    return _in_tab(lambda tab: _remove(tab, sku))
+
+
+def _remove(tab, sku):
+    rows = _open_cart(tab)
     if rows is None:
         return BLOCKED
+    row = next((r for r in rows if r["sku"] == sku), None)
+    if not row:
+        return "такого sku в корзине нет\n" + _cart_text(rows)
+    if not tab.visible():
+        return "не удалено: " + NOT_ON_SCREEN
+    _take_off(tab, sku, int(row["qty"] or 1))
+    rows = _open_cart(tab)
+    return BLOCKED if rows is None else _removed(sku, rows)
+
+
+def _take_off(tab, sku, times):
+    """Click «−» at the row's own quantity field times: each click takes one off, the last one removes the line."""
+    minus = f"""(() => {{ const r = (window.__ymRows || []).find(r => r.sku === {json.dumps(sku)}); if (!r) return null;
+        const q = r.el.querySelector('input[type=number]'); if (!q) return null;
+        const b = [...r.el.querySelectorAll('button')].filter(b => b.compareDocumentPosition(q) & Node.DOCUMENT_POSITION_FOLLOWING).pop();  // «−» sits right before the field
+        if (!b) return null; b.scrollIntoView({{block: 'center'}}); window.__ymMinus = b; return true; }})()"""
+    for _ in range(times):
+        if not tab.js(minus):
+            break
+        time.sleep(0.6)
+        x, y = tab.js("(() => { const r = window.__ymMinus.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()")
+        for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
+            tab.call("Input.dispatchMouseEvent", type=typ, x=x, y=y, button="left", clickCount=1)
+        time.sleep(1.5)
+        tab.js(ROWS_JS)  # the line re-renders after each change
+
+
+def _removed(sku, rows):
     gone = not any(r["sku"] == sku for r in rows)
     return f"{'удалено' if gone else '⚠️ Маркет не подтвердил удаление'}: sku {sku}\n" + _cart_text(rows)
