@@ -107,45 +107,71 @@ def search(query, tag=None, sort="popular", page=1, limit=30):
     tab = _tab()
     if tab is None:
         return BLOCKED
-    note = ""
     try:
         cats = _call(tab, "categoriesList", "SC") or []
-        # diet tags are categories of the user's showcase («Без лактозы» under «ЗОЖ и веганство», in «Молочное»…)
-        diet = sorted({c["name"] for c in cats if re.search(r"^без |веган|растит|глютен|лактоз|сахар|протеин|чистый состав", c.get("name", ""), re.I)})
-        hit = [c for c in cats if tag and _norm(tag) in _norm(c.get("name"))] if tag else []
-        if tag and not hit:
-            note = f"раздела «{tag}» у Самоката нет — искал «{query} {tag}» текстом"
-            query = f"{query} {tag}".strip()
-        if hit:
-            ids = []
-            for c in hit[:8]:                    # the tree has no products: each category's own call lists them
-                d = _call(tab, "categoryByIdOrSlug", {"categoryIdOrSlug": c.get("slug") or c["id"], "filters": {}, "limit": 100}) or {}
-                stack = list(d.get("categories") or [])
-                while stack:
-                    x = stack.pop(0)
-                    ids += [i for i in x.get("productIds") or [] if i not in ids]
-                    stack += x.get("children") or []
-                ids += [p.get("id") for p in d.get("products") or [] if p.get("id") not in ids]
-            got = _call(tab, "productsByIds", {"showcaseId": "SC", "productIds": ids[:200]}) if ids else []
-            items = [x for x in got or [] if isinstance(x, dict)]
-            words = [w[:5].lower() for w in (query or "").split()]
-            items = [p for p in items if all(w in (p.get("name") or "").lower() for w in words)]
-            note = f"разделы Самоката «{tag}» ({len(hit)})" + (f", названия со словами «{query}»" if words else "")
-        else:
-            d = _call(tab, "searchProducts", {"query": query, "showcaseId": "SC"})
-            if d is None:
-                return BLOCKED
-            items = [x for x in d if x.get("type") == "PRODUCT"]
+        hit = _sections(cats, tag)
+        found = _in_sections(tab, hit, tag, query) if hit else _by_text(tab, query, tag)
     finally:
         tab.close()
+    return BLOCKED if found is None else _result(*found, _diet(cats), sort, page, limit)
+
+
+def _diet(cats):
+    """Diet tags are categories of the user's showcase («Без лактозы» under «ЗОЖ и веганство», in «Молочное»…)."""
+    return sorted({c["name"] for c in cats if re.search(r"^без |веган|растит|глютен|лактоз|сахар|протеин|чистый состав", c.get("name", ""), re.I)})
+
+
+def _sections(cats, tag):
+    return [c for c in cats if _norm(tag) in _norm(c.get("name"))] if tag else []
+
+
+def _in_sections(tab, hit, tag, query):
+    """(products of the tag's categories whose names have the query's words, note, query)"""
+    ids = []
+    for c in hit[:8]:                    # the tree has no products: each category's own call lists them
+        ids += _ids(_call(tab, "categoryByIdOrSlug", {"categoryIdOrSlug": c.get("slug") or c["id"], "filters": {}, "limit": 100}) or {})
+    ids = list(dict.fromkeys(ids))
+    got = _call(tab, "productsByIds", {"showcaseId": "SC", "productIds": ids[:200]}) if ids else []
+    return (_named(got or [], query),
+            f"разделы Самоката «{tag}» ({len(hit)})" + (f", названия со словами «{query}»" if (query or "").split() else ""), query)
+
+
+def _ids(d):
+    """One category's product ids: its subcategories' breadth first, then its own products."""
+    ids, stack = [], list(d.get("categories") or [])
+    while stack:
+        x = stack.pop(0)
+        ids += x.get("productIds") or []
+        stack += x.get("children") or []
+    return ids + [p.get("id") for p in d.get("products") or []]
+
+
+def _named(got, query):
+    """The products (the answer may hold other things) whose names have each query word's first 5 letters."""
+    words = [w[:5].lower() for w in (query or "").split()]
+    return [p for p in got if isinstance(p, dict) and all(w in (p.get("name") or "").lower() for w in words)]
+
+
+def _by_text(tab, query, tag):
+    """(products the site's search finds, note, the query searched), None when it does not answer"""
+    note = ""
+    if tag:
+        note, query = f"раздела «{tag}» у Самоката нет — искал «{query} {tag}» текстом", f"{query} {tag}".strip()
+    d = _call(tab, "searchProducts", {"query": query, "showcaseId": "SC"})
+    return None if d is None else ([x for x in d if x.get("type") == "PRODUCT"], note, query)
+
+
+SORT_KEYS = {"price": lambda x: x["price"] or 1e9, "price_desc": lambda x: -(x["price"] or 0),
+             "discount": lambda x: (x["price"] or 0) / (x["old"] or x["price"] or 1), "rating": lambda x: 0}
+
+
+def _result(items, note, query, facets, sort, page, limit):
     rows = [_listed(p) for p in items]
     if sort != "popular":
-        key = {"price": lambda x: x["price"] or 1e9, "price_desc": lambda x: -(x["price"] or 0),
-               "discount": lambda x: (x["price"] or 0) / (x["old"] or x["price"] or 1), "rating": lambda x: 0}[sort]
-        rows.sort(key=key)
+        rows.sort(key=SORT_KEYS[sort])
         note += ("\n" if note else "") + "Самокат не сортирует: отсортированы полученные товары"
     start = (page - 1) * limit
-    return {"items": rows[start:start + limit], "total": len(rows), "note": note.strip(), "facets": diet,
+    return {"items": rows[start:start + limit], "total": len(rows), "note": note.strip(), "facets": facets,
             "url": SITE + "/search?value=" + re.sub(r"\s+", "+", query or "")}
 
 
