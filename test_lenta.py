@@ -397,8 +397,8 @@ class LentaRemoveFromCartTests(unittest.TestCase):
 
     def test_weighed_line_under_one_unit(self):
         shop = Shop(qty=0.5)
-        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), "Кефир 2,5% в корзине Ленты нет")
-        self.assertEqual(shop.sent, [PAGE])
+        self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), "убрано из корзины Ленты: Кефир 2,5%")
+        self.assertEqual(shop.sent, [PAGE, ("−", MODIFY), PAGE])
 
     def test_cart_that_did_not_come(self):
         shop = Shop(qty=1, lookup=(False,))

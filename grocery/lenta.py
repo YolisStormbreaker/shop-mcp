@@ -7,6 +7,7 @@ sort, tag, page) through CDP Fetch — the headers stay the page's and are never
 for the delivery store the site chose (Гипер Лента or Супер Лента zone of the user's address).
 """
 import json
+import math
 import re
 import time
 import urllib.parse
@@ -359,7 +360,7 @@ def remove_from_cart(id_or_url):
         name = (card or {}).get("name") or pid
         if lookup is None:
             return BLOCKED
-        n = int(_quantity(lookup[0], pid))
+        n = math.ceil(_quantity(lookup[0], pid))     # a weighed line can be under one unit: 0.5 (kg)
         if not n:
             return f"{name} в корзине Ленты нет"
         _presses(tab, [DEC] * min(n, 30))      # «−» takes one unit; at one unit it removes the line
