@@ -47,7 +47,7 @@ CARD_DICT = dict(ITEM_ROW, brand="ПРОСТОКВАШИНО", photos=["https://
                  extra=["скидка -12%", "в наличии до 167 шт",
                         "доставка: Гипер Лента ~ 40 минут, заказ от 1000 ₽, доставка 79 ₽ от 1000 ₽, 0 ₽ от 4300 ₽",
                         "характеристики: Веганское: Нет; Содержание лактозы: Да; Производитель: АО «Молоко»",
-                        "отзывы (первые 3, ещё — grocery_reviews): 5★ Вкусный кефир | 3★ " + "х" * 200])
+                        "отзывы (первые 2, ещё — grocery_reviews): 5★ Вкусный кефир | 3★ " + "х" * 200])
 BARE = {"id": 5, "name": "Вода", "attributes": [{"id": 1, "name": "Состав", "alias": "ingredients", "value": "вода"}]}
 BARE_DICT = {"id": "5", "name": "Вода", "brand": "", "size": "", "price": None, "old": None, "available": False,
              "url": "https://lenta.com/product/x-5/", "rating": None, "reviews": None, "ean": None, "photos": [], "description": "",
@@ -200,7 +200,7 @@ class LentaReviewsTests(CardSite):
     def test_reviews_come_with_the_card(self):
         self.assertEqual(self.reviews(CARD, sort="new", page=2), "Лента · Кефир 2,5%: рейтинг 4.9 (2846 оценок)\n"
                          "Лента отдаёт с карточкой 5 последних отзывов; фото в отзывах у Ленты нет\n"
-                         "отзывы (первые 3, ещё — grocery_reviews): 5★ Вкусный кефир | 3★ " + "х" * 200)
+                         "отзывы (первые 2, ещё — grocery_reviews): 5★ Вкусный кефир | 3★ " + "х" * 200)
 
     def test_no_reviews(self):
         self.assertEqual(self.reviews(BARE), "Лента · Вода: рейтинг — (0 оценок)\n"
@@ -208,7 +208,7 @@ class LentaReviewsTests(CardSite):
 
     def test_reviews_without_text(self):
         got = self.reviews(dict(BARE, reviews=[{"rating": 4, "text": ""}, {"rating": 5}]))
-        self.assertEqual(got.splitlines()[-1], "отзывы (первые 2, ещё — grocery_reviews): ")
+        self.assertEqual(got.splitlines()[-1], "(отзывов нет)")
 
     def test_no_card(self):
         self.assertEqual(self.reviews(None), "Лента: карточка 84812 не пришла (неверный id или проверка на бота)")

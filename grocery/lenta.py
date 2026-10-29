@@ -239,11 +239,11 @@ def _delivery(zones):
 
 
 def _reviews_line(c):
-    revs = c.get("reviews") or []
+    revs = [r for r in c.get("reviews") or [] if r.get("text")]
     if not revs:
         return ""
     return f"отзывы (первые {len(revs)}, ещё — grocery_reviews): " + " | ".join(
-        f"{r.get('rating')}★ {' '.join((r.get('text') or '').split())[:200]}" for r in revs if r.get("text"))
+        f"{r.get('rating')}★ {' '.join(r['text'].split())[:200]}" for r in revs)
 
 
 def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=5):
