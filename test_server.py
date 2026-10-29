@@ -195,10 +195,11 @@ class ToolTests(unittest.TestCase):
         images.assert_called_once_with(["https://a.lmcdn.ru/x.jpg"], 512)
 
     SITES = ("ali", "avito", "goldapple", "grocery", "images", "lamoda", "messenger", "orders", "ozon", "reviews", "wb", "ym")
-    SAMPLE = {str: "x", int: 7, bool: True, list[str]: ["x"]}
+    SAMPLE = {str: lambda n, i: f"<{n}>", int: lambda n, i: 7000 + i, list[str]: lambda n, i: [f"<{n}>"]}
 
     def test_every_tool_hands_its_arguments_to_a_site_function_that_takes_them(self):
-        # autospec: a site function whose parameters no longer match the tool's call raises TypeError here
+        # autospec: a site function whose parameters no longer match the tool's call raises TypeError here;
+        # the tools' defaults are their site functions' defaults (113 of them on 2026-10-29), so the two cannot drift apart
         names = sorted(t.name for t in asyncio.run(server.mcp.list_tools()))
         self.assertGreater(len(names), 50)
         sites = {s: create_autospec(getattr(server, s)) for s in self.SITES}
@@ -206,7 +207,8 @@ class ToolTests(unittest.TestCase):
             if name == "shop_status":
                 continue
             tool = getattr(server, name)
-            args = {p.name: self.SAMPLE[p.annotation] for p in inspect.signature(tool).parameters.values() if p.default is p.empty}
+            args = {p.name: self.SAMPLE[p.annotation](p.name, i)       # values no default has
+                    for i, p in enumerate(inspect.signature(tool).parameters.values()) if p.default is p.empty}
             for m in sites.values():
                 m.reset_mock()
             with self.subTest(name), patch.multiple(server, **sites):
@@ -217,6 +219,12 @@ class ToolTests(unittest.TestCase):
                 self.assertIs(out, getattr(sites[site], fn).return_value)
                 for v in args.values():
                     self.assertIn(v, list(a) + list(kw.values()))
+                # an argument left out of the tool reaches the site function as that function's own default
+                own = inspect.signature(getattr(getattr(server, site), fn))
+                for param, got in own.bind(*a, **kw).arguments.items():
+                    default = own.parameters[param].default
+                    if got not in args.values() and default is not inspect.Parameter.empty:
+                        self.assertEqual(got, default, f"{name}: {site}.{fn}({param}=...)")
 
 
 if __name__ == "__main__":
