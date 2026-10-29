@@ -239,16 +239,18 @@ BUTTONS = {"[data-testid=snippet-control]": "В корзину", "[data-testid=s
 CLICKS = {"(() => { const b = document.querySelector('" + sel + "'); if (!b) return false; b.click(); return true })()": name
           for sel, name in BUTTONS.items()}
 RETRIEVE = ("cart/v1/retrieve", {}, "regular")
+UNCHECKED = "Кефир 2,5%: Лавка не отдала корзину, и не видно, что получилось — проверь grocery_cart, прежде чем повторять"
 
 
 class Shop:
     """The site as the cart code meets it: the product API, the cart of each depot (cart/v1/retrieve), the product
     page with «В корзину» while its depot's cart has none of the product, «+» and «−» while it has some, a click
     changing that cart.  sent: API calls (path, body, depot), page loads and clicks in order."""
-    def __init__(self, qty=0, depot="regular", good=GOOD, buttons=True, reads=True, checkout=True):
+    def __init__(self, qty=0, depot="regular", good=GOOD, buttons=True, reads=(True,), checkout=True):
+        """reads: whether each cart read in turn gets an answer (the last one goes for the reads after it)."""
         self.carts = {"regular": {}, "supermarket": {}}
         self.carts[depot]["a1b2"] = qty
-        self.good, self.buttons, self.reads, self.checkout, self.page, self.sent = good, buttons, reads, checkout, None, []
+        self.good, self.buttons, self.reads, self.checkout, self.page, self.sent = good, buttons, list(reads), checkout, None, []
         self.tab = MagicMock()
         self.tab.js.side_effect, self.tab.goto.side_effect = self.click, self.goto
 
@@ -256,7 +258,7 @@ class Shop:
         assert tab is self.tab
         self.sent.append((path, body, depot))
         if path == "cart/v1/retrieve":
-            return self.retrieve(depot) if self.reads else None
+            return self.retrieve(depot) if (self.reads.pop(0) if len(self.reads) > 1 else self.reads[0]) else None
         assert path == "v1/product" and body == {"productId": body["productId"], "enableUnavailable": True}, (path, body)
         return {"product": self.good} if self.good and body["productId"] in ("a1b2", "kefir-1") else {}
 
@@ -334,6 +336,16 @@ class LavkaAddToCartTests(unittest.TestCase):
         self.assertEqual(shop.run(lavka.add_to_cart, "a1b2", 3), "Лавка не положила Кефир 2,5% в корзину (кнопка не сработала)")
         self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, RETRIEVE])
 
+    def test_cart_that_did_not_come(self):
+        shop = Shop(qty=1, reads=(False,))
+        self.assertEqual(shop.run(lavka.add_to_cart, "a1b2"), lavka.BLOCKED)
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE])
+
+    def test_cart_that_did_not_come_back(self):
+        shop = Shop(reads=(True, False))
+        self.assertEqual(shop.run(lavka.add_to_cart, "a1b2", 2), UNCHECKED)
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, "В корзину", "+", RETRIEVE])
+
     def test_unknown_product(self):
         shop = Shop(good=None)
         with self.assertRaisesRegex(ValueError, "Лавка: товар zz не найден"):
@@ -363,9 +375,14 @@ class LavkaRemoveFromCartTests(unittest.TestCase):
         self.assertEqual(shop.sent, [OPEN, PAGE] + [RETRIEVE, "−"] * 30 + [RETRIEVE])
 
     def test_cart_that_did_not_come(self):
-        shop = Shop(qty=1, reads=False)
-        self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), "убрано из корзины Лавка у дома: Кефир 2,5%")
+        shop = Shop(qty=1, reads=(False,))
+        self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), lavka.BLOCKED)
         self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE])
+
+    def test_cart_that_did_not_come_back(self):
+        shop = Shop(qty=2, reads=(True, False))
+        self.assertEqual(shop.run(lavka.remove_from_cart, "a1b2"), UNCHECKED)
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, "−", RETRIEVE])
 
     def test_unknown_product(self):
         shop = Shop(good=None)
@@ -388,9 +405,15 @@ class LavkaCartTests(unittest.TestCase):
         self.assertEqual(shop.run(lavka.cart), "корзина Лавки\nБольшая лавка: 115 ₽ без доставки, итого 214 ₽\n  s:a1b2\t1 шт\t115 ₽\tКефир 2,5%")
 
     def test_empty(self):
-        for reads in (True, False):
-            with self.subTest(reads=reads):
-                self.assertEqual(Shop(reads=reads).run(lavka.cart), "корзины Лавки (у дома и Большой лавки) пусты")
+        self.assertEqual(Shop().run(lavka.cart), "корзины Лавки (у дома и Большой лавки) пусты")
+
+    def test_cart_that_did_not_come(self):
+        self.assertEqual(Shop(reads=(False,)).run(lavka.cart), lavka.BLOCKED)
+
+    def test_one_depot_did_not_answer(self):
+        self.assertEqual(Shop(qty=2, reads=(True, False)).run(lavka.cart), "корзина Лавки\n"
+                         "Лавка у дома: 230 ₽ без доставки, итого 329 ₽\n  a1b2\t2 шт\t115 ₽\tКефир 2,5%\nБольшая лавка: корзина не пришла")
+        self.assertEqual(Shop(depot="supermarket", reads=(False, True)).run(lavka.cart), "корзина Лавки\nЛавка у дома: корзина не пришла")
 
 
 class LavkaFavoritesTests(unittest.TestCase):
@@ -407,9 +430,12 @@ class LavkaFavoritesTests(unittest.TestCase):
                          "избранное Лавки\nid\tцена ₽\tналичие\tназвание\nk1\t115.0\t\tКефир 3,2%\nk3\t89.0\tнет в наличии\tКефир 1%")
 
     def test_no_favorites(self):
-        for answer in ({"products": []}, {}, None):
+        for answer in ({"products": []}, {}):
             with self.subTest(answer):
                 self.assertEqual(self.favorites(answer), "избранное Лавки пусто")
+
+    def test_favorites_that_did_not_come(self):
+        self.assertEqual(self.favorites(None), lavka.BLOCKED)
 
 
 class LavkaFavoriteTests(unittest.TestCase):

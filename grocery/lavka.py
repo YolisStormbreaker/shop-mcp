@@ -237,13 +237,15 @@ def _photos(c):
 
 # Cart: its update call carries the whole cart with the delivery address the page keeps, so we press the page's
 # own buttons on the product page (element.click() works in the hidden tab) and read the cart back by API.
+UNCHECKED = "{}: Лавка не отдала корзину, и не видно, что получилось — проверь grocery_cart, прежде чем повторять"
 MAIN = "[data-testid=snippet-control-base]"           # the product's own controls; cards below have the same buttons
 ADD, PLUS, MINUS = "[data-testid=snippet-control]", f"{MAIN} [data-testid=add-spin-button]", f"{MAIN} [data-testid=remove-spin-button]"
 
 
 def _cart_items(tab, depot):
-    r = _post(tab, "cart/v1/retrieve", {}, depot) or {}
-    return {i.get("id"): i for i in r.get("items") or []}, r
+    """({id: line}, the answer) of depot's cart; None when the site did not answer, which is not an empty cart."""
+    r = _post(tab, "cart/v1/retrieve", {}, depot)
+    return None if r is None else ({i.get("id"): i for i in r.get("items") or []}, r)
 
 
 def _good(tab, pid, depot):
@@ -264,7 +266,8 @@ def _quantity(items, pid):
 
 
 def _qty(tab, pid, depot):
-    return _quantity(_cart_items(tab, depot)[0], pid)
+    got = _cart_items(tab, depot)
+    return None if got is None else _quantity(got[0], pid)
 
 
 def _click(tab, sel):
@@ -289,14 +292,24 @@ def add_to_cart(id_or_url, quantity=1):
         start = _qty(tab, pid, depot)
         if not c.get("available"):
             return f"Лавка: {_clean(c.get('longTitle'))} сейчас нет в наличии"
+        if start is None:
+            return BLOCKED
         _clicks(tab, [PLUS if start else ADD] + [PLUS] * (max(1, min(int(quantity), 30)) - 1))
-        items, r = _cart_items(tab, depot)
+        got = _cart_items(tab, depot)
     finally:
         tab.close()
-    n = _quantity(items, pid)
+    return _added(c, depot, start, got)
+
+
+def _added(c, depot, start, got):
+    title = _clean(c.get("longTitle"))
+    if got is None:
+        return UNCHECKED.format(title)
+    items, r = got
+    n = _quantity(items, c["id"])
     if n <= start:
-        return f"Лавка не положила {_clean(c.get('longTitle'))} в корзину (кнопка не сработала)"
-    return (f"в корзине {DEPOTS[depot]}: {_clean(c.get('longTitle'))} — {n:g} шт; корзина {r.get('totalItemsPrice')} ₽ без доставки"
+        return f"Лавка не положила {title} в корзину (кнопка не сработала)"
+    return (f"в корзине {DEPOTS[depot]}: {title} — {n:g} шт; корзина {r.get('totalItemsPrice')} ₽ без доставки"
             + (f" · к заказу пока нельзя: {r.get('checkoutUnavailableReason')}" if not r.get("availableForCheckout") else ""))
 
 
@@ -307,6 +320,8 @@ def remove_from_cart(id_or_url):
         c = _open_good(tab, pid, depot)
         pid = c["id"]
         left = _qty(tab, pid, depot)
+        if left is None:
+            return BLOCKED
         for _ in range(30):
             if not left or not _click(tab, MINUS):
                 break
@@ -314,30 +329,44 @@ def remove_from_cart(id_or_url):
             left = _qty(tab, pid, depot)
     finally:
         tab.close()
-    return f"не удалось убрать {_clean(c.get('longTitle'))} из корзины Лавки" if left else f"убрано из корзины {DEPOTS[depot]}: {_clean(c.get('longTitle'))}"
+    title = _clean(c.get("longTitle"))
+    if left is None:
+        return UNCHECKED.format(title)
+    return f"не удалось убрать {title} из корзины Лавки" if left else f"убрано из корзины {DEPOTS[depot]}: {title}"
 
 
 def cart():
     tab = _tab()
     try:
-        out = []
-        for depot, name in DEPOTS.items():
-            items, r = _cart_items(tab, depot)
-            if items:
-                out.append(f"{name}: {r.get('totalItemsPrice')} ₽ без доставки, итого {r.get('totalPriceValue')} ₽"
-                           + ("" if r.get("availableForCheckout") else f" (к заказу нельзя: {r.get('checkoutUnavailableReason')})"))
-                out += [f"  {('s:' if depot == 'supermarket' else '') + i}\t{x.get('quantity')} шт\t{x.get('price')} ₽\t{_clean(x.get('title'))}" for i, x in items.items()]
+        got = [(depot, _cart_items(tab, depot)) for depot in DEPOTS]
     finally:
         tab.close()
+    if all(g is None for _, g in got):
+        return BLOCKED
+    out = [line for depot, g in got for line in _depot_cart(depot, g)]
     return "корзина Лавки\n" + "\n".join(out) if out else "корзины Лавки (у дома и Большой лавки) пусты"
+
+
+def _depot_cart(depot, got):
+    """Lines of depot's cart: its totals, then a row per product; none for an empty cart."""
+    if got is None:
+        return [f"{DEPOTS[depot]}: корзина не пришла"]
+    items, r = got
+    if not items:
+        return []
+    return [f"{DEPOTS[depot]}: {r.get('totalItemsPrice')} ₽ без доставки, итого {r.get('totalPriceValue')} ₽"
+            + ("" if r.get("availableForCheckout") else f" (к заказу нельзя: {r.get('checkoutUnavailableReason')})")] + [
+        f"  {('s:' if depot == 'supermarket' else '') + i}\t{x.get('quantity')} шт\t{x.get('price')} ₽\t{_clean(x.get('title'))}" for i, x in items.items()]
 
 
 def favorites():
     tab = _tab()
     try:
-        d = _post(tab, "v1/api/v1/user/favorites", {}) or {}
+        d = _post(tab, "v1/api/v1/user/favorites", {})
     finally:
         tab.close()
+    if d is None:
+        return BLOCKED
     rows = [_listed(p, "regular") for p in d.get("products") or []]
     if not rows:
         return "избранное Лавки пусто"
