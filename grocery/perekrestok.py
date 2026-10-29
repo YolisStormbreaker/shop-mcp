@@ -168,13 +168,15 @@ def search(query, tag=None, sort="popular", page=1, limit=30):
             "facets": diet + kinds[:25], "url": f"{SITE}/cat/search?" + urllib.parse.urlencode(q)}
 
 
-def _feature(p, title=None, key=None):
-    for f in p.get("features") or []:
-        for it in f.get("items") or []:
-            if (title and f.get("title") == title) or (key and it.get("key") == key):
-                if key is None or it.get("key") == key:
-                    return it
-    return None
+def _items(p):
+    """(feature title, item) for every item of the card's characteristics."""
+    return [(f.get("title") or "", it) for f in p.get("features") or [] for it in f.get("items") or []]
+
+
+def _feature(p, key, field):
+    """The first of field's values in the card's item key: _feature(p, "brand", "displayValues") → "Простоквашино"."""
+    it = next((it for _, it in _items(p) if it.get("key") == key), {})
+    return (it.get(field) or [""])[0]
 
 
 def product(id_or_url):
@@ -187,45 +189,65 @@ def product(id_or_url):
         tab.close()
     if not isinstance(p, dict) or "masterData" not in p:
         return BLOCKED if not isinstance(p, dict) or p.get("__error") not in (404,) else f"Перекрёсток: товар {plu} не найден"
-    nut = {}
-    for f in p.get("features") or []:
-        if "Пищевая ценность" in (f.get("title") or ""):
-            for it in f.get("items") or []:
-                k = {"kkal": "kcal", "belki": "protein", "jiry": "fat", "uglevody": "carbs"}.get(it.get("key"))
-                v = (it.get("values") or [None])[0]
-                if k and v not in (None, ""):
-                    nut[k] = round(float(v) / 1000, 2)
-    comp = ((_feature(p, key="sostav") or {}).get("values") or [""])[0]
-    brand = ((_feature(p, key="brand") or {}).get("displayValues") or [""])[0]
-    info = []
-    for f in p.get("features") or []:
-        if f.get("title") in ("Состав",) or "Пищевая ценность" in (f.get("title") or ""):
-            continue
-        for it in f.get("items") or []:
-            if it.get("key") != "brand" and it.get("displayValues"):
-                info.append(f"{it.get('title') or it.get('key')}: {', '.join(it['displayValues'])}")
-    pt = p.get("priceTag") or {}
-    extra = []
-    if pt.get("labels"):
-        extra.append("акции: " + "; ".join(x.get("text", "") for x in pt["labels"] if x.get("text")))
-    md = p.get("masterData") or {}
-    if md.get("unitName") == "кг" and md.get("quantum"):
-        extra.append(f"весовой товар: цена за кг, шаг продажи {md['quantum'] / 1000:g} кг (≈ {round(_rub(pt.get('price')) * md['quantum'] / 1000)} ₽ за шаг)")
-    if p.get("medianPrice"):
-        extra.append(f"обычная цена (медиана): {_rub(p['medianPrice'])} ₽")
-    tabs = [f"{t.get('title') or t.get('type')}: {t.get('costString') or (str(_rub(t.get('cost'))) + ' ₽')}, "
-            f"{(t.get('congestion') or {}).get('deliveryRange') or ''}".strip(", ")
-            + (f", заказ от {_rub(t['minCost'])} ₽" if t.get("minCost") else "") for t in delivery.get("tabs") or [] if t.get("type") != "catalog"]
-    if tabs:
-        extra.append("доставка на адрес из профиля: " + "; ".join(tabs))
-    if info:
-        extra.append("характеристики: " + "; ".join(info))
-    imgs = [i["cropUrlTemplate"].replace("%s", "800x800-fit") for i in p.get("images") or [] if i.get("cropUrlTemplate")]
+    return _card(p, delivery)
+
+
+def _card(p, delivery):
+    info = _info(p)
     out = _listed(p)
-    out.update(brand=brand, url=_url(p), photos=imgs, description=p.get("description") or "", composition=comp,
-               nutrition=nut, reviews=p.get("reviewCount") or p.get("ratingCount"),
-               composition_extra="; ".join(x for x in info if re.search(r"какао|мяс|сок|жирн|шоколад", x, re.I)), extra=extra)
+    out.update(brand=_feature(p, "brand", "displayValues"), photos=_photos(p.get("images")), description=p.get("description") or "",
+               composition=_feature(p, "sostav", "values"), nutrition=_nutrition(p), reviews=p.get("reviewCount") or p.get("ratingCount"),
+               composition_extra="; ".join(x for x in info if re.search(r"какао|мяс|сок|жирн|шоколад", x, re.I)), extra=_extra(p, delivery, info))
     return out
+
+
+NUTRITION = "Пищевая ценность"
+NUTRIENTS = {"kkal": "kcal", "belki": "protein", "jiry": "fat", "uglevody": "carbs"}
+
+
+def _nutrition(p):
+    nut = {}
+    for title, it in _items(p):
+        k = NUTRIENTS.get(it.get("key")) if NUTRITION in title else None
+        v = (it.get("values") or [None])[0] if k else None
+        if v not in (None, ""):
+            nut[k] = round(float(v) / 1000, 2)
+    return nut
+
+
+def _info(p):
+    """«name: values» of the card's characteristics but its composition, nutrition and brand."""
+    return [f"{it.get('title') or it.get('key')}: {', '.join(it['displayValues'])}" for title, it in _items(p)
+            if title != "Состав" and NUTRITION not in title and it.get("key") != "brand" and it.get("displayValues")]
+
+
+def _extra(p, delivery, info):
+    pt = p.get("priceTag") or {}
+    return [x for x in (pt.get("labels") and "акции: " + "; ".join(x.get("text", "") for x in pt["labels"] if x.get("text")),
+                        _weighed(p.get("masterData") or {}, pt),
+                        p.get("medianPrice") and f"обычная цена (медиана): {_rub(p['medianPrice'])} ₽",
+                        _delivery(delivery), info and "характеристики: " + "; ".join(info)) if x]
+
+
+def _weighed(md, pt):
+    if md.get("unitName") != "кг" or not md.get("quantum"):
+        return ""
+    return f"весовой товар: цена за кг, шаг продажи {md['quantum'] / 1000:g} кг (≈ {round(_rub(pt.get('price')) * md['quantum'] / 1000)} ₽ за шаг)"
+
+
+def _delivery(delivery):
+    tabs = [_delivery_tab(t) for t in delivery.get("tabs") or [] if t.get("type") != "catalog"]
+    return tabs and "доставка на адрес из профиля: " + "; ".join(tabs)
+
+
+def _delivery_tab(t):
+    return (f"{t.get('title') or t.get('type')}: {t.get('costString') or (str(_rub(t.get('cost'))) + ' ₽')}, "
+            f"{(t.get('congestion') or {}).get('deliveryRange') or ''}".strip(", ")
+            + (f", заказ от {_rub(t['minCost'])} ₽" if t.get("minCost") else ""))
+
+
+def _photos(images):
+    return [i["cropUrlTemplate"].replace("%s", "800x800-fit") for i in images or [] if i.get("cropUrlTemplate")]
 
 
 SORTS = {"useful": {}, "new": {}, "high": {"ratingFrom": 500, "ratingTo": 500}, "low": {"ratingFrom": 100, "ratingTo": 200}}
