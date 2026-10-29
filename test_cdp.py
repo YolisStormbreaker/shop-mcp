@@ -1,6 +1,7 @@
 """site_tab: the site's tab, sent to its home page only when it shows something else.
 page_json: fetch() from the page, with one retry after a home page load when the answer is not JSON.
 Tab: what goes over the DevTools socket (a scripted fake, no Chrome) and how long each wait lasts (a fake clock).
+_lock_site with real flock() in a temp dir, _find_tab / tab_for on scripted /json answers, _http.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_cdp"""
 import fcntl
 import json
