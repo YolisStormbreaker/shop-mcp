@@ -62,7 +62,7 @@ class LavkaProductTests(unittest.TestCase):
             "url": "https://lavka.yandex.ru/supermarket/good/z9", "rating": None, "reviews": None, "ean": None,
             "photos": ["https://img/orig/s.jpg"], "description": "", "composition": "вода. следы солей",
             "nutrition": {"carbs": 0.0, "sugar": 0.0}, "composition_extra": "",
-            "extra": ["доставка (Большая лавка): завтра, бесплатно; "]})
+            "extra": ["доставка (Большая лавка): завтра, бесплатно"]})
 
     def test_no_delivery_info(self):
         got, _ = product(BARE, None)

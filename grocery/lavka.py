@@ -200,7 +200,7 @@ def _delivery(info, depot):
     cost = _clean(str(pc.get("deliveryCost")))
     return (f"доставка ({DEPOTS[depot]}): {_clean(info.get('deliveryTimeText'))}"
             + (f", доставка {cost} ₽" if str(pc.get("deliveryCost", "")).isdigit() else f", {cost}" if pc.get("deliveryCost") else "")
-            + "; " + "; ".join(_clean(f"{x.get('name', '')} {x.get('threshold', '')}") for x in info.get("deliveryConditions") or [])
+            + "".join("; " + _clean(f"{x.get('name', '')} {x.get('threshold', '')}") for x in info.get("deliveryConditions") or [])
             + ("" if info.get("isOpen", True) else " · сейчас закрыто"))
 
 
