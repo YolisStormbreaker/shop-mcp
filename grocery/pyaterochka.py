@@ -186,37 +186,65 @@ def product(id_or_url):
     try:
         store, note = _ctx(tab)
         c = _get(tab, f"{API}/v2/stores/{store}/products/{plu}?mode=delivery&include_restrict=true")
-        rv = _get(tab, f"{REVIEWS}/product-reviews/count?plu_id={plu}") or {}
+        rv = _get(tab, f"{REVIEWS}/product-reviews/count?plu_id={plu}")
     finally:
         tab.close()
     if not c or "plu" not in c:
         return BLOCKED if c is None else f"Пятёрочка: товар {plu} не найден"
-    prices = {x.get("placement_type"): _num(x.get("value")) for x in c.get("prices") or []}
-    cur = prices.get("promotional_primary") or prices.get("regular_primary")
-    old = prices.get("regular_secondary") if prices.get("promotional_primary") else None
-    attrs = {a["name"]: f"{a['value']} {a.get('uom') or ''}".strip() for a in c.get("attributes") or []}
-    nut = {}
-    for n in c.get("nutrients") or []:
-        k = {"белки": "protein", "жиры": "fat", "углеводы": "carbs", "ккал": "kcal"}.get((n.get("text") or "").lower())
-        if k and _num(n.get("value")) is not None:
-            nut[k] = _num(n["value"])
-    skip = {"Белки", "Жиры", "Углеводы", "Энергетическая ценность", "Бренд"}
-    rc = (rv.get("content") or {}) if isinstance(rv, dict) else {}
-    rt = c.get("rating") or {}
-    extra = [note] if note else []
-    extra.append("характеристики: " + "; ".join(f"{k}: {v}" for k, v in attrs.items() if k not in skip))
-    if rc.get("reviews_count"):
-        extra.append(f"отзывов с текстом {rc['reviews_count']} (grocery_reviews), звёзды: "
-                     + " ".join(f"{i}★ {rc.get(w, 0)}" for i, w in ((5, 'five'), (4, 'four'), (3, 'three'), (2, 'two'), (1, 'one'))))
-    extra.append("доставка: срок и цена — только в корзине на сайте после выбора адреса")
+    return _card(plu, c, rv, note)
+
+
+def _card(plu, c, rv, note):
+    attrs, rt = _attrs(c), c.get("rating") or {}
+    price, old = _price(c)
     return {"id": plu, "name": c.get("name", ""), "brand": attrs.get("Бренд", ""), "size": c.get("property_clarification") or "",
-            "price": cur, "old": old, "available": bool(c.get("is_available")), "url": f"https://5ka.ru/product/{plu}/",
+            "price": price, "old": old, "available": bool(c.get("is_available")), "url": f"https://5ka.ru/product/{plu}/",
             "rating": rt.get("rating_average"), "reviews": rt.get("rates_count"), "ean": None,
             "photos": [u.split("?")[0] for u in (c.get("image_links") or {}).get("normal") or []],
             "description": re.sub(r"\s+", " ", c.get("description") or "").strip(),
-            "composition": c.get("ingredients") or "", "nutrition": nut,
+            "composition": c.get("ingredients") or "", "nutrition": _nutrition(c),
             "composition_extra": "; ".join(f"{k}: {v}" for k, v in attrs.items() if re.search(r"какао|мяс|сок|молок|жирн", k, re.I)),
-            "extra": extra}
+            "extra": _extra(note, attrs, rv)}
+
+
+def _price(c):
+    """(the price now, the regular price when that is a promotion)"""
+    prices = {x.get("placement_type"): _num(x.get("value")) for x in c.get("prices") or []}
+    promo = prices.get("promotional_primary")
+    return promo or prices.get("regular_primary"), prices.get("regular_secondary") if promo else None
+
+
+def _attrs(c):
+    return {a["name"]: f"{a['value']} {a.get('uom') or ''}".strip() for a in c.get("attributes") or []}
+
+
+NUTRIENTS = {"белки": "protein", "жиры": "fat", "углеводы": "carbs", "ккал": "kcal"}
+
+
+def _nutrition(c):
+    nut = {}
+    for n in c.get("nutrients") or []:
+        k = NUTRIENTS.get((n.get("text") or "").lower())
+        if k and _num(n.get("value")) is not None:
+            nut[k] = _num(n["value"])
+    return nut
+
+
+SKIP = {"Белки", "Жиры", "Углеводы", "Энергетическая ценность", "Бренд"}    # they have fields of their own
+STARS = ((5, "five"), (4, "four"), (3, "three"), (2, "two"), (1, "one"))
+
+
+def _stars(count):
+    return " ".join(f"{i}★ {count.get(w, 0)}" for i, w in STARS)
+
+
+def _extra(note, attrs, rv):
+    rc = (rv.get("content") or {}) if isinstance(rv, dict) else {}
+    extra = [note] if note else []
+    extra.append("характеристики: " + "; ".join(f"{k}: {v}" for k, v in attrs.items() if k not in SKIP))
+    if rc.get("reviews_count"):
+        extra.append(f"отзывов с текстом {rc['reviews_count']} (grocery_reviews), звёзды: " + _stars(rc))
+    return extra + ["доставка: срок и цена — только в корзине на сайте после выбора адреса"]
 
 
 SORTS = {"useful": "useful", "new": "newest", "high": "rating_desc", "low": "rating_asc"}
