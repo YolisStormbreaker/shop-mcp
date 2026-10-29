@@ -205,7 +205,7 @@ class VkusvillReviewsTests(unittest.TestCase):
     def test_later_page_without_reviews(self):
         got, script = self.reviews(None, NOTHING, "6", sort="new", page=3)
         self.assertIn(json.dumps(REVIEWS + "id=6&sort=pr__comment_new&brand=&filter=0&page=3&isInited=Y"), script)
-        self.assertEqual(got, "ВкусВилл · Хлеб: рейтинг None (None оценок)\n"
+        self.assertEqual(got, "ВкусВилл · Хлеб: рейтинг — (0 оценок)\n"
                               "страница 3 по 10, сортировка new; фото в отзывах ВкусВилла нет\n"
                               "дата\t★\tполезно\tтекст\n(отзывов нет)")
 

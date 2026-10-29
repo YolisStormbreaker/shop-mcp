@@ -264,7 +264,7 @@ def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=10):
         tab.close()
     p = _listed(_mcp("vkusvill_product_details", {"id": int(pid)}))
     rows = [f"{x['date']}\t{x['rate']}\t{x['likes']}\t{x['text']}" for x in d.get("items") or []]
-    return (f"ВкусВилл · {p['name']}: рейтинг {p['rating']} ({p['reviews']} оценок)\n"
+    return (f"ВкусВилл · {p['name']}: рейтинг {p['rating'] or '—'} ({p['reviews'] or 0} оценок)\n"
             f"страница {page} по 10, сортировка {sort}; фото в отзывах ВкусВилла нет" + ("; есть ещё: page=" + str(page + 1) if d.get("more") else "")
             + "\nдата\t★\tполезно\tтекст\n" + ("\n".join(rows) if rows else "(отзывов нет)"))
 
