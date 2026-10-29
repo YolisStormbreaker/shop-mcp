@@ -5,7 +5,6 @@ One reusable tab per site (matched by domain), so the browser does not pile up t
 import fcntl
 import itertools
 import json
-import os
 import subprocess
 import time
 import urllib.request
@@ -23,9 +22,9 @@ LOCKS = Path(__file__).parent / "cache"
 LOCK_WAIT = 300  # s; a first full ozon_orders pass holds the tab ~3 min
 
 
-def _http(path: str, method: str = "GET"):
+def _http(path: str, method: str = "GET", timeout: float = 10):
     req = urllib.request.Request(CDP + path, method=method)
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
 
@@ -168,39 +167,48 @@ CHROME_APP = Path("/Applications/Google Chrome.app")
 AGENT = Path.home() / "Library/LaunchAgents/local.shop-chrome.plist"
 
 
+def _up() -> bool:
+    try:
+        _http("/json/version", timeout=2)
+        return True
+    except OSError:
+        return False
+
+
 def _start_chrome():
-    """Port 9222 is down: the shop Chrome was quit, crashed, its agent unloaded, or this Mac never had it set up.
-    Bring it back the way the user would (shop-chrome), or say exactly what is missing."""
+    """Port 9222 is down: the shop Chrome is closed (it starts only on demand, launchd neither opens it at login
+    nor reopens it after quit), crashed, or this Mac never had it set up.  Start it the way the user would
+    (shop-chrome start, or setup on first use), or say exactly what is missing.  The MCP servers of several
+    sessions, the HTTP server and watch.py are separate processes: the file lock lets one of them start it."""
     if not CHROME_APP.exists():
-        return "Google Chrome не установлен (нет /Applications/Google Chrome.app): установите его, затем ~/shop-mcp/shop-chrome setup"
-    if AGENT.exists():
-        label = f"gui/{os.getuid()}/local.shop-chrome"
-        if subprocess.run(["launchctl", "kickstart", label], capture_output=True).returncode:    # agent unloaded
-            subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(AGENT)], capture_output=True)
-        log.warning("Chrome on 9222 was down: kickstarted local.shop-chrome")
-    else:    # first use on this Mac: install the LaunchAgent the same way a person would
-        r = subprocess.run([str(Path(__file__).parent / "shop-chrome"), "setup"], capture_output=True, text=True, timeout=90)
-        log.warning("Chrome on 9222 was down and not set up: shop-chrome setup -> %s %s", r.returncode, (r.stdout + r.stderr)[-300:])
-        if r.returncode:
-            return f"shop-chrome setup не удался: {(r.stderr or r.stdout).strip()[-300:]}"
-    for _ in range(30):
-        time.sleep(1)
+        raise RuntimeError("Google Chrome не установлен (нет /Applications/Google Chrome.app): установите его, "
+                           "затем ~/shop-mcp/shop-chrome setup")
+    LOCKS.mkdir(exist_ok=True)
+    with open(LOCKS / "chrome-start.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        if _up():
+            return                  # another process started it while this one waited for the lock
+        cmd = "start" if AGENT.exists() else "setup"    # setup: first use on this Mac, installs the LaunchAgent
         try:
-            _http("/json/version")
-            time.sleep(2)            # let it restore its tabs
-            return None
-        except OSError:
-            pass
-    return "Chrome магазинов не поднялся на 127.0.0.1:9222 за 30 с: выполни ~/shop-mcp/shop-chrome status"
+            r = subprocess.run([str(Path(__file__).parent / "shop-chrome"), cmd], capture_output=True, text=True, timeout=90)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise RuntimeError(f"shop-chrome {cmd} не запустился: {e}") from e
+        log.warning("Chrome on 9222 was down: shop-chrome %s -> %s %s", cmd, r.returncode, (r.stdout + r.stderr)[-300:])
+        if r.returncode:
+            raise RuntimeError(f"shop-chrome {cmd} не удался: {(r.stderr or r.stdout).strip()[-300:]}")
+        for _ in range(30):
+            if _up():
+                time.sleep(2)       # let it restore its tabs
+                return
+            time.sleep(1)
+    raise RuntimeError("Chrome магазинов не поднялся на 127.0.0.1:9222 за 30 с: выполни ~/shop-mcp/shop-chrome status")
 
 
 def _find_tab(domain: str, lock) -> Tab:
     try:
         tabs = _http("/json/list")
     except OSError:
-        problem = _start_chrome()
-        if problem:
-            raise RuntimeError(problem)
+        _start_chrome()
         tabs = _http("/json/list")
     pages = [t for t in tabs if t.get("type") == "page"]
     for t in pages:

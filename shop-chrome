@@ -1,6 +1,8 @@
 #!/bin/zsh
 # The hidden Chrome that shop-mcp drives (LaunchAgent local.shop-chrome, port 9222):
 #   setup    install or repair everything (idempotent): LaunchAgent from launchd/, this command in ~/.local/bin, start Chrome
+#   start    start Chrome if it is closed; cdp.py runs it when a tool needs a tab. launchd itself neither opens it at login
+#            nor reopens it after quit (RunAtLoad and KeepAlive are false): it runs on demand
 #   status   what is installed and running, what is missing
 #   show / hide / restart / icon
 # ponytail: finds the instance by the debugging port, the only thing that tells it apart from the main Chrome.
@@ -12,12 +14,26 @@ plist=~/Library/LaunchAgents/local.shop-chrome.plist
 profile="$HOME/Library/Application Support/shop-chrome"
 version() { curl -s -m 2 http://127.0.0.1:9222/json/version | sed -n 's/.*"Browser": *"\([^"]*\)".*/\1/p' }
 has_uv() { command -v uv >/dev/null || [[ -x ~/.local/bin/uv || -x /opt/homebrew/bin/uv || -x /usr/local/bin/uv ]] }
+start() {   # kickstart without -k leaves a running Chrome alone (exit 0)
+  launchctl enable gui/$uid/local.shop-chrome
+  launchctl print gui/$uid/local.shop-chrome >/dev/null 2>&1 || launchctl bootstrap gui/$uid "$plist" || return
+  launchctl kickstart gui/$uid/local.shop-chrome
+}
+wait_port() { for i in {1..30}; do [[ -n $(version) ]] && return; sleep 1; done; return 1 }
 case $1 in
   show|hide)
-    [[ -n $pid ]] || { echo "shop Chrome не запущен: shop-chrome restart" >&2; exit 1; }
+    [[ -z $pid && $1 == hide ]] && exit 0                     # closed: nothing to hide
+    if [[ -z $pid ]]; then    # closed (it runs on demand): open it, and wait out the agent's own hiding 2–6 s after the port is up
+      start >/dev/null && wait_port && sleep 7
+      pid=$(lsof -tiTCP:9222 -sTCP:LISTEN)
+    fi
+    [[ -n $pid ]] || { echo "shop Chrome не запустился: shop-chrome status" >&2; exit 1; }
     js="ObjC.import('AppKit'); const a = \$.NSRunningApplication.runningApplicationWithProcessIdentifier($pid);"
     [[ $1 == show ]] && js+=" a.unhide; a.activateWithOptions(\$.NSApplicationActivateAllWindows)" || js+=" a.hide"
     osascript -l JavaScript -e "$js" >/dev/null ;;
+  start)
+    [[ -f $plist ]] || { echo "LaunchAgent не установлен: shop-chrome setup" >&2; exit 1; }
+    start ;;
   restart)
     launchctl kickstart -k gui/$uid/local.shop-chrome 2>/dev/null || { echo "LaunchAgent не загружен: shop-chrome setup" >&2; exit 1; } ;;
   icon)  # its own Dock/⌘Tab icon, for this process only (dock_icon.py); the LaunchAgent runs it at every start
@@ -36,9 +52,8 @@ case $1 in
       mv "$plist.new" "$plist"
       launchctl bootout gui/$uid/local.shop-chrome 2>/dev/null && sleep 2   # reload a changed agent (restarts this Chrome)
     fi
-    launchctl print gui/$uid/local.shop-chrome >/dev/null 2>&1 || launchctl bootstrap gui/$uid "$plist"
-    for i in {1..30}; do [[ -n $(version) ]] && break; sleep 1; done
-    [[ -n $(version) ]] || { echo "Chrome не открыл порт 9222 за 30 с: shop-chrome status" >&2; exit 1; }
+    start
+    wait_port || { echo "Chrome не открыл порт 9222 за 30 с: shop-chrome status" >&2; exit 1; }
     echo "shop Chrome работает: $(version)"
     has_uv || echo "⚠️ нет uv, без него сервер не запустится: curl -LsSf https://astral.sh/uv/install.sh | sh"
     [[ -s "$profile/Default/Cookies" ]] || echo "Профиль новый: войдите на нужные сайты — shop-chrome show, вход во вкладках, потом shop-chrome hide" ;;
@@ -46,9 +61,9 @@ case $1 in
     app=$([[ -x $chrome ]] && "$chrome" --version 2>/dev/null | awk '{print $3}')
     echo "Chrome: ${app:-НЕТ в /Applications — установите, затем shop-chrome setup}"
     [[ -f $plist ]] && echo "LaunchAgent: $plist" || echo "LaunchAgent: НЕТ — shop-chrome setup"
-    st=$(launchctl print gui/$uid/local.shop-chrome 2>/dev/null | awk '$1 == "state" {print $3; exit}')
+    st=$(launchctl print gui/$uid/local.shop-chrome 2>/dev/null | awk -F' = ' '$1 ~ /^[[:space:]]*state$/ {print $2; exit}')
     echo "агент: ${st:-не загружен (shop-chrome setup)}"
-    v=$(version); echo "порт 9222: ${v:-не отвечает}${pid:+ (pid $pid)}"
+    v=$(version); echo "порт 9222: ${v:-не отвечает — Chrome закрыт, запустится сам при первом запросе (или shop-chrome start)}${pid:+ (pid $pid)}"
     [[ -n $app && -n $v && ${v#Chrome/} != $app ]] && echo "⚠️ Chrome обновился до $app, а запущен ${v#Chrome/}: shop-chrome restart, потом снова status (проверка приоритета рендеров)"
     [[ -s "$profile/Default/Cookies" ]] && echo "профиль: $profile" || echo "профиль: новый или удалён — войдите на сайты (shop-chrome show)"
     has_uv && echo "uv: есть" || echo "uv: НЕТ — curl -LsSf https://astral.sh/uv/install.sh | sh"
@@ -56,5 +71,5 @@ case $1 in
     slow=$(ps -axo pri,stat,command | grep -- '--type=renderer' | grep shop-chrome | awk '$1 == 4 && $2 ~ /^R/' | wc -l | tr -d ' ')
     (( slow > 1 )) && echo "⚠️ $slow рендеров в фоновом приоритете macOS: флаг ForceForegroundPriorityForAllTabs перестал действовать"
     [[ -n $v ]] && curl -s -m 2 http://127.0.0.1:9222/json/list | sed -n 's/.*"url": *"\(https*:\/\/[^/"]*\).*/  вкладка \1/p' ;;
-  *) echo "usage: shop-chrome setup|status|show|hide|restart|icon" >&2; exit 1 ;;
+  *) echo "usage: shop-chrome setup|start|status|show|hide|restart|icon" >&2; exit 1 ;;
 esac

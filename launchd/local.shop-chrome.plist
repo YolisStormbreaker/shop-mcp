@@ -25,7 +25,9 @@
 </array>
 <!-- a GUI app: no launchd resource limits for background jobs -->
 <key>ProcessType</key><string>Interactive</string>
-<key>RunAtLoad</key><true/>
-<key>KeepAlive</key><true/>
+<!-- on demand: started by shop-chrome start (cdp.py runs it when a tool needs a tab), not at login,
+     and not reopened after the user quits it -->
+<key>RunAtLoad</key><false/>
+<key>KeepAlive</key><false/>
 <key>LimitLoadToSessionType</key><string>Aqua</string>
 </dict></plist>
