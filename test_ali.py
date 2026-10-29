@@ -4,7 +4,7 @@ import datetime
 import json
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import ali
 
@@ -185,13 +185,16 @@ BODY = "\n".join([
     "12 ноября — строка, в которой слишком много текста для строки со сроком доставки", "20 ₽",
     "В корзину", "1 декабря"])
 
+# The only click add_to_cart may make: element.click() on the visible «В корзину» button.
+CLICK_CART = "(e => { if (!e) return false; e.scrollIntoView({block: 'center'}); e.click(); return true; })(" + ali.CART_BTN + ")"
+
 
 def pdp(body=BODY, title="PD 60 Вт USB C кабель", price="88 ₽", props=("Цвет: as the pictures show", None, "Длина: 1m"),
-        search="?sku_id=12000035460442808", in_stock=True, combo=False, content=None):
-    """The product page as item() sees it: one answer per JS expression it runs there."""
+        search="?sku_id=12000035460442808", in_stock=True, combo=False, content=None, clicked=True):
+    """The product page as item() and add_to_cart() see it: one answer per JS expression they run there."""
     answers = {"document.body.innerText": body, "location.search": search, f"!!({ali.CART_BTN})": in_stock,
                f"!!({ali.COMBO_BTN})": combo, ali.CONTENT_JS: content or {"chars": "", "desc": "", "imgs": []},
-               "document.querySelector('h1')?.innerText.trim() || ''": title}
+               "document.querySelector('h1')?.innerText.trim() || ''": title, CLICK_CART: clicked}
 
     def js(expr, **_):
         if "propNameWrap" in expr:
@@ -404,6 +407,139 @@ class CartTests(unittest.TestCase):
         tab = cart_tab([])
         self.assertEqual(self.cart(tab), "корзина AliExpress пуста")
         self.assertEqual([c.args[0] for c in tab.js.call_args_list], [ali.CART_ROWS_JS])
+
+
+def cart_api(*counts):
+    """_fetch as add_to_cart() meets it: the product API, and the cart count answering with counts in order."""
+    left = iter(counts)
+    return lambda _tab, path, body=None, method="POST": PRODUCT_DATA if "/pdp/web/productData" in path else next(left)
+
+
+def count(n):
+    return {"data": {"count": n}}
+
+
+COUNT = "/aer-jsonapi/v2/cart/count"
+ADDED_TAIL = ("Цвет: as the pictures show; Длина: 1m\n"
+              "доставка: 9–12 ноября в пункт выдачи — 20 ₽ | 15–19 ноября почтой — бесплатно")
+
+
+class AddToCartTests(unittest.TestCase):
+    def add(self, tab, counts, *args, **kw):
+        with patch.object(ali, "_tab", return_value=tab), patch.object(ali, "_fetch", side_effect=cart_api(*counts)) as fetch, \
+                patch.object(ali.time, "sleep") as sleep:
+            out = ali.add_to_cart(*args, **kw)
+        tab.close.assert_called_once()
+        return out, fetch, [c.args[0] for c in sleep.call_args_list]
+
+    def clicks(self, tab):
+        return [c.args[0] for c in tab.js.call_args_list if "e.click()" in c.args[0]]
+
+    def test_added_when_the_count_grows(self):
+        tab = pdp(title=CART_TITLE)
+        out, fetch, sleeps = self.add(tab, [count(2), count(2), count(3)], f"https://aliexpress.ru/item/{ITEM}.html?spm=x",
+                                      sku="12000035460442808")
+        tab.goto.assert_called_once_with(f"https://aliexpress.ru/item/{ITEM}.html?sku_id=12000035460442808", "ali",
+                                         wait_js=f"!!({ali.PAGE_READY}) || document.body.innerText.includes('Нет в наличии')")
+        self.assertEqual(self.clicks(tab), [CLICK_CART])
+        self.assertEqual(fetch.call_args_list, [call(tab, COUNT, {})] * 3)
+        self.assertEqual(sleeps, [1.2, 0.7, 0.7])
+        self.assertEqual(out, f"добавлено: {CART_TITLE[:90]}\nsku 12000035460442808 · 88 ₽ · " + ADDED_TAIL)
+
+    def test_count_never_grows(self):
+        tab = pdp()
+        out, fetch, sleeps = self.add(tab, [{"data": None}] * 11, ITEM)
+        self.assertEqual(tab.goto.call_args.args[0], f"https://aliexpress.ru/item/{ITEM}.html")
+        self.assertEqual(fetch.call_count, 11)
+        self.assertEqual(sleeps, [1.2] + [0.7] * 10)
+        self.assertEqual(out, "позиций в корзине не прибавилось (такой вариант уже лежал в корзине — проверь ali_cart): "
+                              "PD 60 Вт USB C кабель\nsku 12000035460442808 · 88 ₽ · " + ADDED_TAIL)
+
+    def test_variant_by_options(self):
+        tab = pdp(search="?sku_id=12000035597315109", combo=True)        # both buttons on the page: the ordinary cart wins
+        out, fetch, _ = self.add(tab, [count(0), count(1)], ITEM, options={"Цвет": "черный"})
+        self.assertEqual(fetch.call_args_list[0],
+                         call(tab, f"/aer-jsonapi/v1/bx/pdp/web/productData?productId={ITEM}&sourceId=0&sku_id=0",
+                                            method="GET"))
+        self.assertEqual(tab.goto.call_args.args[0], f"https://aliexpress.ru/item/{ITEM}.html?sku_id=12000035597315109")
+        self.assertEqual(self.clicks(tab), [CLICK_CART])
+        self.assertEqual(out.splitlines()[:2], ["добавлено: PD 60 Вт USB C кабель", "sku 12000035597315109 · 88 ₽ · "
+                                                "Цвет: as the pictures show; Длина: 1m"])
+
+    def test_combo_cart_only(self):
+        tab = pdp(title=CART_TITLE, in_stock=False, combo=True)
+        out, fetch, sleeps = self.add(tab, [], ITEM)
+        self.assertEqual(out, f"не добавлено: «{CART_TITLE[:80]}» продаётся только через комбо-корзину "
+                              "(отдельная корзина, оформить можно от 2 товаров) — положи вручную")
+        self.assertEqual((self.clicks(tab), fetch.call_count, sleeps), ([], 0, [1.2]))
+
+    def test_out_of_stock(self):
+        tab = pdp(in_stock=False)
+        out, fetch, _ = self.add(tab, [], ITEM, sku="12000035597315109")
+        self.assertEqual(out, "не добавлено: «PD 60 Вт USB C кабель» нет в наличии для "
+                              "['Цвет: as the pictures show', None, 'Длина: 1m']")
+        self.assertEqual((self.clicks(tab), fetch.call_count), ([], 0))
+
+    def test_no_cart_button_to_click(self):
+        tab = pdp(title=CART_TITLE, clicked=False)
+        out, fetch, sleeps = self.add(tab, [count(2)], ITEM)
+        self.assertEqual(out, f"не добавлено: не нашёл кнопку «В корзину» на странице «{CART_TITLE[:80]}»")
+        self.assertEqual((self.clicks(tab), fetch.call_count, sleeps), ([CLICK_CART], 1, [1.2]))
+
+    def test_no_such_variant(self):
+        tab = pdp()
+        with self.assertRaisesRegex(ValueError, "нет такого варианта для {'Цвет': 'red'}"):
+            self.add(tab, [], ITEM, options={"Цвет": "red"})
+        tab.close.assert_called_once()
+        tab.goto.assert_not_called()
+
+    def test_no_item_id_in_the_link(self):
+        with patch.object(ali, "_tab") as tab, self.assertRaisesRegex(ValueError, "не нашёл id товара"):
+            ali.add_to_cart("https://aliexpress.ru/store/1102")
+        tab.assert_not_called()
+
+
+TWO_VARIANTS = [cart_row("2001", f"https://aliexpress.ru/item/{ITEM}.html?sku_id=1", True, "Кабель черный", "88 ₽", "1"),
+                cart_row("2002", f"https://aliexpress.ru/item/{ITEM}.html?sku_id=2", True, "Кабель белый", "90 ₽", "2")]
+OTHERS = [cart_row("2003", "https://aliexpress.ru/item/1005_1005008606048009.html", True, "Toocki", "209 ₽", "1"),
+          cart_row("2004", "https://aliexpress.ru/item/1005001234567.html", False, "Другой", "10 ₽", "1")]
+OTHER_LINES = ["2003\t✓\t1005008606048009\t1\t209 ₽\tToocki\t", "2004\t\t1005001234567\t1\t10 ₽\tДругой\t",
+               "итого к оформлению: Итого · 209 ₽"]
+DELETE = "/aer-jsonapi/v4/cart/hot/items/delete"
+
+
+class RemoveFromCartTests(unittest.TestCase):
+    def remove(self, key, *loads):
+        tab = cart_tab(*loads, body="Итого\n209 ₽\nК оформлению")
+        with patch.object(ali, "_tab", return_value=tab), patch.object(ali, "_fetch", return_value={"data": {}}) as fetch, \
+                patch.object(ali.time, "sleep"):
+            out = ali.remove_from_cart(key)
+        tab.close.assert_called_once()
+        return out, tab, fetch
+
+    def deleted(self, ids, selection):
+        return {"ids": ids, "selection": selection, "selectAll": False, "currentPage": 1, "sortType": 2}
+
+    def test_every_line_of_an_item_and_the_cart_left(self):
+        out, tab, fetch = self.remove(ITEM, TWO_VARIANTS + OTHERS, OTHERS)
+        fetch.assert_called_once_with(tab, DELETE, self.deleted(["2001", "2002"], ["2003"]))
+        self.assertEqual(tab.goto.call_args_list, [call(*CART_URL, **CART_READY)] * 2)
+        self.assertEqual(out, "\n".join(["удалено строк: 2", CART_HEAD, *OTHER_LINES]))
+
+    def test_one_line_by_cart_id_keeps_the_others_selected(self):
+        out, tab, fetch = self.remove("2001", TWO_VARIANTS + OTHERS, TWO_VARIANTS[1:] + OTHERS)
+        fetch.assert_called_once_with(tab, DELETE, self.deleted(["2001"], ["2002", "2003"]))
+        self.assertEqual(out.splitlines()[0], "удалено строк: 1")
+
+    def test_item_id_from_a_prefixed_link(self):
+        _, tab, fetch = self.remove("1005008606048009", TWO_VARIANTS + OTHERS, TWO_VARIANTS + OTHERS[1:])
+        fetch.assert_called_once_with(tab, DELETE, self.deleted(["2003"], ["2001", "2002"]))
+
+    def test_no_such_line(self):
+        out, tab, fetch = self.remove("100500", OTHERS, OTHERS)          # only the start of 1005001234567
+        fetch.assert_not_called()
+        tab.goto.assert_called_once_with(*CART_URL, **CART_READY)
+        self.assertEqual(out, "\n".join(["в корзине нет строки 100500", CART_HEAD, *OTHER_LINES]))
 
 
 if __name__ == "__main__":
