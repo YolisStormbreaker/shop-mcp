@@ -12,7 +12,7 @@ import time
 import urllib.parse
 
 from capture import capture
-from cdp import tab_for
+from cdp import site_tab
 from shoplog import log
 
 from .composition import nutrition_from_text
@@ -35,10 +35,7 @@ ZONES_JS = """(() => { try { const s = JSON.parse(document.getElementById('ng-st
 
 
 def _tab():
-    tab = tab_for("lenta.com")
-    if not tab.js("location.hostname === 'lenta.com' && !!document.querySelector('app-root, lu-root, [ng-version]')"):
-        tab.goto(SITE + "/", "lenta", wait_js="!!document.querySelector('[ng-version]')")
-    return tab
+    return site_tab("lenta.com", SITE + "/", "lenta", ready="!!document.querySelector('[ng-version]')")
 
 
 def _nav(tab, path, patterns, rewrite=None, timeout=15):

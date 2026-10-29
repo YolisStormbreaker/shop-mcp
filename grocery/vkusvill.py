@@ -13,7 +13,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from cdp import tab_for
+from cdp import site_tab
 from shoplog import log
 
 from .composition import nutrition_from_text
@@ -66,10 +66,7 @@ def _listed(p):
 
 
 def _tab():
-    tab = tab_for("vkusvill.ru")
-    if "vkusvill.ru" not in (tab.js("location.hostname") or ""):
-        tab.goto(SITE + "/", "vkusvill", wait_js="document.readyState === 'complete'")
-    return tab
+    return site_tab("vkusvill.ru", SITE + "/", "vkusvill")
 
 
 # Stock is per delivery address and only in the logged-in site's HTML; fetched in the tab, parsed there.

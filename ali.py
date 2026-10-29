@@ -8,7 +8,7 @@ import re
 import time
 
 import textsearch
-from cdp import tab_for
+from cdp import site_tab
 from shoplog import dump, log
 
 SORTS = {"default": "", "orders": "total_tranpro_desc", "price": "price_asc", "price_desc": "price_desc"}
@@ -16,10 +16,7 @@ _last_call = 0.0
 
 
 def _tab():
-    tab = tab_for("aliexpress.ru")
-    if "aliexpress.ru" not in (tab.js("location.hostname") or ""):
-        tab.goto("https://aliexpress.ru/", "ali", wait_js="document.readyState === 'complete'")
-    return tab
+    return site_tab("aliexpress.ru", "https://aliexpress.ru/", "ali")
 
 
 def _fetch(tab, path, body=None, method="POST", retried=False):

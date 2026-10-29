@@ -11,7 +11,7 @@ import re
 import time
 import urllib.parse
 
-from cdp import tab_for
+from cdp import site_tab
 from shoplog import log
 
 SITE = "https://lavka.yandex.ru"
@@ -37,10 +37,7 @@ TAGS = {"без лактозы": ("tag", "withoutLactose"), "без сахара
 
 
 def _tab():
-    tab = tab_for("lavka.yandex.ru")
-    if not tab.js("location.hostname === 'lavka.yandex.ru' && !!window.storeDehydratedState && !!window.__PAGE_PROPS__"):
-        tab.goto(SITE + "/", "lavka", wait_js="!!window.storeDehydratedState && !!window.__PAGE_PROPS__")
-    return tab
+    return site_tab("lavka.yandex.ru", SITE + "/", "lavka", ready="!!window.storeDehydratedState && !!window.__PAGE_PROPS__")
 
 
 def _post(tab, path, body, depot="regular"):

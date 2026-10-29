@@ -9,7 +9,7 @@ import time
 import urllib.parse
 
 import textsearch
-from cdp import tab_for
+from cdp import site_tab
 from shoplog import dump, log
 
 SORTS = ("score", "new", "price", "price_desc", "rating", "discount")
@@ -19,10 +19,7 @@ DATE_RE = re.compile(r"Сегодня|Завтра|Послезавтра|\d+\s+
 
 
 def _tab():
-    tab = tab_for("ozon.ru")
-    if "ozon.ru" not in (tab.js("location.hostname") or ""):
-        tab.goto("https://www.ozon.ru/", "ozon", wait_js="document.readyState === 'complete'")
-    return tab
+    return site_tab("ozon.ru", "https://www.ozon.ru/", "ozon")
 
 
 def _fetch(tab, path, method="GET", body=None, retried=False):

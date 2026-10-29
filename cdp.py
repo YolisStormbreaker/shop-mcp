@@ -163,6 +163,15 @@ def tab_for(domain: str) -> Tab:
     return tab
 
 
+def site_tab(domain: str, home: str, site: str, ready: str | None = None) -> Tab:
+    """tab_for(domain), sent to the home page when it shows another site (fetch() needs the site's origin
+    and cookies) or, with ready, when that JS condition is false."""
+    tab = tab_for(domain)
+    if not tab.js(f"location.hostname.endsWith({json.dumps(domain)})" + (f" && !!({ready})" if ready else "")):
+        tab.goto(home, site, wait_js=ready or "document.readyState === 'complete'")
+    return tab
+
+
 CHROME_APP = Path("/Applications/Google Chrome.app")
 AGENT = Path.home() / "Library/LaunchAgents/local.shop-chrome.plist"
 

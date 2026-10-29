@@ -7,7 +7,7 @@ import json
 import re
 import urllib.parse
 
-from cdp import tab_for
+from cdp import site_tab, tab_for
 from shoplog import dump, log
 
 SORTS = ("default", "new", "price_asc", "price_desc", "new_sale", "discount")
@@ -174,10 +174,7 @@ def reviews(sku_or_url, sort="useful", with_media=False, page=1, this_color=Fals
 # the session cookie, so it works from a background tab. geo is the delivery region the site keeps in
 # the gd_aoid cookie; the tab must be on lamoda.ru for relative URLs and that cookie.
 def _lm_tab():
-    tab = tab_for("lamoda.ru")
-    if "lamoda.ru" not in (tab.js("location.hostname") or ""):
-        tab.goto("https://www.lamoda.ru/", "lamoda", wait_js="document.readyState === 'complete'")
-    return tab
+    return site_tab("lamoda.ru", "https://www.lamoda.ru/", "lamoda")
 
 
 def _api(tab, method, path, body=None, retried=False):

@@ -9,7 +9,7 @@ import re
 import urllib.parse
 
 from capture import capture
-from cdp import tab_for
+from cdp import site_tab, tab_for
 from shoplog import log
 
 SORTS = ("relevance", "priceAsc", "priceDesc", "discountAmount", "byRating", "byNewest")  # the site's own ids
@@ -170,10 +170,7 @@ STATE = "/front/api/cart/v3/state?locale=ru&includeDeliveryThreshold=false"
 
 
 def _ga_tab():
-    tab = tab_for("goldapple.ru")
-    if "goldapple.ru" not in (tab.js("location.hostname") or ""):
-        tab.goto("https://goldapple.ru/", "goldapple", wait_js="document.readyState === 'complete'")
-    return tab
+    return site_tab("goldapple.ru", "https://goldapple.ru/", "goldapple")
 
 
 def _api(tab, method, path, body=None, retried=False):
