@@ -284,6 +284,20 @@ def _press(tab, js, what="m", url="/api/rest/cartItemModify"):
     return capture(tab, "lenta", None, {what: [url]}, timeout=10, js=f"({js}).click()").get(what)
 
 
+def _presses(tab, buttons):
+    """Press each of buttons in turn; the first one that is not on the page, or None."""
+    for b in buttons:
+        if not tab.js(f"!!({b})"):
+            return b
+        _press(tab, b)
+        time.sleep(0.8)
+    return None
+
+
+def _quantity(goods, pid):
+    return float((goods.get(pid) or {}).get("Quantity") or 0)
+
+
 def cart():
     tab = _tab()
     try:
@@ -306,19 +320,16 @@ def add_to_cart(id_or_url, quantity=1):
         (goods, _), card = _load(tab, pid)
         if not card:
             return f"Лента: товар {pid} не открылся"
-        have = float((goods.get(pid) or {}).get("Quantity") or 0)
-        for i in range(max(1, min(int(quantity), 30))):
-            first = i == 0 and not have
-            if not tab.js(f"!!({ADD if first else INC})"):
-                return f"Лента: кнопки «{'В корзину' if first else '+'}» на странице {card['name']} нет (нет в наличии?)"
-            _press(tab, ADD if first else INC)
-            time.sleep(0.8)
+        have = _quantity(goods, pid)
+        missing = _presses(tab, [INC if have else ADD] + [INC] * (max(1, min(int(quantity), 30)) - 1))
+        if missing:
+            return f"Лента: кнопки «{'+' if missing == INC else 'В корзину'}» на странице {card['name']} нет (нет в наличии?)"
         (goods, cl), _ = _load(tab, pid)
     finally:
         tab.close()
-    g = goods.get(pid)
-    if not g or float(g.get("Quantity") or 0) <= have:
+    if _quantity(goods, pid) <= have:
         return f"Лента не положила {card['name']} в корзину"
+    g = goods[pid]
     return f"в корзине Ленты: {card['name']} — {g.get('Quantity')} шт × {g.get('Price')} ₽; итого корзины {cl.get('TotalCost')} ₽"
 
 
@@ -328,14 +339,10 @@ def remove_from_cart(id_or_url):
     try:
         (goods, _), card = _load(tab, pid)
         name = (card or {}).get("name") or pid
-        n = int(float((goods.get(pid) or {}).get("Quantity") or 0))
+        n = int(_quantity(goods, pid))
         if not n:
             return f"{name} в корзине Ленты нет"
-        for _ in range(min(n, 30)):            # «−» takes one unit; at one unit it removes the line
-            if not tab.js(f"!!({DEC})"):
-                break
-            _press(tab, DEC)
-            time.sleep(0.8)
+        _presses(tab, [DEC] * min(n, 30))      # «−» takes one unit; at one unit it removes the line
         (goods, _), _ = _load(tab, pid)
     finally:
         tab.close()
@@ -371,15 +378,19 @@ def favorite(id_or_url, remove=False):
         d = _favorite_ids(tab)
         if d is None:
             return "Лента не отдала избранное"
-        now = any(str(p.get("id")) == pid for p in d.get("items") or [])
         _, card = _load(tab, pid)
         if not card:
             return f"Лента: товар {pid} не открылся"
-        if now != remove:      # already as asked
-            return f"{card['name']} {'уже в избранном' if now else 'и так не в избранном'} Ленты"
-        r = _press(tab, HEART, "f", "/catalog/items/favorites/" + ("delete" if remove else "add"))
+        return _heart(tab, card["name"], any(str(p.get("id")) == pid for p in d.get("items") or []), remove)
     finally:
         tab.close()
+
+
+def _heart(tab, name, now, remove):
+    """Press the card's heart, now: the product is in favorites; what to say."""
+    if now != remove:      # already as asked
+        return f"{name} {'уже в избранном' if now else 'и так не в избранном'} Ленты"
+    r = _press(tab, HEART, "f", "/catalog/items/favorites/" + ("delete" if remove else "add"))
     if not (r or {}).get("result"):
         return "Лента не изменила избранное"
-    return f"{'убрано из избранного' if remove else 'в избранном'} Ленты: {card['name']}"
+    return f"{'убрано из избранного' if remove else 'в избранном'} Ленты: {name}"
