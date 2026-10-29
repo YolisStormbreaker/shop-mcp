@@ -59,16 +59,23 @@ SET_JS = r"""(async (pid, qty) => {
 })"""
 
 
+LOADED = "!!window.webpackChunk_N_E && document.readyState === 'complete'"
+
+
+def _checked(tab):
+    return CHECK in (tab.js("location.href") or "")
+
+
 def _tab():
     tab = tab_for("samokat.ru")
-    if CHECK in (tab.js("location.href") or ""):           # maybe a stale page from session restore: try once
-        tab.goto(SITE + "/", "samokat", wait_js="!!window.webpackChunk_N_E && document.readyState === 'complete' || location.href.includes('/xpvnsulc/')")
-        if CHECK in (tab.js("location.href") or ""):
+    if _checked(tab):           # maybe a stale page from session restore: try once
+        tab.goto(SITE + "/", "samokat", wait_js=LOADED + " || location.href.includes('/xpvnsulc/')")
+        if _checked(tab):
             tab.close()
             return None
     if not tab.js("location.hostname.endsWith('samokat.ru')") or not tab.js(SETUP_JS):
-        tab.goto(SITE + "/", "samokat", wait_js="!!window.webpackChunk_N_E && document.readyState === 'complete'")   # one page load
-        if CHECK in (tab.js("location.href") or "") or not tab.js(SETUP_JS):
+        tab.goto(SITE + "/", "samokat", wait_js=LOADED)   # one page load
+        if _checked(tab) or not tab.js(SETUP_JS):
             tab.close()
             return None
     return tab
