@@ -293,7 +293,7 @@ def remove_from_cart(id_or_url):
         d = _api(tab, "GET", STATE)
         if d is None:
             return BLOCKED
-        if not any(str(i.get("productSku")) == sku for i in _items(d)):
+        if not _in_cart(d, sku):
             return "такого артикула в корзине нет\n" + _cart_text(d)  # not cart(): that would wait for this very tab
         _api(tab, "DELETE", f"/front/api/cart/v3/items?locale=ru&includeDeliveryThreshold=false&itemSkus={sku}")
         d = _api(tab, "GET", STATE)
@@ -301,5 +301,5 @@ def remove_from_cart(id_or_url):
         tab.close()
     if d is None:
         return BLOCKED
-    gone = not any(str(i.get("productSku")) == sku for i in _items(d))
+    gone = not _in_cart(d, sku)
     return f"{'удалено' if gone else '⚠️ Золотое яблоко не подтвердило удаление'}: артикул {sku}\n" + _cart_text(d)
