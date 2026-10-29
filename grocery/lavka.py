@@ -238,6 +238,7 @@ def _photos(c):
 # Cart: its update call carries the whole cart with the delivery address the page keeps, so we press the page's
 # own buttons on the product page (element.click() works in the hidden tab) and read the cart back by API.
 MAIN = "[data-testid=snippet-control-base]"           # the product's own controls; cards below have the same buttons
+ADD, PLUS, MINUS = "[data-testid=snippet-control]", f"{MAIN} [data-testid=add-spin-button]", f"{MAIN} [data-testid=remove-spin-button]"
 
 
 def _cart_items(tab, depot):
@@ -245,9 +246,12 @@ def _cart_items(tab, depot):
     return {i.get("id"): i for i in r.get("items") or []}, r
 
 
+def _good(tab, pid, depot):
+    return (_post(tab, "v1/product", {"productId": pid, "enableUnavailable": True}, depot) or {}).get("product")
+
+
 def _open_good(tab, pid, depot):
-    d = _post(tab, "v1/product", {"productId": pid, "enableUnavailable": True}, depot)
-    c = (d or {}).get("product")
+    c = _good(tab, pid, depot)
     if not c:
         raise ValueError(f"Лавка: товар {pid} не найден")
     tab.goto(f"{SITE}{'/supermarket' if depot == 'supermarket' else ''}/good/{c.get('deepLink') or c['id']}", "lavka",
@@ -259,6 +263,19 @@ def _qty(tab, pid, depot):
     return float((_cart_items(tab, depot)[0].get(pid) or {}).get("quantity") or 0)
 
 
+def _click(tab, sel):
+    """Click the page's element sel; False when there is none."""
+    return tab.js(f"(() => {{ const b = document.querySelector('{sel}'); if (!b) return false; b.click(); return true }})()")
+
+
+def _clicks(tab, sels):
+    """Click each of sels in turn, up to the first one the page does not have."""
+    for sel in sels:
+        if not _click(tab, sel):
+            return
+        time.sleep(1.2)
+
+
 def add_to_cart(id_or_url, quantity=1):
     pid, depot = _pid(id_or_url)
     tab = _tab()
@@ -268,11 +285,7 @@ def add_to_cart(id_or_url, quantity=1):
         start = _qty(tab, pid, depot)
         if not c.get("available"):
             return f"Лавка: {_clean(c.get('longTitle'))} сейчас нет в наличии"
-        for i in range(max(1, min(int(quantity), 30))):
-            sel = "[data-testid=snippet-control]" if i == 0 and not start else f"{MAIN} [data-testid=add-spin-button]"
-            if not tab.js(f"(() => {{ const b = document.querySelector('{sel}'); if (!b) return false; b.click(); return true }})()"):
-                break
-            time.sleep(1.2)
+        _clicks(tab, [PLUS if start else ADD] + [PLUS] * (max(1, min(int(quantity), 30)) - 1))
         n = _qty(tab, pid, depot)
         items, r = _cart_items(tab, depot)
     finally:
@@ -292,7 +305,7 @@ def remove_from_cart(id_or_url):
         for _ in range(30):
             if not _qty(tab, pid, depot):
                 break
-            if not tab.js(f"(() => {{ const b = document.querySelector('{MAIN} [data-testid=remove-spin-button]'); if (!b) return false; b.click(); return true }})()"):
+            if not _click(tab, MINUS):
                 break
             time.sleep(1.2)
         left = _qty(tab, pid, depot)
@@ -333,7 +346,7 @@ def favorite(id_or_url, remove=False):
     pid, depot = _pid(id_or_url)
     tab = _tab()
     try:
-        c = (_post(tab, "v1/product", {"productId": pid, "enableUnavailable": True}, depot) or {}).get("product") or {}
+        c = _good(tab, pid, depot) or {}
         r = _post(tab, "attributes/v2/favorite", {"productId": c.get("id") or pid, "isFavorite": not remove}, depot)
     finally:
         tab.close()
