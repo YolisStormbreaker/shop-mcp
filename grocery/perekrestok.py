@@ -17,6 +17,9 @@ from shoplog import log
 BLOCKED = "⚠️ Перекрёсток не отдал данные (проверка на бота или сайт не загрузился): shop-chrome show, открыть perekrestok.ru, повторить."
 CHECKED = ("⚠️ Перекрёсток показал проверку на бота (ServicePipe): попроси пользователя выполнить shop-chrome show, пройти её во "
            "вкладке perekrestok.ru, потом shop-chrome hide. Она включается после долгой серии запросов с одного IP.")
+# the favourites are the account's own: a 401/403 there that a reload did not cure is a logged-out session
+LOGGED_OUT = ("⚠️ Перекрёсток не пускает к избранному ({}): похоже, в браузере магазинов не выполнен вход. Попроси пользователя "
+              "выполнить shop-chrome show, войти на perekrestok.ru, потом shop-chrome hide.")
 UNCHECKED = "{}: Перекрёсток не отдал корзину, и не видно, что получилось — проверь grocery_cart, прежде чем повторять"
 SITE = "https://www.perekrestok.ru"
 FIND_API = """(() => {
@@ -420,12 +423,16 @@ def favorites():
     finally:
         tab.close()
     if _failed(d):
-        return BLOCKED
+        return _refused(d) or BLOCKED
     rows = [_listed(x["product"]) for x in d.get("items") or [] if x.get("product")]
     if not rows:
         return "избранное Перекрёстка пусто"
     return "избранное Перекрёстка\nplu\tцена ₽\tналичие\tназвание\n" + "\n".join(
         f"{r['id']}\t{r['price']}\t{'' if r['available'] else 'нет в наличии'}\t{r['name']}" for r in rows)
+
+
+def _refused(d):
+    return LOGGED_OUT.format(d["__error"]) if d["__error"] in (401, 403) else ""
 
 
 def favorite(id_or_url, remove=False):
@@ -437,5 +444,5 @@ def favorite(id_or_url, remove=False):
     finally:
         tab.close()
     if _failed(r):
-        return f"Перекрёсток не изменил избранное: {r['__error']}"
+        return _refused(r) or f"Перекрёсток не изменил избранное: {r['__error']}"
     return f"{'убрано из избранного' if remove else 'в избранном'} Перекрёстка: {title}"

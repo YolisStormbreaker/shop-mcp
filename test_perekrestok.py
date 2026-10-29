@@ -485,7 +485,13 @@ class FavoritesTests(unittest.TestCase):
                 self.assertEqual(run(pk.favorites, {"/user/liked-product": answer})[0], "избранное Перекрёстка пусто")
 
     def test_favorites_that_did_not_come(self):
-        self.assertEqual(run(pk.favorites, {"/user/liked-product": {"__error": 403}})[0], pk.BLOCKED)
+        self.assertEqual(run(pk.favorites, {"/user/liked-product": {"__error": 500}})[0], pk.BLOCKED)
+
+    def test_favorites_refused_after_the_reload_ask_to_log_in(self):
+        # live 2026-10-29: logged out, /favorites goes to /login and /user/liked-product answers 403; the basket still works
+        got = run(pk.favorites, {"/user/liked-product": {"__error": 403}})[0]
+        self.assertEqual(got, pk.LOGGED_OUT.format(403))
+        self.assertIn("не выполнен вход", got)
 
 
 class FavoriteTests(unittest.TestCase):
@@ -499,6 +505,10 @@ class FavoriteTests(unittest.TestCase):
     def test_refused(self):
         got, _ = run(pk.favorite, {"/catalog/product/plu2093082": KEFIR, "/user/liked-product/7001": {"__error": 500}}, "2093082")
         self.assertEqual(got, "Перекрёсток не изменил избранное: 500")
+
+    def test_favorite_refused_for_a_logged_out_session(self):
+        got, _ = run(pk.favorite, {"/catalog/product/plu2093082": KEFIR, "/user/liked-product/7001": {"__error": 401}}, "2093082")
+        self.assertEqual(got, pk.LOGGED_OUT.format(401))
 
     def test_product_without_a_title(self):
         got, _ = run(pk.favorite, {"/catalog/product/plu5": {"id": 9}, "/user/liked-product/9": {}}, "5")
