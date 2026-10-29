@@ -352,7 +352,8 @@ def _share(p, rank):
 
 def _details(i, s, p, rank):
     """One product of the composition comparison: its line, link and composition."""
-    head = (f"\n{i}. {NAMES[s]} · {p.get('name', '')} · {p.get('price')} ₽" + (f" ({unit_price(p)})" if unit_price(p) else "")
+    head = (f"\n{i}. {NAMES[s]} · {p.get('name', '')}" + ("" if p.get("price") is None else f" · {p['price']} ₽")
+            + (f" ({unit_price(p)})" if unit_price(p) else "")
             + ("" if p.get("available", True) else " · нет в наличии") + _share(p, rank)
             + (f" · рейтинг {_rating(p)}" if _rating(p) else "") + f" · {s}:{p.get('id')}")
     return [head, f"   {p.get('url', '')}"] + ["   " + x for x in _describe(p)]
