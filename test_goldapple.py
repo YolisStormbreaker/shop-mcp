@@ -70,7 +70,7 @@ class GoldAppleSearchTests(unittest.TestCase):
                          "1\t19000163536\t2150\t3070\tBrand A\tКушон\tтональный кушон\t7.5 г (вариантов: 9)\t4.6\t7274\t\t/19000163536-cushion\n"
                          "2\t19000000001\t500\t\tBrand B\tШампунь\tшампунь\t250 мл\t\t\tнет в наличии\t/19000000001-shampoo\n"
                          "3\t19000000002\tNone\t\t\t\t\t\t\t\tнет в наличии\t")
-        self.assertEqual(capture.call_args.args, (tab, "goldapple", QUERY, {"s": ["/front/api/catalog/search-products"]}))
+        self.assertEqual(capture.call_args.args, (tab, "goldapple", QUERY, {"s": ["re:/front/api/catalog/(search-products|cards-list)"]}))
         tab.close.assert_called_once()
 
     def test_sort_price_and_page_go_into_the_url(self):
@@ -84,6 +84,14 @@ class GoldAppleSearchTests(unittest.TestCase):
         got, _, _, _ = self.search({"s": {"data": {"products": SEARCH["data"]["products"]}}}, limit=2)
         self.assertTrue(got.startswith("Золотое яблоко · 2 найдено"))
         self.assertEqual(len(got.splitlines()), 5)
+
+    def test_a_query_the_site_sends_to_a_category_lists_the_category(self):
+        cards = {"data": {"url": "/volosy/shampun", "productCount": 6132,
+                          "cards": [{"cardType": "banner"}, {"cardType": "product", "product": SEARCH["data"]["products"][1]}]}}
+        got, _, _, _ = self.search({"s": cards})
+        self.assertEqual(got, f"Золотое яблоко · 6132 найдено · страница 1 (по 24) · {QUERY}\n"
+                              "сайт перенёс поиск в категорию https://goldapple.ru/volosy/shampun\n" + SEARCH_HEAD +
+                         "1\t19000000001\t500\t\tBrand B\tШампунь\tшампунь\t250 мл\t\t\tнет в наличии\t/19000000001-shampoo")
 
     def test_unknown_sort(self):
         self.assertEqual(goldapple.search("шампунь", sort="cheap"),

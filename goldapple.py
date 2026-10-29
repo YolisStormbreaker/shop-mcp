@@ -37,7 +37,8 @@ def search(query, price_min=None, price_max=None, sort="relevance", page=1, limi
     url = "https://goldapple.ru/catalogsearch/result?" + urllib.parse.urlencode(qs)
     tab = tab_for("goldapple.ru")
     try:
-        d = capture(tab, "goldapple", url, {"s": ["/front/api/catalog/search-products"]}).get("s")
+        # a query the site knows as a category (шампунь) moves the page there: its cards-list has the products
+        d = capture(tab, "goldapple", url, {"s": ["re:/front/api/catalog/(search-products|cards-list)"]}).get("s")
     finally:
         tab.close()
     if d is None:
@@ -47,14 +48,26 @@ def search(query, price_min=None, price_max=None, sort="relevance", page=1, limi
 
 
 def _search_table(d, url, page, limit):
-    data = d.get("data") or {}
-    rows = [_search_row(i + 1, p) for i, p in enumerate((data.get("products") or [])[:limit])]
-    count = data.get("count") or len(rows)
-    found = f"{count}+" if count >= 2000 else str(count)  # the site caps the count at 2000
-    head = (f"Золотое яблоко · {found} найдено · страница {page} (по {PAGE}) · {url}\n"
-            "ссылки относительно https://goldapple.ru; цены и наличие — для города из профиля\n"
+    products, found, note = _found(d.get("data") or {})
+    rows = [_search_row(i + 1, p) for i, p in enumerate(products[:limit])]
+    head = (f"Золотое яблоко · {found or len(rows)} найдено · страница {page} (по {PAGE}) · {url}\n" + note
+            + "ссылки относительно https://goldapple.ru; цены и наличие — для города из профиля\n"
             "#\tартикул\tцена ₽\tбез скидки\tбренд\tназвание\tтип\tобъём\tрейтинг\tотзывов\tналичие\tссылка")
     return head + "\n" + ("\n".join(rows) if rows else "(пусто)")
+
+
+def _found(data):
+    """(products, their count as the site gives it or "", a note line): a search answer caps its count at 2000;
+    a category the site moved the search to (cards-list) counts exactly and holds products among other cards."""
+    if "cards" in data:
+        return _category(data)
+    count = data.get("count") or 0
+    return data.get("products") or [], f"{count}+" if count >= 2000 else str(count or ""), ""
+
+
+def _category(data):
+    note = f"сайт перенёс поиск в категорию https://goldapple.ru{data['url']}\n" if data.get("url") else ""
+    return [c["product"] for c in data["cards"] or [] if c.get("cardType") == "product"], str(data.get("productCount") or ""), note
 
 
 def _search_row(n, p):
