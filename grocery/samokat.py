@@ -197,27 +197,57 @@ def product(id_or_url):
         tab.close()
     if not c:
         return f"Самокат: товар {slug} не найден на витрине для адреса пользователя"
+    return _card(c)
+
+
+def _card(c):
     attrs = c.get("attributes") or {}
-    n = c.get("nutritions") or {}
-    nut = {k: _num(n.get(src)) for k, src in (("kcal", "kilocalories"), ("protein", "protein"), ("fat", "fats"), ("carbs", "carbohydrates"))
-           if _num(n.get(src)) is not None}
-    size = next((f"{v}" for k, v in attrs.items() if k in ("Объём", "Вес", "Масса", "Количество в упаковке")), "")
-    skip = {"Состав", "Бренд", "Примечание", "Документы качества"}
-    info = [f"{k}: {'да' if str(v).upper() == 'TRUE' else 'нет' if str(v).upper() == 'FALSE' else re.sub(r'<[^>]+>', ' ', str(v)).strip()}"
-            for k, v in attrs.items() if k not in skip and "на весь продукт" not in k]
+    info = _info(attrs)
     p = _listed(c)
-    extra = ["доставка: ~15 мин из ближайшего склада Самоката (условия сайта для адреса пользователя)"]
-    if c.get("quantity"):
-        extra.append(f"на складе {c['quantity']} шт")
-    if c.get("discountPercent"):
-        extra.append(f"скидка {c['discountPercent']}%")
-    extra.append("характеристики: " + "; ".join(info))
-    p.update(brand=attrs.get("Бренд") or "", size=size,
-             photos=[m["url"].split("?")[0] for m in c.get("media") or [] if m.get("url")],
-             description=re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", c.get("description") or "")).strip(),
-             composition=str(attrs.get("Состав") or ""), nutrition=nut,
-             composition_extra="; ".join(x for x in info if re.search(r"жирн|какао|мяс|сок|без |сахар", x, re.I)), extra=extra)
+    p.update(brand=attrs.get("Бренд") or "", size=_size(attrs), photos=_photos(c),
+             description=re.sub(r"\s+", " ", _untag(c.get("description") or "")).strip(),
+             composition=str(attrs.get("Состав") or ""), nutrition=_nutrition(c.get("nutritions") or {}),
+             composition_extra="; ".join(x for x in info if re.search(r"жирн|какао|мяс|сок|без |сахар", x, re.I)), extra=_extra(c, info))
     return p
+
+
+def _untag(s):
+    return re.sub(r"<[^>]+>", " ", s)
+
+
+SIZES = ("Объём", "Вес", "Масса", "Количество в упаковке")
+
+
+def _size(attrs):
+    return next((f"{v}" for k, v in attrs.items() if k in SIZES), "")
+
+
+SHOWN = {"Состав", "Бренд", "Примечание", "Документы качества"}
+FLAGS = {"TRUE": "да", "FALSE": "нет"}
+
+
+def _info(attrs):
+    """The card's characteristics as «name: value», without what the card shows elsewhere and whole-pack totals."""
+    return [f"{k}: {FLAGS.get(str(v).upper()) or _untag(str(v)).strip()}" for k, v in attrs.items()
+            if k not in SHOWN and "на весь продукт" not in k]
+
+
+NUTRIENTS = (("kcal", "kilocalories"), ("protein", "protein"), ("fat", "fats"), ("carbs", "carbohydrates"))
+
+
+def _nutrition(n):
+    return {k: _num(n.get(src)) for k, src in NUTRIENTS if _num(n.get(src)) is not None}
+
+
+def _extra(c, info):
+    return [x for x in ("доставка: ~15 мин из ближайшего склада Самоката (условия сайта для адреса пользователя)",
+                        c.get("quantity") and f"на складе {c['quantity']} шт",
+                        c.get("discountPercent") and f"скидка {c['discountPercent']}%",
+                        "характеристики: " + "; ".join(info)) if x]
+
+
+def _photos(c):
+    return [m["url"].split("?")[0] for m in c.get("media") or [] if m.get("url")]
 
 
 def _cart(tab):
