@@ -398,7 +398,7 @@ class VkusvillRemoveFromCartTests(unittest.TestCase):
 
     def test_not_in_the_cart(self):
         got, clicks, _, _ = change(vkusvill.remove_from_cart, Site(), "158")
-        self.assertEqual((got, clicks), ("убрано из корзины ВкусВилла: 158", []))
+        self.assertEqual((got, clicks), ("товара 158 в корзине ВкусВилла нет", []))
 
     def test_not_an_id(self):
         with patch.object(vkusvill, "_tab") as tab, self.assertRaises(ValueError):

@@ -355,25 +355,30 @@ def add_to_cart(id_or_url, quantity=1):
 
 
 def _take_out(tab, plu):
-    """Up to 30 presses until the site's cart has none: «−» above one unit, the bin (remove) button at the last one."""
-    for _ in range(30):
+    """Up to 30 presses until the site's cart has none: «−» above one unit, the bin (remove) button at the last one.
+    The number of presses."""
+    for n in range(30):
         if not _qty(tab, plu) or not (_press(tab, MINUS, plu) or _press(tab, BIN, plu)):
-            break
+            return n
+    return 30
 
 
 def remove_from_cart(id_or_url):
     plu = _plu(id_or_url)
     tab = _tab()
+    pressed = 0
     try:
         name = _open(tab, plu)
         for _ in range(2):                     # a second round if the server kept some
-            _take_out(tab, plu)
+            pressed += _take_out(tab, plu)
             left = _settled(tab, plu)
             if not left:
                 break
     finally:
         tab.close()
-    return f"не удалось убрать «{name}» из корзины Пятёрочки" if left else f"убрано из корзины Пятёрочки: {name}"
+    if left:
+        return f"не удалось убрать «{name}» из корзины Пятёрочки"
+    return f"убрано из корзины Пятёрочки: {name}" if pressed else f"«{name}» в корзине Пятёрочки нет"
 
 
 def cart():

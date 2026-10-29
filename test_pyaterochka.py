@@ -307,7 +307,7 @@ OTHER = {"plu": "5", "qty": 1.5, "price": 199.9, "total": 299.85, "name": "Яб�
 class Shop:
     """The product page and the cart the site keeps in localStorage. Buttons follow the quantity (none in the cart:
     «в корзину»; one: «+» and the bin; more: «+» and «−»); a click changes the cart unless the site ignores that button;
-    a reload after clicks shows what the server kept, when `kept` says so."""
+    a reload (any load after the first) shows what the server kept, when `kept` says so."""
     def __init__(self, qty=0, absent=(), ignored=(), kept=(), modal=False):
         self.qty, self.absent, self.ignored, self.kept, self.modal = qty, set(absent), set(ignored), list(kept), modal
         self.clicks, self.gotos, self.closed = [], [], 0
@@ -336,7 +336,7 @@ class Shop:
 
     def goto(self, url, site, wait_js=None):
         self.gotos.append((url, site, wait_js))
-        if self.clicks and self.kept:
+        if len(self.gotos) > 1 and self.kept:
             self.qty = self.kept.pop(0)
 
     def close(self):
@@ -428,7 +428,11 @@ class RemoveFromCartTests(unittest.TestCase):
 
     def test_not_in_the_cart(self):
         got, clicks, gotos = change(pyaterochka.remove_from_cart, Shop(), "97001")
-        self.assertEqual((got, clicks, gotos), ("убрано из корзины Пятёрочки: Кефир 2,5%", [], [PAGE, RELOAD]))
+        self.assertEqual((got, clicks, gotos), ("«Кефир 2,5%» в корзине Пятёрочки нет", [], [PAGE, RELOAD]))
+
+    def test_in_the_cart_only_after_the_reload(self):
+        got, clicks, gotos = change(pyaterochka.remove_from_cart, Shop(kept=[2]), "97001")
+        self.assertEqual((got, clicks, gotos), ("убрано из корзины Пятёрочки: Кефир 2,5%", [MINUS, BIN], [PAGE, RELOAD, RELOAD]))
 
     def test_not_a_plu(self):
         with patch.object(pyaterochka, "_tab") as tab, self.assertRaises(ValueError):

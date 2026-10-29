@@ -356,15 +356,19 @@ def remove_from_cart(id_or_url):
         tab.goto(f"{SITE}/cart/", "vkusvill", wait_js="document.readyState === 'complete'")
         time.sleep(1.5)
         minus = _el(f".js-delivery__basket--row[data-product-id='{pid}'] .Q_Down")
-        for _ in range(40):
+        pressed = 0
+        while pressed < 40:
             q = _q(tab, pid)
             if not q or not _click(tab, minus, pid, q):
                 break
+            pressed += 1
         time.sleep(5)                    # the site removes a line 4 s after its last «−» (undo window)
         left = _q(tab, pid)
     finally:
         tab.close()
-    return f"не удалось убрать товар {pid} из корзины ВкусВилла" if left else f"убрано из корзины ВкусВилла: {pid}"
+    if left:
+        return f"не удалось убрать товар {pid} из корзины ВкусВилла"
+    return f"убрано из корзины ВкусВилла: {pid}" if pressed else f"товара {pid} в корзине ВкусВилла нет"
 
 
 FAV_JS = r"""(async () => {
