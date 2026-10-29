@@ -251,11 +251,11 @@ class GoldAppleCartTests(unittest.TestCase):
         self.assertEqual(sent, [GA_STATE])
         tab.close.assert_called_once()
 
-    def test_a_line_without_a_special_price(self):
+    def test_a_line_without_a_special_price_shows_its_price_once(self):
         line = {"productSku": "19000000002", "qty": 1, "specialPriceAmountClean": None, "oldPriceAmountClean": 990, "brand": "Brand C",
                 "productName": "Крем", "variant": "50 мл"}
         self.assertEqual(self.call(goldapple.cart, answers=[{"data": {"rawCart": {"items": [line]}}}])[0],
-                         GA_CART_HEAD + "19000000002\t1\t990\t990\t\tBrand C\tКрем\t50 мл")
+                         GA_CART_HEAD + "19000000002\t1\t990\t\t\tBrand C\tКрем\t50 мл")
 
     def test_empty_cart(self):
         for d in ({"data": {"rawCart": {"items": []}}}, {"data": {"rawCart": None}}, {}):

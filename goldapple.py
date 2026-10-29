@@ -243,8 +243,9 @@ def _cart_text(d):
 
 
 def _cart_row(i):
-    price, old = i.get("specialPriceAmountClean"), i.get("oldPriceAmountClean")
-    return (f"{i.get('productSku')}\t{i.get('qty')}\t{price or old}\t{old if old and old != price else ''}\t"
+    old = i.get("oldPriceAmountClean")
+    price = i.get("specialPriceAmountClean") or old
+    return (f"{i.get('productSku')}\t{i.get('qty')}\t{price}\t{old if old and old != price else ''}\t"
             f"{'✓' if i.get('isSelected') else ''}\t{i.get('brand', '')}\t{i.get('productName') or i.get('prodname', '')}\t{i.get('variant') or ''}")
 
 
