@@ -21,6 +21,9 @@ MONTHS = "янв фев мар апр мая июн июл авг сен окт 
 NEED_ID = "нужен артикул WB или ссылка вида https://www.wildberries.ru/catalog/<id>/detail.aspx"
 BLOCKED = ("⚠️ Wildberries не отдал данные: вероятно, проверка на бота. "
            "Открыть браузер: shop-chrome show, пройти проверку, повторить.")
+LOGGED_OUT = ("⚠️ не выполнен вход в Wildberries в браузере магазинов: попроси пользователя выполнить shop-chrome show, "
+              "войти на wildberries.ru, затем shop-chrome hide и повторить.")
+LOGGED_OUT_JS = "!!document.querySelector('header a[href^=\"/security/login\"]')"   # the header's «Войти»
 
 
 def _eta(p):
@@ -308,10 +311,16 @@ def _cart(tab, ops=None):
     load with ts=0 makes the page pull the whole server cart, so the listing includes our change.
     """
     if ops and not _synced(tab, ops):
-        return None
+        return _failed(tab)
     ts0 = _once(lambda u: re.sub(r"([?&])ts=\d+", r"\g<1>ts=0", u))
     d = capture(tab, "wb", CART, {"cart": ["basket/data_v2"]}, rewrite=(SYNC, ts0)).get("cart")
-    return None if d is None else _basket_items(d)
+    return _failed(tab) if d is None else _basket_items(d)
+
+
+def _failed(tab):
+    """None (the caller says BLOCKED), unless the page shows the session is logged out: it then syncs no cart."""
+    if tab.js(LOGGED_OUT_JS):
+        raise RuntimeError(LOGGED_OUT)
 
 
 def _synced(tab, ops):

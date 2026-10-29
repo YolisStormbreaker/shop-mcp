@@ -6,7 +6,7 @@ import datetime
 import fnmatch
 import types
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import DEFAULT, MagicMock, patch
 
 import wb
 
@@ -292,6 +292,11 @@ def add(chrt, nm, quantity):
 
 
 class CartTests(WbTest):
+    def setUp(self):
+        super().setUp()
+        self.logged_in = True
+        self.tab.js.side_effect = lambda expr, *a, **kw: (not self.logged_in) if expr == wb.LOGGED_OUT_JS else DEFAULT
+
     def answers(self, *answers):
         self.capture.side_effect = list(answers)
 
@@ -337,6 +342,14 @@ class CartViewTests(CartTests):
     def test_no_answer(self):
         self.answers({})
         self.assertEqual(wb.cart(), wb.BLOCKED)
+        self.assertClosed()
+
+    def test_logged_out_session_says_so_not_bot_check(self):
+        # live 2026-10-29: a logged-out page shows «Войти» and syncs no cart, so nothing arrives
+        self.answers({}, {})
+        self.logged_in = False
+        with self.assertRaisesRegex(RuntimeError, "не выполнен вход в Wildberries"):
+            wb.cart()
         self.assertClosed()
 
     def test_line_without_size_name(self):
@@ -473,13 +486,17 @@ class RemoveFromCartTests(CartTests):
         self.assertEqual(got, "⚠️ не нашёл корзину Wildberries в браузере, ничего не удалил")
         self.assertEqual(self.sent(), [VIEW])
 
+    def page_scripts(self):
+        """What ran in the page besides the logged-out check every failed cart read makes."""
+        return [c.args[0] for c in self.tab.js.call_args_list if c.args[0] != wb.LOGGED_OUT_JS]
+
     def test_cart_not_answered_before(self):
         self.assertEqual(self.remove("101", {}), wb.BLOCKED)
-        self.tab.js.assert_not_called()
+        self.assertEqual(self.page_scripts(), [])
 
     def test_cart_not_answered_after(self):
         self.assertEqual(self.remove("101", view(L1), {}), wb.BLOCKED)
-        self.tab.js.assert_called_once_with(wb.REMOVE_JS + "(555, 2)")
+        self.assertEqual(self.page_scripts(), [wb.REMOVE_JS + "(555, 2)"])
 
     def test_not_an_id(self):
         self.assertEqual(wb.remove_from_cart("abc"), "нужен артикул WB, chrt из wb_cart или ссылка на товар")
