@@ -27,17 +27,23 @@ def call(fn, page, /, *args, captcha=False, **kw):
     return got, tab, tab_for, dump
 
 
-def snippet(sku, title, url, price=500, card="", nocard="", shop="", ad=False, cross=False, delivery="", reviews=""):
-    return {"sku": sku, "title": title, "price": price, "card": card, "nocard": nocard, "shop": shop, "ad": ad, "cross": cross,
-            "delivery": delivery, "reviews": reviews, "url": url}
+def snippet(zone, title="", delivery="", reviews="", href=""):
+    return {"zone": zone, "title": title, "delivery": delivery, "reviews": reviews, "href": href}
 
 
-SNIPPETS = [
-    snippet("101", "Кабель A", "/card/kabel-a/1", 500, 480, 490, "Магазин 1", ad=True, delivery="Завтра , ПВЗ", reviews="4.8 (10) · 100 купили"),
-    snippet("101", "Кабель A ещё раз", "/card/kabel-a/1"),
-    snippet("", "Кабель B", "/card/kabel-b/2", 300, cross=True),
-    snippet("", "Кабель B ещё раз", "/card/kabel-b/2"),
-    snippet("103", "Кабель C", "/card/kabel-c/3", 990, 900, 950, "Магазин 3", ad=True, cross=True),
+def prices(card, nocard):
+    return [{"priceType": "yaBank", "priceValue": card}, {"priceType": "withDiscount", "priceValue": nocard}]
+
+
+SNIPPETS = [  # data-zone-data as the site has it: sponsored is a boolean, isCrossBorder a string
+    snippet({"marketSku": "101", "title": "Кабель A", "price": 500, "additionalPrices": prices(480, 490), "sponsored": True,
+             "isCrossBorder": "false", "signals": [{"type": "brand", "title": "Vitumi"}, {"type": "shop", "title": "Магазин 1"}]},
+            "Кабель A на карточке", "Завтра , ПВЗ", "4.8 (10) · 100 купили", "/card/kabel-a/1?do-waremd5=x"),
+    snippet({"marketSku": "101", "title": "Кабель A ещё раз"}, href="/card/kabel-a/1"),
+    snippet({"price": 300, "sponsored": False, "isCrossBorder": "true"}, "Кабель B", href="/card/kabel-b/2"),  # no sku, title on the card only
+    snippet({}, "Кабель B ещё раз", href="/card/kabel-b/2"),  # nothing in its zone
+    snippet({"marketSku": "103", "title": "Кабель C", "price": 990, "additionalPrices": prices(900, 950), "sponsored": True,
+             "isCrossBorder": "true", "signals": [{"type": "shop", "title": "Магазин 3"}]}, href="/card/kabel-c/3"),
 ]
 SEARCH_HEAD = ("ссылки относительно https://market.yandex.ru; цены и доставка — для региона из профиля\n"
                "#\tsku\tс картой Я Банка ₽\tбез карты ₽\tдо скидок ₽\tназвание\tмагазин\tрейтинг · купили\tдоставка\tпометки\tссылка")

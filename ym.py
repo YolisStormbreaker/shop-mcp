@@ -19,18 +19,11 @@ SEARCH_JS = r"""
 (() => {
   const t = s => (s || '').replace(/\s+/g, ' ').trim();
   return [...document.querySelectorAll('[data-zone-name="productSnippet"]')].map(el => {
-    let z = {};
-    try { z = JSON.parse(el.getAttribute('data-zone-data') || '{}'); } catch (e) {}
-    const add = Object.fromEntries((z.additionalPrices || []).map(a => [a.priceType, a.priceValue]));
+    let zone = {};
+    try { zone = JSON.parse(el.getAttribute('data-zone-data') || '{}'); } catch (e) {}
     const q = a => t(el.querySelector(`[data-auto="${a}"]`)?.innerText);
-    return {
-      sku: z.marketSku || '', title: z.title || q('snippet-title'), price: z.price ?? '',
-      card: add.yaBank || '', nocard: add.withDiscount || '',
-      shop: (z.signals || []).find(s => s.type === 'shop')?.title || '',
-      ad: !!z.sponsored, cross: z.isCrossBorder === 'true',
-      delivery: q('delivery-wrapper'), reviews: q('reviews'),
-      url: (el.querySelector('[data-auto="snippet-link"]')?.getAttribute('href') || '').split('?')[0],
-    };
+    return {zone, title: q('snippet-title'), delivery: q('delivery-wrapper'), reviews: q('reviews'),
+            href: el.querySelector('[data-auto="snippet-link"]')?.getAttribute('href') || ''};
   });
 })()
 """
@@ -99,7 +92,7 @@ def search(query, price_min=None, price_max=None, sort="default", page=1, limit=
     items = _read(url, "search", "!!document.querySelector('[data-zone-name=\"productSnippet\"]')", lambda tab: tab.js(SEARCH_JS))
     if items is None:
         return BLOCKED
-    rows = [_search_row(n, x) for n, x in enumerate(_unique(items), 1)]
+    rows = [_search_row(n, x) for n, x in enumerate(_unique(map(_snippet, items)), 1)]
     promoted = sum(1 for r in rows if "продвижение" in r)
     head = (f"Яндекс Маркет · страница {page} · карточек: {len(rows)}, продвигаемых: {promoted}; дальше — page={page + 1} · {url}\n"
             "ссылки относительно https://market.yandex.ru; цены и доставка — для региона из профиля\n"
@@ -118,6 +111,21 @@ def _search_url(query, price_min, price_max, sort, page):
     if page > 1:
         qs["page"] = page
     return "https://market.yandex.ru/search?" + urllib.parse.urlencode(qs)
+
+
+def _snippet(s):
+    """One card from the snippet's data-zone-data and the texts around it."""
+    z = s["zone"]
+    shop = next((x.get("title") for x in z.get("signals") or [] if x.get("type") == "shop"), None)
+    return {"sku": z.get("marketSku") or "", "title": z.get("title") or s["title"], **_prices(z), "shop": shop or "",
+            "ad": bool(z.get("sponsored")), "cross": z.get("isCrossBorder") == "true",  # a string, "true" or "false"
+            "delivery": s["delivery"], "reviews": s["reviews"], "url": s["href"].split("?")[0]}
+
+
+def _prices(z):
+    """price is the one on the card; additionalPrices hold it with the Ya Bank card (yaBank) and without (withDiscount)."""
+    other = {a.get("priceType"): a.get("priceValue") for a in z.get("additionalPrices") or []}
+    return {"price": "" if z.get("price") is None else z["price"], "card": other.get("yaBank") or "", "nocard": other.get("withDiscount") or ""}
 
 
 def _unique(items):
