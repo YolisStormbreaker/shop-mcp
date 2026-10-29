@@ -81,9 +81,33 @@ def _captcha(tab, what):
     return False
 
 
+def _read(url, what, ready, read):
+    """read(tab) once the Market tab shows url (ready: JS condition of a loaded page); None behind a captcha."""
+    tab = tab_for("market.yandex.ru")
+    try:
+        tab.goto(url, "ym", wait_js=f"{_new_page(tab)} && ({ready} || {CAPTCHA_JS})")
+        return None if _captcha(tab, f"{what} {url}") else read(tab)
+    finally:
+        tab.close()
+
+
 def search(query, price_min=None, price_max=None, sort="default", page=1, limit=30):
     if sort not in SORTS:
         return f"sort: одно из {', '.join(SORTS)}"
+    url = _search_url(query, price_min, price_max, sort, page)
+    # only the server-rendered part of the grid: the rest loads on scroll, which a background tab never does
+    items = _read(url, "search", "!!document.querySelector('[data-zone-name=\"productSnippet\"]')", lambda tab: tab.js(SEARCH_JS))
+    if items is None:
+        return BLOCKED
+    rows = [_search_row(n, x) for n, x in enumerate(_unique(items), 1)]
+    promoted = sum(1 for r in rows if "продвижение" in r)
+    head = (f"Яндекс Маркет · страница {page} · карточек: {len(rows)}, продвигаемых: {promoted}; дальше — page={page + 1} · {url}\n"
+            "ссылки относительно https://market.yandex.ru; цены и доставка — для региона из профиля\n"
+            "#\tsku\tс картой Я Банка ₽\tбез карты ₽\tдо скидок ₽\tназвание\tмагазин\tрейтинг · купили\tдоставка\tпометки\tссылка")
+    return head + "\n" + ("\n".join(rows[:limit]) if rows else "(пусто)")
+
+
+def _search_url(query, price_min, price_max, sort, page):
     qs = {"text": query}
     if price_min:
         qs["pricefrom"] = int(price_min)
@@ -93,32 +117,21 @@ def search(query, price_min=None, price_max=None, sort="default", page=1, limit=
         qs["how"] = SORTS[sort]
     if page > 1:
         qs["page"] = page
-    url = "https://market.yandex.ru/search?" + urllib.parse.urlencode(qs)
-    tab = tab_for("market.yandex.ru")
-    try:
-        tab.goto(url, "ym", wait_js=f"{_new_page(tab)} && (!!document.querySelector('[data-zone-name=\"productSnippet\"]') || {CAPTCHA_JS})")
-        if _captcha(tab, f"search {url}"):
-            return BLOCKED
-        # only the server-rendered part of the grid: the rest loads on scroll, which a background tab never does
-        items = tab.js(SEARCH_JS)
-    finally:
-        tab.close()
-    seen, rows = set(), []
+    return "https://market.yandex.ru/search?" + urllib.parse.urlencode(qs)
+
+
+def _unique(items):
+    """Snippets in page order, each sku (or link, when there is none) once."""
+    first = {}
     for x in items:
-        key = x["sku"] or x["url"]
-        if key in seen:
-            continue
-        seen.add(key)
-        nocard = x["nocard"] or x["price"]
-        before = x["price"] if x["nocard"] else ""
-        marks = ", ".join(m for m, on in (("продвижение", x["ad"]), ("из-за рубежа", x["cross"])) if on)
-        rows.append(f"{len(rows)+1}\t{x['sku']}\t{x['card']}\t{nocard}\t{before}\t{x['title']}\t{x['shop']}\t"
-                    f"{x['reviews']}\t{x['delivery']}\t{marks}\t{x['url']}")
-    promoted = sum(1 for r in rows if "продвижение" in r)
-    head = (f"Яндекс Маркет · страница {page} · карточек: {len(rows)}, продвигаемых: {promoted}; дальше — page={page + 1} · {url}\n"
-            "ссылки относительно https://market.yandex.ru; цены и доставка — для региона из профиля\n"
-            "#\tsku\tс картой Я Банка ₽\tбез карты ₽\tдо скидок ₽\tназвание\tмагазин\tрейтинг · купили\tдоставка\tпометки\tссылка")
-    return head + "\n" + ("\n".join(rows[:limit]) if rows else "(пусто)")
+        first.setdefault(x["sku"] or x["url"], x)
+    return list(first.values())
+
+
+def _search_row(n, x):
+    marks = ", ".join(m for m, on in (("продвижение", x["ad"]), ("из-за рубежа", x["cross"])) if on)
+    return (f"{n}\t{x['sku']}\t{x['card']}\t{x['nocard'] or x['price']}\t{x['price'] if x['nocard'] else ''}\t{x['title']}\t"
+            f"{x['shop']}\t{x['reviews']}\t{x['delivery']}\t{marks}\t{x['url']}")
 
 
 def item(url, full=False):
