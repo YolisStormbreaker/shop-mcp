@@ -351,5 +351,17 @@ class SendTests(unittest.TestCase):
                 tab_for.assert_not_called()
 
 
+
+class SmallPartsTests(unittest.TestCase):
+    def test_chat_id_from_an_id_or_any_link(self):
+        for chat in ("u2i-abc", " https://www.avito.ru/profile/messenger/channel/u2i-abc ", ".../channel/u2i-abc/",
+                     ".../channel/u2i-abc?from=item", ".../channel/u2i-abc/?from=item"):
+            with self.subTest(chat):
+                self.assertEqual(messenger._channel_id(chat), "u2i-abc")
+
+    def test_message_of_empty_chunks_names_its_type(self):
+        msg = {"type": "location", "body": {"chunks": [{"type": "map"}, {"value": {}}]}}
+        self.assertEqual(messenger._text(msg), "[location]")
+
 if __name__ == "__main__":
     unittest.main()

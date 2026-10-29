@@ -79,7 +79,7 @@ def _text(msg):
     body = msg.get("body") or {}
     t = body.get("text") or (msg.get("preview") or {}).get("text")
     if not t and body.get("chunks"):
-        t = " ".join((c.get("value") or {}).get("text", "") for c in body["chunks"])
+        t = " ".join((c.get("value") or {}).get("text", "") for c in body["chunks"]).strip()
     if not t or t.startswith("Сообщение не поддерживается"):
         t = (msg.get("preview") or {}).get("text") or t or f"[{msg.get('type')}]"
     return " ".join(t.split())
@@ -91,7 +91,7 @@ def _mine(msg):
 
 def _channel_id(chat):
     """Channel id from an id or a messenger link."""
-    return chat.strip().rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+    return chat.strip().split("?")[0].rstrip("/").rsplit("/", 1)[-1]
 
 
 def chats(limit=20, unread_only=False, before=None):
