@@ -147,50 +147,82 @@ def product(id_or_url):
     finally:
         tab.close()
     c = got.get("p")
-    if not c:      # the app keeps a card it has shown and does not fetch it again: a full load has it server-rendered
-        tab = _tab()
-        try:
-            tab.goto(f"{SITE}/product/x-{pid}/", "lenta", wait_js="!!document.getElementById('ng-state')")
-            c = tab.js(rf"""(() => {{ const s = JSON.parse(document.getElementById('ng-state').textContent);
-                const m = Object.entries(s).find(([k]) => /\/catalog\/items\/{pid}($|[?|])/.test(k));
-                return m ? (m[1].b || m[1].body || m[1]) : null }})()""")
-            zones = zones or tab.js(ZONES_JS) or []
-        finally:
-            tab.close()
+    if not c:
+        c, zones = _rendered(pid, zones)
     if not c or not c.get("id"):
         return f"Лента: карточка {pid} не пришла (неверный id или проверка на бота)"
+    return _card(c, zones)
+
+
+def _rendered(pid, zones):
+    """The app keeps a card it has shown and does not fetch it again: a full load has it server-rendered."""
+    tab = _tab()
+    try:
+        tab.goto(f"{SITE}/product/x-{pid}/", "lenta", wait_js="!!document.getElementById('ng-state')")
+        return tab.js(rf"""(() => {{ const s = JSON.parse(document.getElementById('ng-state').textContent);
+            const m = Object.entries(s).find(([k]) => /\/catalog\/items\/{pid}($|[?|])/.test(k));
+            return m ? (m[1].b || m[1].body || m[1]) : null }})()"""), zones or tab.js(ZONES_JS) or []
+    finally:
+        tab.close()
+
+
+SKIP = {232, 233, 234, 238, 242, 84, 236}
+
+
+def _value(attrs, i):
+    return _obj(attrs, i).get("value") or ""
+
+
+def _attributes(c):
+    """(attributes by id, values by alias, «name: value» of those without a field of their own)"""
     attrs = {a.get("id"): a for a in c.get("attributes") or []}
     by_alias = {a.get("alias"): a.get("value") for a in c.get("attributes") or [] if a.get("alias")}
-    nutri_text = " ; ".join(str((attrs.get(i) or {}).get("value") or "") for i in (233, 234))   # the two are swapped on some cards
-    nut = nutrition_from_text(nutri_text)
+    return attrs, by_alias, [f"{a.get('name')}: {a.get('value')}" for i, a in attrs.items() if i not in SKIP and a.get("value")]
+
+
+def _card(c, zones):
+    attrs, by_alias, info = _attributes(c)
     p = _listed(c)
     per_kg = p.pop("_per_kg")
-    skip = {232, 233, 234, 238, 242, 84, 236}
-    info = [f"{a.get('name')}: {a.get('value')}" for i, a in attrs.items() if i not in skip and a.get("value")]
-    extra = []
-    disc = [b.get("title") for b in (c.get("badges") or {}).get("discount") or [] if b.get("title")]
-    if disc:
-        extra.append("скидка " + ", ".join(disc))
-    if per_kg:
-        extra.append(f"весовой товар: {per_kg} ₽/кг, шаг {(c.get('units') or {}).get('saleUnitQuantity')} кг")
-    if c.get("count"):
-        extra.append(f"в наличии до {c['count']} шт")
-    sel = [z for z in zones if z.get("selected")] or zones
-    if sel:
-        extra.append("доставка: " + "; ".join(
-            f"{z['name']} {z.get('time') or ''}, заказ от {z.get('min')} ₽, доставка " + ", ".join(f"{pr} ₽ от {st} ₽" for pr, st in z.get("prices") or [])
-            for z in sel))
-    if info:
-        extra.append("характеристики: " + "; ".join(info))
-    revs = c.get("reviews") or []
-    if revs:
-        extra.append(f"отзывы (первые {len(revs)}, ещё — grocery_reviews): " + " | ".join(
-            f"{r.get('rating')}★ {' '.join((r.get('text') or '').split())[:200]}" for r in revs if r.get("text")))
-    p.update(brand=by_alias.get("brand") or "", photos=[i.get("large") or i.get("original") for i in c.get("images") or [] if i.get("large") or i.get("original")],
-             description=re.sub(r"<[^>]+>", " ", (attrs.get(242) or {}).get("value") or "").strip(),
-             composition=(attrs.get(232) or {}).get("value") or by_alias.get("ingredients") or "", nutrition=nut,
-             composition_extra="; ".join(x for x in info if re.search(r"^(Сахар|Содержание|Веганское|Фермерская)", x)), extra=extra)
+    p.update(brand=by_alias.get("brand") or "", photos=_photos(c), description=re.sub(r"<[^>]+>", " ", _value(attrs, 242)).strip(),
+             composition=_value(attrs, 232) or by_alias.get("ingredients") or "",
+             nutrition=nutrition_from_text(" ; ".join(str(_value(attrs, i)) for i in (233, 234))),   # the two are swapped on some cards
+             composition_extra="; ".join(x for x in info if re.search(r"^(Сахар|Содержание|Веганское|Фермерская)", x)),
+             extra=_extra(c, per_kg, zones, info))
     return p
+
+
+def _extra(c, per_kg, zones, info):
+    return [x for x in (_discount(c), per_kg and f"весовой товар: {per_kg} ₽/кг, шаг {_obj(c, 'units').get('saleUnitQuantity')} кг",
+                        c.get("count") and f"в наличии до {c['count']} шт", _delivery(zones),
+                        info and "характеристики: " + "; ".join(info), _reviews_line(c)) if x]
+
+
+def _photos(c):
+    return [u for u in (i.get("large") or i.get("original") for i in c.get("images") or []) if u]
+
+
+def _discount(c):
+    titles = [b.get("title") for b in _obj(c, "badges").get("discount") or [] if b.get("title")]
+    return "скидка " + ", ".join(titles) if titles else ""
+
+
+def _delivery(zones):
+    """The zone the site chose for the user's address, or every zone when it chose none."""
+    sel = [z for z in zones if z.get("selected")] or zones
+    if not sel:
+        return ""
+    return "доставка: " + "; ".join(
+        f"{z['name']} {z.get('time') or ''}, заказ от {z.get('min')} ₽, доставка " + ", ".join(f"{pr} ₽ от {st} ₽" for pr, st in z.get("prices") or [])
+        for z in sel)
+
+
+def _reviews_line(c):
+    revs = c.get("reviews") or []
+    if not revs:
+        return ""
+    return f"отзывы (первые {len(revs)}, ещё — grocery_reviews): " + " | ".join(
+        f"{r.get('rating')}★ {' '.join((r.get('text') or '').split())[:200]}" for r in revs if r.get("text"))
 
 
 def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=5):
