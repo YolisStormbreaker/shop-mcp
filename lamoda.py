@@ -253,11 +253,14 @@ def _cart_text(d):
     items = _lines(d)
     if not items:
         return "корзина Lamoda пуста"
-    rows = [f"{i['size'].get('sku')}\t{i.get('quantity')}\t{i.get('total_price')}\t{i.get('original_price') if i.get('original_price') != i.get('total_price') else ''}\t"
-            f"{(i.get('product') or {}).get('brand', {}).get('title', '')}\t{(i.get('product') or {}).get('title', '')}\t{i['size'].get('title', '')}"
-            for i in items]
     return (f"корзина Lamoda: {d.get('total_quantity')} шт, итого {d.get('total_price')} ₽ (со всеми скидками)\n"
-            "sku размера\tшт\tсумма ₽\tбез скидок\tбренд\tназвание\tразмер\n" + "\n".join(rows))
+            "sku размера\tшт\tсумма ₽\tбез скидок\tбренд\tназвание\tразмер\n" + "\n".join(map(_cart_row, items)))
+
+
+def _cart_row(i):
+    product, total, original = i.get("product") or {}, i.get("total_price"), i.get("original_price")
+    return "\t".join(map(str, [i["size"].get("sku"), i.get("quantity"), total, original if original != total else "",
+                               product.get("brand", {}).get("title", ""), product.get("title", ""), i["size"].get("title", "")]))
 
 
 def cart():
