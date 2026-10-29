@@ -70,7 +70,7 @@ class GoldAppleSearchTests(unittest.TestCase):
         self.assertEqual(got, f"Золотое яблоко · 2000+ найдено · страница 1 (по 24) · {QUERY}\n" + SEARCH_HEAD +
                          "1\t19000163536\t2150\t3070\tBrand A\tКушон\tтональный кушон\t7.5 г (вариантов: 9)\t4.6\t7274\t\t/19000163536-cushion\n"
                          "2\t19000000001\t500\t\tBrand B\tШампунь\tшампунь\t250 мл\t\t\tнет в наличии\t/19000000001-shampoo\n"
-                         "3\t19000000002\tNone\t\t\t\t\t\t\t\tнет в наличии\t")
+                         "3\t19000000002\t\t\t\t\t\t\t\t\tнет в наличии\t")
         self.assertEqual(capture.call_args.args, (tab, "goldapple", QUERY, {"s": ["re:/front/api/catalog/(search-products|cards-list)"]}))
         tab.close.assert_called_once()
 
@@ -191,14 +191,14 @@ class GoldAppleReviewsTests(unittest.TestCase):
         self.assertEqual(got, "Золотое яблоко · артикул 19000163536: рейтинг 4.6, отзывов 7274, рекомендуют 89% · 5★ 80% 1★ 3%\n"
                               "страница 1 (по 20), сортировка useful; фото с отзывов всего: 142\n" + REVIEWS_HEAD +
                               "2026-10-28\t5\t1\t7.5 г 0.5, Porcelain\tПокупатель Б.\t+ стойкий | − мало | Беру снова\t"
-                              "https://cdn-01.goldapple.ru/p/p/r1/fullhd.jpg \n"
+                              "https://cdn-01.goldapple.ru/p/p/r1/fullhd.jpg\n"
                               "\t4\t\tM\t\t\t")
         self.assertEqual(api.call_args.args, (tab, "GET", "/front/api/review/listing/v3?locale=ru&itemId=19000163536&pageNumber=1&sortType=ByUsefulness"))
         tab.close.assert_called_once()
 
     def test_empty_page_with_photos_only(self):
         got, api, _ = self.reviews({}, "https://goldapple.ru/19000163536-cushion", sort="low", with_media=True, page=2)
-        self.assertEqual(got, "Золотое яблоко · артикул 19000163536: рейтинг None, отзывов None, рекомендуют None% · \n"
+        self.assertEqual(got, "Золотое яблоко · артикул 19000163536: рейтинг —, отзывов 0\n"
                               "страница 2 (по 20), сортировка low, только с фото; фото с отзывов всего: 0\n" + REVIEWS_HEAD + "(отзывов нет)")
         self.assertTrue(api.call_args.args[2].endswith("&pageNumber=2&sortType=ByLowestStars&hasMedia=true"))
 
@@ -224,7 +224,7 @@ GA_CART_HEAD = ("корзина Золотого яблока (✓ — выбр�
                 "артикул\tшт\tцена ₽\tбез скидки\t✓\tбренд\tназвание\tвариант\n")
 GA_CART_TEXT = (GA_CART_HEAD + "19000163536\t2\t4300\t6140\t✓\tBrand A\tКушон\t7.5 г 0.5, Porcelain\n"
                 "19000000001\t1\t500\t\t\tBrand B\tШампунь\t\n"
-                "None\tNone\tNone\t\t\t\t\t")
+                "\t\t\t\t\t\t\t")
 SHAMPOO_CART = {"data": {"rawCart": {"items": [SHAMPOO]}}}
 SHAMPOO_TEXT = GA_CART_HEAD + "19000000001\t1\t500\t\t\tBrand B\tШампунь\t"
 GA_STATE = ("GET", "/front/api/cart/v3/state?locale=ru&includeDeliveryThreshold=false", None)

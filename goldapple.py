@@ -73,7 +73,7 @@ def _category(data):
 def _search_row(n, p):
     actual, old = _rub(p.get("price"), "actual"), _rub(p.get("price"), "old")
     rv = p.get("reviews") or {}
-    return (f"{n}\t{p.get('itemId')}\t{actual}\t{old if old and old != actual else ''}\t{p.get('brand', '')}\t"
+    return (f"{n}\t{p.get('itemId')}\t{'' if actual is None else actual}\t{old if old and old != actual else ''}\t{p.get('brand', '')}\t"
             f"{p.get('name', '')}\t{p.get('productType', '')}\t{_volume(p)}\t{rv.get('rating') or ''}\t"
             f"{rv.get('reviewsCount') or ''}\t{'' if p.get('inStock') else 'нет в наличии'}\t{p.get('url', '')}")
 
@@ -196,8 +196,9 @@ def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=20):
 def _reviews_head(data, sku, sort, with_media, page):
     st = data.get("statistic") or {}
     stars = " ".join(f"{x['star']}★ {x['percent']}%" for x in st.get("starStatistic") or [])
-    return (f"Золотое яблоко · артикул {sku}: рейтинг {st.get('rating')}, отзывов {st.get('allReviewsCount')}, "
-            f"рекомендуют {st.get('recommended')}% · {stars}\n"
+    rec = f", рекомендуют {st['recommended']}%" if st.get("recommended") is not None else ""
+    return (f"Золотое яблоко · артикул {sku}: рейтинг {st.get('rating') or '—'}, отзывов {st.get('allReviewsCount') or 0}{rec}"
+            + (f" · {stars}" if stars else "") + "\n"
             f"страница {page} (по 20), сортировка {sort}{', только с фото' if with_media else ''}; "
             f"фото с отзывов всего: {(data.get('gallery') or {}).get('mediaCount', 0)}\n"
             "дата\t★\tполезно\tвариант\tавтор\tтекст\tфото (shop_images)")
@@ -207,7 +208,7 @@ def _review_row(r):
     # a color's value is its swatch picture, its name is the shade
     variant = " ".join(f"{'' if isinstance(a.get('value'), dict) else a.get('value')} {a.get('name', '')}".strip()
                        for a in (r.get("attributes") or {}).values())
-    photos = " ".join(_img(i.get("original") or {}) for i in r.get("imageUrls") or [])
+    photos = " ".join(x for x in (_img(i.get("original") or {}) for i in r.get("imageUrls") or []) if x)
     return (f"{(r.get('submitDate') or '')[:10]}\t{r.get('stars')}\t{r.get('likes') or ''}\t{variant}\t"
             f"{r.get('username', '')}\t{_text(_review_text(r))}\t{photos}")
 
@@ -245,8 +246,9 @@ def _cart_text(d):
 def _cart_row(i):
     old = i.get("oldPriceAmountClean")
     price = i.get("specialPriceAmountClean") or old
-    return (f"{i.get('productSku')}\t{i.get('qty')}\t{price}\t{old if old and old != price else ''}\t"
-            f"{'✓' if i.get('isSelected') else ''}\t{i.get('brand', '')}\t{i.get('productName') or i.get('prodname', '')}\t{i.get('variant') or ''}")
+    cells = (i.get("productSku"), i.get("qty"), price, old if old and old != price else None, "✓" if i.get("isSelected") else None,
+             i.get("brand"), i.get("productName") or i.get("prodname"), i.get("variant"))
+    return "\t".join("" if c is None else str(c) for c in cells)
 
 
 def _sku(id_or_url):
