@@ -122,7 +122,7 @@ mcp = FastMCP("shop", instructions=INSTRUCTIONS)
 # old function until ozon itself is reloaded.
 # shoplog is left alone: reloading it would add a second log handler.
 # A new tool still needs a restart: tools are registered from server.py once, at start.
-_RELOADABLE = ("cdp", "capture", "images", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple",
+_RELOADABLE = ("cdp", "capture", "images", "textsearch", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple",
                "grocery.composition", "grocery.lenta", "grocery.samokat", "grocery.lavka", "grocery.perekrestok", "grocery.pyaterochka", "grocery.vkusvill",
                "grocery")
 _mtimes = {m: Path(sys.modules[m].__file__).stat().st_mtime for m in _RELOADABLE}
@@ -228,15 +228,18 @@ def ozon_item(sku_or_url: str, full: bool = False) -> str:
 @mcp.tool()
 @logged
 def ozon_reviews(sku_or_url: str, sort: str = "useful", with_media: bool = False,
-                 page: int = 1, this_variant: bool = False) -> str:
+                 page: int = 1, this_variant: bool = False, query: str | None = None) -> str:
     """Отзывы Ozon о товаре (sku или ссылка): рейтинг и число отзывов по звёздам; по каждому дата, звёзды,
     «полезно» +/−, вариант (цвет, размер…), имя, текст (+ достоинства | − недостатки | комментарий),
     ссылки на фото (смотреть — shop_images) и видео (mp4 и картинка-превью для shop_images).
     sort: useful («новые и полезные», по умолчанию), high, low; сортировки по дате Ozon не даёт.
-    По 30 на страницу, page=2, 3… По умолчанию отзывы на все варианты товара, this_variant=True — только на этот.
+    По 30 на страницу, page=2, 3… По умолчанию отзывы на все варианты товара, this_variant=True — только на этот:
+    продавцы иногда склеивают под одним рейтингом разные товары.
     with_media=True оставляет из полученной страницы только отзывы с фото или видео:
-    фильтра на стороне Ozon нет, поэтому строк может быть меньше 30."""
-    return ozon.reviews(sku_or_url, sort, with_media, page, this_variant)
+    фильтра на стороне Ozon нет, поэтому строк может быть меньше 30.
+    query — слова, которые все должны быть в отзыве или варианте, например «высота центра»; несколько вариантов
+    через «|». С query листает от page до 10 страниц (300 отзывов) и отдаёт до 30 подходящих. Жалобы — sort=low."""
+    return ozon.reviews(sku_or_url, sort, with_media, page, this_variant, query)
 
 
 @mcp.tool()
@@ -289,12 +292,16 @@ def ali_item(id_or_url: str, sku: str | None = None, list_variants: bool = True,
 
 @mcp.tool()
 @logged
-def ali_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False, page: int = 1) -> str:
+def ali_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False, page: int = 1,
+                query: str | None = None) -> str:
     """Отзывы AliExpress о товаре (id или ссылка): рейтинг и число отзывов; по каждому дата, звёзды,
     лайки, вариант, автор, текст (с дополнением покупателя и ответами), ссылки на фото (смотреть — shop_images).
     sort: useful (по умолчанию), new, high, low. with_media=True — только с фото (фильтр сайта).
-    По 10 на страницу (другой размер сайт не принимает), page=2, 3… Видео у отзывов API не отдаёт."""
-    return ali.reviews(id_or_url, sort, with_media, page)
+    По 10 на страницу (другой размер сайт не принимает), page=2, 3… Видео у отзывов API не отдаёт.
+    query — слова, которые все должны быть в отзыве или варианте, например «S08K»; несколько вариантов через «|».
+    С query листает от page до 8 страниц (80 отзывов, с паузами: частые запросы вызывают проверку-слайдер)
+    и отдаёт до 30 подходящих. Жалобы — sort=low."""
+    return ali.reviews(id_or_url, sort, with_media, page, query)
 
 
 @mcp.tool()

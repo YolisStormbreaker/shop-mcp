@@ -7,6 +7,7 @@ import json
 import re
 import time
 
+import textsearch
 from cdp import tab_for
 from shoplog import dump, log
 
@@ -272,39 +273,65 @@ def item(id_or_url, sku=None, list_variants=True, full=False):
 REVIEW_SORTS = {"useful": 1, "new": 2, "high": 3, "low": 4}   # values of the site's own sort chips
 
 
-def reviews(id_or_url, sort="useful", with_media=False, page=1):
-    """The site's review list API (RedReviewsProductFeedbackList widget). pageSize other than 10 → «Неверный запрос»."""
+QUERY_PAGES = 8             # with query: up to 80 reviews scanned
+
+
+def reviews(id_or_url, sort="useful", with_media=False, page=1, query=None):
+    """The site's review list API (RedReviewsProductFeedbackList widget). pageSize other than 10 → «Неверный запрос».
+    query has no server side: it reads on from `page` and keeps the matches."""
     if sort not in REVIEW_SORTS:
         return f"sort: одно из {', '.join(REVIEW_SORTS)}"
     item_id = _item_id(id_or_url)
+    alts = textsearch.alts(query)
     tab = _tab()
+    rows, scanned, pages = [], 0, 0
     try:
-        r = _fetch(tab, "/aer-jsonapi/review/v5/desktop/product-reviews",
-                   {"productKey": {"id": item_id, "sourceId": 0}, "pagination": {"pageNum": page, "pageSize": 10},
-                    "sort": REVIEW_SORTS[sort], "filters": [1] if with_media else [], "skuFilter": []})
+        while True:
+            if pages:
+                time.sleep(1.5)     # on top of _fetch's gap: a burst of pages brought the slider (upstream, 2026-10-22)
+            r = _fetch(tab, "/aer-jsonapi/review/v5/desktop/product-reviews",
+                       {"productKey": {"id": item_id, "sourceId": 0}, "pagination": {"pageNum": page + pages, "pageSize": 10},
+                        "sort": REVIEW_SORTS[sort], "filters": [1] if with_media else [], "skuFilter": []})
+            if r.get("error"):
+                break
+            batch = (r.get("data") or {}).get("reviews") or []
+            scanned, pages = scanned + len(batch), pages + 1
+            rows += _review_rows(batch, alts)
+            if not query or len(rows) >= 30 or len(batch) < 10 or pages >= QUERY_PAGES:
+                break
         data = _product_data(tab, item_id).get("data") or {}
     finally:
         tab.close()
-    if r.get("error"):
+    if r.get("error") and not pages:
         return f"AliExpress не отдал отзывы: {r['error'].get('message')}"
     total = int(data.get("reviews") or 0)
+    where = (f"страницы {page}–{page + pages - 1}: «{query}» нашлось в {len(rows)} из {scanned}"
+             + (f"; дальше сайт ответил «{r['error'].get('message')}»" if r.get("error") else "")
+             if query else f"страница {page} из {max(1, -(-total // 10))} (по 10; с фильтром страниц меньше)")
     head = (f"AliExpress · товар {item_id}: рейтинг {(data.get('rating') or {}).get('middle') or '—'}, отзывов {total}\n"
-            f"страница {page} из {max(1, -(-total // 10))} (по 10; с фильтром страниц меньше), сортировка {sort}"
+            f"{where}, сортировка {sort}"
             f"{', только с фото' if with_media else ''}. У отзывов в ответе API только фото, видео нет.\n"
             "дата\t★\tполезно\tвариант\tавтор\tтекст\tфото (shop_images)")
+    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
+
+
+def _review_rows(batch, alts):
     rows = []
-    for x in (r.get("data") or {}).get("reviews") or []:
+    for x in batch:
         root = x.get("root") or {}
         text = root.get("text") or ""
         add = x.get("additional") or {}
         if add.get("text"):
             text += f" | дополнение: {add['text']}"
         text += "".join(f" | ответ: {c.get('text', '')}" for c in root.get("comments") or [] if c.get("text"))
+        variant = (x.get("product") or {}).get("skuProperties") or ""
+        if not textsearch.match(variant + " " + text, alts):
+            continue
         photos = [i["url"] for i in (root.get("images") or []) + (add.get("images") or []) if i.get("url")]
         rows.append(f"{root.get('date', '')}\t{root.get('grade', '')}\t{(x.get('interaction') or {}).get('likesAmount', 0)}\t"
-                    f"{(x.get('product') or {}).get('skuProperties') or ''}\t{(x.get('reviewer') or {}).get('name', '')}\t"
+                    f"{variant}\t{(x.get('reviewer') or {}).get('name', '')}\t"
                     f"{' '.join(text.split())}\t{' '.join(photos)}")
-    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
+    return rows
 
 
 def _count(tab):

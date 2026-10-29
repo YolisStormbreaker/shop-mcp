@@ -8,6 +8,7 @@ import re
 import time
 import urllib.parse
 
+import textsearch
 from cdp import tab_for
 from shoplog import dump, log
 
@@ -230,46 +231,68 @@ def _list_reviews(page):
     return next(iter(_widgets(page, "webListReviews-")), {})
 
 
-def reviews(sku_or_url, sort="useful", with_media=False, page=1, this_variant=False):
+QUERY_PAGES = 10            # with query: up to 300 reviews scanned
+
+
+def reviews(sku_or_url, sort="useful", with_media=False, page=1, this_variant=False, query=None):
     """Ozon's own reviews page: 30 per page. Page N needs the page_key Ozon puts into page 1's links.
     No server-side filter for photos was found (with_media, withMedia, photo params are ignored),
-    so with_media filters the page that was fetched."""
+    so with_media filters the page that was fetched.  query has no server side either: it reads on
+    from `page` through the pages' own nextPage links (upstream, 2026-10-22) and keeps the matches."""
     if sort not in REVIEW_SORTS:
         return f"sort: одно из {', '.join(REVIEW_SORTS)} (сортировки по дате на Ozon нет: useful — «новые и полезные»)"
     sku = _sku(sku_or_url)
     base = f"/product/{sku}/reviews/?sort={REVIEW_SORTS[sort]}&reviewsVariantMode={1 if this_variant else 2}"
+    alts = textsearch.alts(query)
     tab = _tab()
+    rows, products, scanned, pages = [], {}, 0, 0
     try:
-        first = _page(tab, base)
-        lr = _list_reviews(first)
+        first = pg = _page(tab, base)
         if page > 1:
-            m = re.search(r"page_key=([^&]+)", json.dumps(lr.get("paging") or {}))
-            lr = _list_reviews(_page(tab, f"{base}&page={page}&page_key={m.group(1)}")) if m else {}
+            m = re.search(r"page_key=([^&]+)", json.dumps(_list_reviews(first).get("paging") or {}))
+            pg = _page(tab, f"{base}&page={page}&page_key={m.group(1)}") if m else {}
+        while True:
+            lr = _list_reviews(pg)
+            products.update(lr.get("products") or {})
+            batch = lr.get("reviews") or []
+            scanned, pages = scanned + len(batch), pages + 1
+            rows += _rows(batch, products, with_media, alts)
+            if not query or len(rows) >= 30 or not batch \
+                    or pages >= QUERY_PAGES or not pg.get("nextPage"):
+                break
+            pg = _page(tab, pg["nextPage"])
     finally:
         tab.close()
     score = next(iter(_widgets(first, "webReviewProductScore-")), {})
-    total = (lr.get("paging") or {}).get("total") or score.get("reviewsCount") or 0
+    total = (_list_reviews(first).get("paging") or {}).get("total") or score.get("reviewsCount") or 0
     stars = " ".join(f"{x.get('title')}: {x.get('value')}" for x in score.get("score") or [])
+    where = (f"страницы {page}–{page + pages - 1}: «{query}» нашлось в {len(rows)} из {scanned}"
+             if query else f"страница {page} из {max(1, -(-total // 30))} (по 30)")
     head = (f"Ozon · sku {sku}: рейтинг {score.get('totalScore', '?')}, отзывов {score.get('reviewsCount', '?')} · {stars}\n"
-            f"{'только этот вариант' if this_variant else 'все варианты товара'}: {total} отзывов, страница {page} из {max(1, -(-total // 30))} (по 30), "
+            f"{'только этот вариант' if this_variant else 'все варианты товара'}: {total} отзывов, {where}, "
             f"сортировка {sort}{'; только с фото или видео — из этой страницы' if with_media else ''}\n"
             "дата\t★\tполезно +/−\tвариант\tавтор\tтекст\tфото (shop_images), видео")
-    products = lr.get("products") or {}
+    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
+
+
+def _rows(batch, products, with_media, alts):
     rows = []
-    for r in lr.get("reviews") or []:
+    for r in batch:
         c = r.get("content") or {}
         if with_media and not (c.get("photos") or c.get("videos")):
             continue
         variant = ", ".join(v.get("value", "") for v in (products.get(str(r.get("itemId"))) or {}).get("variants") or [])
         text = " | ".join(x for x in (f"+ {c['positive']}" if c.get("positive") else "", f"− {c['negative']}" if c.get("negative") else "",
                                       c.get("comment") or "") if x)
+        if not textsearch.match(variant + " " + text, alts):
+            continue
         media = [ph["url"] for ph in c.get("photos") or [] if ph.get("url")]
         media += [f"видео {v.get('duration', '')}: {v['url']} превью {v.get('previewUrl', '')}" for v in c.get("videos") or [] if v.get("url")]
         u = r.get("usefulness") or {}
         date = time.strftime("%Y-%m-%d", time.localtime(r.get("createdAt") or r.get("publishedAt") or 0))
         rows.append(f"{date}\t{c.get('score', '')}\t+{u.get('useful', 0)}/−{u.get('unuseful', 0)}\t{variant}\t"
                     f"{(r.get('author') or {}).get('firstName', '')}\t{' '.join(text.split())}\t{' '.join(media)}")
-    return head + "\n" + ("\n".join(rows) if rows else "(отзывов нет)")
+    return rows
 
 
 def _sku(sku_or_url):

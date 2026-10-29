@@ -21,6 +21,7 @@ from pathlib import Path
 
 import ali
 import ozon
+import textsearch
 from shoplog import log
 
 CACHE = Path(__file__).parent / "cache" / "orders.json"
@@ -49,16 +50,8 @@ def _put(updates):
         tmp.replace(CACHE)
 
 
-def _alts(query):
-    """«usb хаб | hub» -> [["usb", "хаб"], ["hub"]]: an order matches if it has every word
-    of any one alternative.  No query matches everything."""
-    alts = [[w for w in q.lower().split() if w] for q in (query or "").split("|")]
-    return [a for a in alts if a] or [[]]
-
-
 def _match(order, alts):
-    text = " ".join(p["title"] + " " + p.get("variant", "") for p in order["products"]).lower()
-    return any(all(w in text for w in words) for words in alts)
+    return textsearch.match(" ".join(p["title"] + " " + p.get("variant", "") for p in order["products"]), alts)
 
 
 def _stale(o, active):
@@ -181,7 +174,7 @@ def _ozon_details(tab, oid):
 
 
 def ozon_orders(query=None, year=None, limit=30, max_new=60):
-    alts, cache = _alts(query), _load()
+    alts, cache = textsearch.alts(query), _load()
     tab = ozon._tab()
     rows, scanned, fetched, capped = [], 0, 0, False
     try:
@@ -276,7 +269,7 @@ def _ali_lists(tab, cache):
 
 
 def ali_orders(query=None, limit=30, max_new=60):
-    alts, cache = _alts(query), _load()
+    alts, cache = textsearch.alts(query), _load()
     tab = ali._tab()
     rows, scanned, fetched, capped = [], 0, 0, False
     try:
