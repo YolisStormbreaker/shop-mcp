@@ -113,7 +113,7 @@ class LentaSearchTests(unittest.TestCase):
     def test_empty_query_searches_goods(self):
         got, sent = self.search([{}], "")
         self.assertEqual(sent, [("/search/%D1%82%D0%BE%D0%B2%D0%B0%D1%80%D1%8B/", body(""))])
-        self.assertEqual(got, {"items": [], "total": None, "note": "", "facets": list(lenta.DIET), "url": "https://lenta.com/search//"})
+        self.assertEqual(got, {"items": [], "total": None, "note": "", "facets": list(lenta.DIET), "url": "https://lenta.com/search/%D1%82%D0%BE%D0%B2%D0%B0%D1%80%D1%8B/"})   # the page a tag-only search used
 
     def test_diet_tag_is_a_category(self):
         got, sent = self.search([FOUND], "кефир", tag="Веган", limit=5)

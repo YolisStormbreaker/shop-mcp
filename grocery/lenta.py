@@ -90,9 +90,12 @@ def _search(tab, query, sort, limit, offset, mc=None, cat=None):
             "sort": {"type": SORT[sort][0], "order": SORT[sort][1]}, "limit": limit, "offset": offset}
     if cat:
         body["categoryId"] = cat
-    path = "/search/" + urllib.parse.quote(query or "товары") + "/"
-    got = _nav(tab, path, {"s": ["re:/api-gateway/v1/catalog/items$"]}, rewrite=(ITEMS, lambda u: (u, json.dumps(body, ensure_ascii=False))))
+    got = _nav(tab, _search_path(query), {"s": ["re:/api-gateway/v1/catalog/items$"]}, rewrite=(ITEMS, lambda u: (u, json.dumps(body, ensure_ascii=False))))
     return got.get("s")
+
+
+def _search_path(query):
+    return "/search/" + urllib.parse.quote(query or "товары") + "/"     # a tag-only search runs on «товары»
 
 
 def search(query, tag=None, sort="popular", page=1, limit=30):
@@ -144,7 +147,7 @@ def _found(d, note, query, page, limit):
     if total and total > page * limit:
         note += ("\n" if note else "") + f"есть следующая страница: page={page + 1}"
     return {"items": rows, "total": total, "note": note.strip(), "facets": _facets(d),
-            "url": f"{SITE}/search/{urllib.parse.quote(query or '')}/"}
+            "url": SITE + _search_path(query)}
 
 
 def _facets(d):
