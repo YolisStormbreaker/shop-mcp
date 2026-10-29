@@ -1,4 +1,4 @@
-"""Lamoda search rows from the page state (window.__NUXT__), in the shape the site has used since 2026-10.
+"""Lamoda: the page state (window.__NUXT__, in the shape the site has used since 2026-10) and the reviews API -> the tools' text.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_lamoda"""
 import unittest
 from unittest.mock import MagicMock, patch
