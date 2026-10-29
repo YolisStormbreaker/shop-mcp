@@ -213,23 +213,35 @@ def item(store, id_or_url, full=False):
     p = STORES[store].product(id_or_url)
     if isinstance(p, str):
         return p
-    price, old = p.get("price"), p.get("old")
-    lines = [f"{NAMES[store]} · {p.get('name', '')}" + (f" · {p['brand']}" if p.get("brand") else ""), p.get("url", ""),
-             f"id: {p.get('id')}" + (f" · штрихкод {p['ean']}" if p.get("ean") else "") + (f" · фасовка {_display_size(p)}" if _display_size(p) else "")]
-    if price is not None:
-        lines.append(f"цена: {price} ₽" + (f", без скидки {old} ₽ (−{round(100 - price * 100 / old)}%)" if old and old > price else "")
-                     + (f", {unit_price(p)}" if unit_price(p) else ""))
-    lines.append("в наличии" if p.get("available", True) else "⛔ нет в наличии")
-    if p.get("rating"):
-        lines.append(f"рейтинг {p['rating']}" + (f", отзывов {p['reviews']}" if p.get("reviews") else ""))
-    lines += p.get("extra") or []
-    lines += composition.describe(p.get("composition"), p.get("nutrition"), p.get("composition_extra"))
-    if p.get("photos"):
-        lines.append("фото (shop_images): " + " ".join(p["photos"][:8]))
-    desc = p.get("description") or ""
-    if desc:
-        lines.append("\nописание: " + (desc if full else desc[:2000]))
+    lines = _card_head(store, p) + (p.get("extra") or []) + _describe(p) + _card_tail(p, full)
     return "\n".join(x for x in lines if x)
+
+
+def _card_head(store, p):
+    """Name, link, ids, price, stock and rating lines of a card; "" where the site gives nothing."""
+    size = _display_size(p)
+    return [f"{NAMES[store]} · {p.get('name', '')}" + (f" · {p['brand']}" if p.get("brand") else ""), p.get("url", ""),
+            f"id: {p.get('id')}" + (f" · штрихкод {p['ean']}" if p.get("ean") else "") + (f" · фасовка {size}" if size else ""),
+            _price_line(p), "в наличии" if p.get("available", True) else "⛔ нет в наличии",
+            f"рейтинг {p['rating']}" + (f", отзывов {p['reviews']}" if p.get("reviews") else "") if p.get("rating") else ""]
+
+
+def _price_line(p):
+    """«цена: 189.99 ₽, без скидки 239.99 ₽ (−21%), 1900 ₽/кг», or "" without a price."""
+    if p.get("price") is None:
+        return ""
+    return f"цена: {p['price']} ₽" + (f", без скидки {p['old']} ₽ ({_off(p)})" if _off(p) else "") + (f", {unit_price(p)}" if unit_price(p) else "")
+
+
+def _card_tail(p, full):
+    """Photo links and the description, cut at 2000 characters unless full."""
+    desc = p.get("description") or ""
+    return ["фото (shop_images): " + " ".join(p["photos"][:8]) if p.get("photos") else "",
+            "\nописание: " + (desc if full else desc[:2000]) if desc else ""]
+
+
+def _describe(p):
+    return composition.describe(p.get("composition"), p.get("nutrition"), p.get("composition_extra"))
 
 
 RANKS = {"price": "цена за кг/л ↑", "sugar": "сахар на 100 г ↑", "kcal": "ккал на 100 г ↑", "protein": "белок на 100 г ↓",
