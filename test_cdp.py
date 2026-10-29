@@ -2,9 +2,12 @@
 page_json: fetch() from the page, with one retry after a home page load when the answer is not JSON.
 Tab: what goes over the DevTools socket (a scripted fake, no Chrome) and how long each wait lasts (a fake clock).
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_cdp"""
+import fcntl
 import json
+import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from pathlib import Path
+from unittest.mock import MagicMock, call, patch
 
 import cdp
 
@@ -288,6 +291,122 @@ class TabTests(unittest.TestCase):
         tab.heal(timeout=3)
         self.assertEqual(ws.expressions().count("document.readyState"), 3)
         self.assertGreaterEqual(self.clock.now, 1003)
+
+
+class SiteLockTests(unittest.TestCase):
+    """_lock_site with real flock() on files in a temp dir: one caller per site's tab, across processes."""
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name) / "cache"         # made on first use
+        self.clock = Clock()
+        for p in (patch.object(cdp, "LOCKS", self.dir), patch.object(cdp, "time", self.clock)):
+            self.addCleanup(p.stop)
+            p.start()
+
+    def held(self, domain):
+        """The site lock as another process holds it."""
+        f = open(self.dir / f"tab-{domain}.lock", "w")
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.addCleanup(f.close)
+        return f
+
+    def test_free_site_is_taken_at_once(self):
+        lock = cdp._lock_site("ozon.ru")
+        self.addCleanup(lock.close)
+        self.assertEqual(Path(lock.name), self.dir / "tab-ozon.ru.lock")
+        with open(lock.name, "w") as other, self.assertRaises(BlockingIOError):
+            fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.assertEqual(self.clock.slept, [])
+
+    def test_busy_site_is_taken_when_the_other_call_ends(self):
+        cdp._lock_site("wb.ru").close()
+        other = self.held("wb.ru")
+        self.clock.on_sleep = lambda: len(self.clock.slept) == 3 and other.close()
+        lock = cdp._lock_site("wb.ru")
+        self.addCleanup(lock.close)
+        self.assertEqual(self.clock.slept, [0.2] * 3)
+
+    def test_other_sites_do_not_wait(self):
+        cdp._lock_site("wb.ru").close()
+        self.held("wb.ru")
+        cdp._lock_site("ozon.ru").close()
+        self.assertEqual(self.clock.slept, [])
+
+    def test_wait_for_a_busy_site_is_bounded(self):
+        cdp._lock_site("wb.ru").close()
+        self.held("wb.ru")
+        with self.assertRaisesRegex(RuntimeError, f"^вкладка wb.ru занята другим вызовом дольше {cdp.LOCK_WAIT} с$"):
+            cdp._lock_site("wb.ru")
+        self.assertGreater(self.clock.now, 1000 + cdp.LOCK_WAIT)
+
+
+def target(url, ws, type="page"):
+    return {"type": type, "url": url, "webSocketDebuggerUrl": ws}
+
+
+class FindTabTests(unittest.TestCase):
+    def find(self, *answers):
+        lock = MagicMock()
+        with patch.object(cdp, "_http", side_effect=answers) as http, patch.object(cdp, "Tab") as tab:
+            got = cdp._find_tab("ozon.ru", lock)
+        self.assertIs(got, tab.return_value)
+        return tab.call_args, http.call_args_list, lock
+
+    def test_site_tab_is_reused(self):
+        args, http, lock = self.find([target("chrome://newtab/", "ws://blank"), target("https://www.ozon.ru/cart", "ws://ozon")])
+        self.assertEqual(args, call("ws://ozon", lock))
+        self.assertEqual(http, [call("/json/list")])
+
+    def test_only_pages_count(self):
+        args, _, lock = self.find([target("https://www.ozon.ru/sw.js", "ws://sw", type="service_worker"),
+                                   target("about:blank", "ws://blank")])
+        self.assertEqual(args, call("ws://blank", lock))
+
+    def test_new_tab_page_is_taken_before_opening_one(self):
+        args, http, lock = self.find([target("https://mail.test/", "ws://mail"), target("chrome://newtab/", "ws://newtab")])
+        self.assertEqual(args, call("ws://newtab", lock))
+        self.assertEqual(http, [call("/json/list")])
+
+    def test_tab_is_opened_when_none_is_free(self):
+        args, http, lock = self.find([target("https://mail.test/", "ws://mail")], {"webSocketDebuggerUrl": "ws://new"})
+        self.assertEqual(args, call("ws://new", lock))
+        self.assertEqual(http, [call("/json/list"), call("/json/new?about:blank", method="PUT")])
+
+
+class TabForTests(unittest.TestCase):
+    def test_tab_is_healed_before_it_is_handed_out(self):
+        tab = MagicMock()
+        with patch.object(cdp, "_lock_site") as lock_site, patch.object(cdp, "_find_tab", return_value=tab) as find:
+            self.assertIs(cdp.tab_for("ozon.ru"), tab)
+        find.assert_called_once_with("ozon.ru", lock_site.return_value)
+        tab.heal.assert_called_once_with()
+
+    def test_site_is_freed_when_no_tab_is_found(self):
+        with patch.object(cdp, "_lock_site") as lock_site, \
+                patch.object(cdp, "_find_tab", side_effect=RuntimeError("Chrome магазинов не поднялся")):
+            with self.assertRaisesRegex(RuntimeError, "не поднялся"):
+                cdp.tab_for("ozon.ru")
+        lock_site.return_value.close.assert_called_once_with()
+
+
+class HttpTests(unittest.TestCase):
+    def http(self, *args, **kw):
+        answer = MagicMock()
+        answer.__enter__.return_value.read.return_value = b'{"Browser": "Chrome/155"}'
+        with patch.object(cdp.urllib.request, "urlopen", return_value=answer) as urlopen:
+            got = cdp._http(*args, **kw)
+        req, = urlopen.call_args.args
+        return got, req, urlopen.call_args.kwargs
+
+    def test_get_from_the_shop_chrome_port(self):
+        got, req, kw = self.http("/json/version")
+        self.assertEqual(got, {"Browser": "Chrome/155"})
+        self.assertEqual((req.full_url, req.get_method(), kw), ("http://127.0.0.1:9222/json/version", "GET", {"timeout": 10}))
+
+    def test_method_and_timeout_are_passed(self):
+        _, req, kw = self.http("/json/new?about:blank", method="PUT", timeout=2)
+        self.assertEqual((req.full_url, req.get_method(), kw), ("http://127.0.0.1:9222/json/new?about:blank", "PUT", {"timeout": 2}))
 
 
 if __name__ == "__main__":

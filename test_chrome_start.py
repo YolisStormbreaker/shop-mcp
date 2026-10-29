@@ -71,6 +71,12 @@ class ChromeStartTests(unittest.TestCase):
                 cdp._start_chrome()
         run.assert_called_once()
 
+    def test_launcher_that_cannot_run_is_reported(self):
+        with patch.object(cdp, "_http", side_effect=DOWN), \
+                patch.object(cdp.subprocess, "run", side_effect=subprocess.TimeoutExpired("shop-chrome", 90)):
+            with self.assertRaisesRegex(RuntimeError, "^shop-chrome start не запустился: .*timed out after 90 seconds"):
+                cdp._start_chrome()
+
     def test_wait_for_the_port_is_bounded(self):
         with patch.object(cdp, "_http", side_effect=DOWN) as http, \
                 patch.object(cdp.subprocess, "run", return_value=self.ok()) as run:
