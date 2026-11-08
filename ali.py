@@ -387,7 +387,7 @@ def _cart_text(tab):
     for r in rows:
         ln = r["lines"]
         price = next((x for x in ln if "₽" in x), "")
-        qty = ln[-1] if ln and ln[-1].isdigit() else ""
+        qty = _row_qty(r) or ""
         deliv = next((x for x in ln if x.lower().startswith("доставка")), "")
         m = re.search(r"item/(?:\d+_)?(\d+)", r["link"])
         out.append(f"{r['cart_id']}\t{'✓' if r['checked'] else ''}\t{m.group(1) if m else ''}\t{qty}\t{price}\t{ln[0][:90] if ln else ''}\t{deliv}")
@@ -414,7 +414,7 @@ def remove_from_cart(cart_id_or_item_id):
     try:
         _open_cart(tab)
         rows = tab.js(CART_ROWS_JS)
-        hit = [r for r in rows if r["cart_id"] == key or re.search(rf"item/(?:\d+_)?{key}\b", r["link"])]
+        hit = _hits(rows, key)
         if not hit:
             return f"в корзине нет строки {key}\n" + _cart_text(tab)
         ids = [r["cart_id"] for r in hit]
@@ -425,3 +425,47 @@ def remove_from_cart(cart_id_or_item_id):
         return f"удалено строк: {len(ids)}\n" + _cart_text(tab)
     finally:
         tab.close()
+
+
+def _row_qty(r):
+    """The pieces on a cart line: its last text line, the number in its counter."""
+    ln = r["lines"]
+    return int(ln[-1]) if ln and ln[-1].isdigit() else 0
+
+
+def _hits(rows, key):
+    """The cart lines of a cart_id or of an item id (all its variants)."""
+    return [r for r in rows if r["cart_id"] == key or re.search(rf"item/(?:\d+_)?{key}\b", r["link"])]
+
+
+def set_cart_quantity(cart_id_or_item_id, quantity):
+    """quantity pieces on one cart line, by the cart page's own count request; 0 removes the line.
+    Keeps the lines' ✓ selection as it was, as remove does."""
+    if int(quantity) < 0:
+        return "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
+    if not int(quantity):
+        return remove_from_cart(cart_id_or_item_id)
+    key = str(cart_id_or_item_id).strip()
+    tab = _tab()
+    try:
+        _open_cart(tab)
+        rows = tab.js(CART_ROWS_JS)
+        hit = _hits(rows, key)
+        if len(hit) != 1:
+            return ("у товара несколько строк в корзине (варианты), укажи cart_id" if hit else f"в корзине нет строки {key}") + "\n" + _cart_text(tab)
+        line = hit[0]
+        if _row_qty(line) != int(quantity):
+            _fetch(tab, "/aer-jsonapi/v4/cart/hot/items/quantity",
+                   {"itemId": line["cart_id"], "quantity": int(quantity), "selection": [r["cart_id"] for r in rows if r["checked"]],
+                    "selectAll": False, "currentPage": 1, "sortType": 2})
+            _open_cart(tab)
+        return _quantity_text(tab, line["cart_id"], int(quantity))
+    finally:
+        tab.close()
+
+
+def _quantity_text(tab, cart_id, want):
+    now = next((_row_qty(r) for r in tab.js(CART_ROWS_JS) if r["cart_id"] == cart_id), 0)
+    head = f"в корзине {now} шт.: строка {cart_id}" if now == want else \
+        f"⚠️ в корзине {now} шт., а не {want}: строка {cart_id} — AliExpress не подтвердил изменение"
+    return head + "\n" + _cart_text(tab)

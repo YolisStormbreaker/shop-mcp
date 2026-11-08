@@ -348,6 +348,14 @@ def ali_remove_from_cart(cart_id_or_item_id: str) -> str:
 
 @mcp.tool()
 @logged
+def ali_set_cart_quantity(cart_id_or_item_id: str, quantity: int) -> str:
+    """Сколько штук оставить в строке корзины AliExpress: cart_id из ali_cart (или id товара, если у него одна строка),
+    quantity — новое число штук, 0 убирает строку. Выбор строк к оформлению сохраняется. Работает со скрытым браузером."""
+    return ali.set_cart_quantity(cart_id_or_item_id, quantity)
+
+
+@mcp.tool()
+@logged
 def ozon_orders(query: str | None = None, year: int | None = None, limit: int = 30, max_new: int = 60) -> str:
     """История заказов Ozon с названиями товаров; query — слова, которые все должны быть в названии
     или варианте товара (без учёта регистра), например «вентилятор 5015». Несколько вариантов

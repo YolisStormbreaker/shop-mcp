@@ -376,10 +376,11 @@ CART_READY = {"wait_js": "document.body.innerText.includes('Корзина')"}
 
 
 def cart_tab(*rows, body=CART_BODY):
-    """The cart page: CART_ROWS_JS answers with the next list of rows (one per page load), the page text with body."""
-    loads = iter(rows)
+    """The cart page: each load shows the next list of rows, which CART_ROWS_JS reads as often as asked; the page text is body."""
+    loads, page = iter(rows), {}
     tab = MagicMock()
-    tab.js.side_effect = lambda expr, **_: next(loads) if expr == ali.CART_ROWS_JS else {"document.body.innerText": body}[expr]
+    tab.goto.side_effect = lambda *a, **kw: page.update(rows=next(loads))
+    tab.js.side_effect = lambda expr, **_: page["rows"] if expr == ali.CART_ROWS_JS else {"document.body.innerText": body}[expr]
     return tab
 
 
@@ -541,6 +542,80 @@ class RemoveFromCartTests(unittest.TestCase):
         tab.goto.assert_called_once_with(*CART_URL, **CART_READY)
         self.assertEqual(out, "\n".join(["в корзине нет строки 100500", CART_HEAD, *OTHER_LINES]))
 
+
+
+QUANTITY = "/aer-jsonapi/v4/cart/hot/items/quantity"
+WHITE = f"https://aliexpress.ru/item/{ITEM}.html?sku_id=2"
+
+
+def white(qty):
+    """The second variant's line with qty pieces."""
+    return cart_row("2002", WHITE, True, "Кабель белый", "90 ₽", str(qty))
+
+
+class SetCartQuantityTests(unittest.TestCase):
+    def set(self, key, quantity, *loads):
+        tab = cart_tab(*loads, body="Итого\n209 ₽\nК оформлению")
+        with patch.object(ali, "_tab", return_value=tab), patch.object(ali, "_fetch", return_value={"data": {}}) as fetch, \
+                patch.object(ali.time, "sleep"):
+            out = ali.set_cart_quantity(key, quantity)
+        tab.close.assert_called_once()
+        return out, tab, fetch
+
+    def counted(self, item_id, quantity):
+        """The cart page's own count request; the selection is every line chosen for the order, as it was."""
+        return {"itemId": item_id, "quantity": quantity, "selection": ["2001", "2002", "2003"], "selectAll": False, "currentPage": 1, "sortType": 2}
+
+    def test_the_line_gets_the_count(self):
+        before = TWO_VARIANTS + OTHERS
+        cases = {"fewer": ("2002", 1, white(1), "в корзине 1 шт.: строка 2002"),
+                 "more": ("2002", 5, white(5), "в корзине 5 шт.: строка 2002"),
+                 "AliExpress kept the old count": ("2002", 9, white(2), "⚠️ в корзине 2 шт., а не 9: строка 2002 — AliExpress не подтвердил изменение")}
+        for case, (key, quantity, line, head) in cases.items():
+            with self.subTest(case):
+                after = [TWO_VARIANTS[0], line] + OTHERS
+                out, tab, fetch = self.set(key, quantity, before, after)
+                fetch.assert_called_once_with(tab, QUANTITY, self.counted("2002", quantity))
+                self.assertEqual(tab.goto.call_args_list, [call(*CART_URL, **CART_READY)] * 2)
+                self.assertEqual(out.splitlines()[0], head)
+                self.assertEqual(out.splitlines()[4], f"2002\t✓\t{ITEM}\t{line['lines'][-1]}\t90 ₽\tКабель белый\t")
+
+    def test_the_line_gone_after_the_change(self):
+        out, _, _ = self.set("2002", 1, TWO_VARIANTS + OTHERS, TWO_VARIANTS[:1] + OTHERS)
+        self.assertEqual(out.splitlines()[0], "⚠️ в корзине 0 шт., а не 1: строка 2002 — AliExpress не подтвердил изменение")
+
+    def test_an_item_with_one_line_by_its_id(self):
+        after = TWO_VARIANTS + [cart_row("2003", "https://aliexpress.ru/item/1005_1005008606048009.html", True, "Toocki", "209 ₽", "3"), OTHERS[1]]
+        out, tab, fetch = self.set("1005008606048009", 3, TWO_VARIANTS + OTHERS, after)
+        fetch.assert_called_once_with(tab, QUANTITY, self.counted("2003", 3))
+        self.assertEqual(out.splitlines()[0], "в корзине 3 шт.: строка 2003")
+
+    def test_the_same_count_sends_nothing(self):
+        out, tab, fetch = self.set("2003", 1, TWO_VARIANTS + OTHERS)
+        fetch.assert_not_called()
+        tab.goto.assert_called_once_with(*CART_URL, **CART_READY)
+        self.assertEqual(out.splitlines()[0], "в корзине 1 шт.: строка 2003")
+
+    def test_an_item_with_several_lines_needs_the_cart_id(self):
+        out, _, fetch = self.set(ITEM, 1, TWO_VARIANTS + OTHERS)
+        fetch.assert_not_called()
+        self.assertEqual(out.splitlines()[0], "у товара несколько строк в корзине (варианты), укажи cart_id")
+
+    def test_no_such_line(self):
+        out, _, fetch = self.set("100500", 2, OTHERS)
+        fetch.assert_not_called()
+        self.assertEqual(out, "\n".join(["в корзине нет строки 100500", CART_HEAD, *OTHER_LINES]))
+
+    def test_zero_removes_the_line(self):
+        out, tab, fetch = self.set("2002", 0, TWO_VARIANTS + OTHERS, TWO_VARIANTS[:1] + OTHERS)
+        fetch.assert_called_once_with(tab, DELETE, {"ids": ["2002"], "selection": ["2001", "2003"], "selectAll": False,
+                                                    "currentPage": 1, "sortType": 2})
+        self.assertEqual(out.splitlines()[0], "удалено строк: 1")
+
+    def test_less_than_nothing(self):
+        with patch.object(ali, "_tab") as tab:
+            self.assertEqual(ali.set_cart_quantity("2002", -1), "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)")
+        tab.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
