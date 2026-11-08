@@ -247,9 +247,11 @@ class Shop:
     """The site as the cart code meets it.  A full load answers the cart (cartLookup) or the favorites list; the
     product page shows «В корзину» while the cart has none of it, «+» while there is stock left and «−» while the
     cart has some; a press changes the cart like the site does and answers.  sent: loads and presses in order."""
-    def __init__(self, qty=0, stock=100, favs=(), card=True, lookup=(True,), faved=True, inert=False):
-        """lookup: whether each full load in turn brings its answer (the last one goes for the loads after it)."""
+    def __init__(self, qty=0, stock=100, favs=(), card=True, lookup=(True,), faved=True, inert=False, minus=True):
+        """lookup: whether each full load in turn brings its answer (the last one goes for the loads after it);
+        minus: whether the page shows «−» at all."""
         self.qty, self.stock, self.favs, self.card, self.lookup, self.faved, self.inert = qty, stock, list(favs), card, list(lookup), faved, inert
+        self.minus = minus
         self.sent, self.tab = [], MagicMock()
         self.tab.js.side_effect = self.js
 
@@ -257,7 +259,7 @@ class Shop:
         if expr == f"{lenta.CARD_JS}(\"84812\")":
             return {"name": "Кефир 2,5%", "fav": False, "count": self.stock} if self.card else None
         button = next(b for b in BUTTONS if expr == f"!!({b})")
-        return {lenta.ADD: not self.qty and self.stock > 0, lenta.INC: 0 < self.qty < self.stock, lenta.DEC: self.qty > 0}[button]
+        return {lenta.ADD: not self.qty and self.stock > 0, lenta.INC: 0 < self.qty < self.stock, lenta.DEC: self.minus and self.qty > 0}[button]
 
     def capture(self, tab, site, url, patterns, timeout=20, js=None):
         assert (tab, site) == (self.tab, "lenta")
@@ -390,9 +392,7 @@ class LentaRemoveFromCartTests(unittest.TestCase):
         self.assertEqual(shop.sent, [PAGE, ("−", MODIFY), PAGE])
 
     def test_no_minus_button(self):
-        shop = Shop(qty=1)
-        shop.js = lambda expr: False if expr == f"!!({lenta.DEC})" else Shop.js(shop, expr)
-        shop.tab.js.side_effect = shop.js
+        shop = Shop(qty=1, minus=False)
         self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), "не удалось убрать Кефир 2,5% из корзины Ленты")
         self.assertEqual(shop.sent, [PAGE, PAGE])
 
@@ -415,6 +415,62 @@ class LentaRemoveFromCartTests(unittest.TestCase):
         shop = Shop(qty=1, lookup=(True, False))
         self.assertEqual(shop.run(lenta.remove_from_cart, "84812"), UNCHECKED)
         self.assertEqual(shop.sent, [PAGE, ("−", MODIFY), PAGE])
+
+
+class LentaSetCartQuantityTests(unittest.TestCase):
+    def check(self, shop, quantity, said, sent, id_or_url="84812"):
+        self.assertEqual(shop.run(lenta.set_cart_quantity, id_or_url, quantity), said)
+        self.assertEqual(shop.sent, sent)
+
+    def test_fewer_by_minus(self):
+        self.check(Shop(qty=3), 1, "в корзине Ленты: Кефир 2,5% — 1 шт × 109.99 ₽; итого корзины 609.99 ₽", [PAGE, ("−", MODIFY), ("−", MODIFY), PAGE])
+
+    def test_more_by_plus(self):
+        self.check(Shop(qty=1), 3, "в корзине Ленты: Кефир 2,5% — 3 шт × 109.99 ₽; итого корзины 829.97 ₽", [PAGE, ("+", MODIFY), ("+", MODIFY), PAGE],
+                   id_or_url="https://lenta.com/product/kefir-25-930g-84812/")
+
+    def test_the_same_count_presses_nothing(self):
+        self.check(Shop(qty=2), 2, "в корзине Ленты: Кефир 2,5% — 2 шт × 109.99 ₽; итого корзины 719.98 ₽", [PAGE])
+
+    def test_zero_removes_the_line(self):
+        self.check(Shop(qty=2), 0, "убрано из корзины Ленты: Кефир 2,5%", [PAGE, ("−", MODIFY), ("−", MODIFY), PAGE])
+
+    def test_not_in_the_cart(self):
+        self.check(Shop(), 2, "Кефир 2,5% в корзине Ленты нет", [PAGE])
+
+    def test_below_zero_opens_no_tab(self):
+        with patch.object(lenta, "site_tab") as tab:
+            self.assertEqual(lenta.set_cart_quantity("кефир", -1), "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)")
+        tab.assert_not_called()
+
+    def test_not_an_id(self):
+        with self.assertRaises(ValueError):
+            lenta.set_cart_quantity("кефир", 1)
+
+    def test_cart_that_did_not_come(self):
+        self.check(Shop(qty=1, lookup=(False,)), 2, lenta.BLOCKED, [PAGE])
+
+    def test_cart_that_did_not_come_back(self):
+        self.check(Shop(qty=1, lookup=(True, False)), 2, UNCHECKED, [PAGE, ("+", MODIFY), PAGE])
+
+    def test_weighed_line_moves_one_unit_a_press_and_says_where_it_ended(self):
+        self.check(Shop(qty=0.5), 2, "⚠️ в корзине 2.5 шт., а не 2: Кефир 2,5% — Лента не подтвердила изменение",
+                   [PAGE, ("+", MODIFY), ("+", MODIFY), PAGE])
+
+    def test_plus_gone_at_the_stock_limit(self):
+        self.check(Shop(qty=1, stock=2), 4, "⚠️ в корзине 2 шт., а не 4: Кефир 2,5% — кнопки «+» на странице не стало (больше нет в наличии?)",
+                   [PAGE, ("+", MODIFY), PAGE])
+
+    def test_no_minus_button(self):
+        self.check(Shop(qty=2, minus=False), 1, "⚠️ в корзине 2 шт., а не 1: Кефир 2,5% — кнопки «−» на странице не стало", [PAGE, PAGE])
+
+    def test_thirty_presses_that_changed_nothing(self):
+        self.check(Shop(qty=1, inert=True), 31, "⚠️ в корзине 1 шт., а не 31: Кефир 2,5% — Лента не подтвердила изменение",
+                   [PAGE] + [("+", MODIFY)] * 30 + [PAGE])
+
+    def test_at_most_thirty_presses(self):
+        self.check(Shop(qty=1), 40, "⚠️ в корзине 31 шт., а не 40: Кефир 2,5% — не больше 30 нажатий за вызов, повтори",
+                   [PAGE] + [("+", MODIFY)] * 30 + [PAGE])
 
 
 FAVORITES = "https://lenta.com/my-account/favorites/"

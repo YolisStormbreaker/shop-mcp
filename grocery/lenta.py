@@ -348,31 +348,76 @@ def add_to_cart(id_or_url, quantity=1):
 def _added(name, lookup, pid, have):
     if lookup is None:
         return UNCHECKED.format(name)
-    goods, cl = lookup
-    if _quantity(goods, pid) <= have:
+    if _quantity(lookup[0], pid) <= have:
         return f"Лента не положила {name} в корзину"
+    return _line(name, lookup, pid)
+
+
+def _line(name, lookup, pid):
+    goods, cl = lookup
     g = goods[pid]
     return f"в корзине Ленты: {name} — {g.get('Quantity')} шт × {g.get('Price')} ₽; итого корзины {cl.get('TotalCost')} ₽"
 
 
 def remove_from_cart(id_or_url):
     pid = _id(id_or_url)
+    got = _set(pid, 0)
+    if isinstance(got, str):
+        return got
+    name, lookup, _ = got
+    return f"не удалось убрать {name} из корзины Ленты" if pid in lookup[0] else f"убрано из корзины Ленты: {name}"
+
+
+def set_cart_quantity(id_or_url, quantity):
+    """quantity is the line's count as grocery_cart shows it: Лента's own Quantity, which for a weighed line is its
+    weight (0.5 for half a kilo). The difference is pressed one unit a press, rounded up (0.5 -> 2 is two «+»), and
+    the reply says what the cart then holds."""
+    if quantity < 0:
+        return "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
+    pid = _id(id_or_url)
+    got = _set(pid, quantity)
+    if isinstance(got, str):
+        return got
+    name, lookup, why = got
+    now = _quantity(lookup[0], pid)
+    if now != quantity:
+        return f"⚠️ в корзине {now:g} шт., а не {quantity:g}: {name} — {why}"
+    return _line(name, lookup, pid) if now else f"убрано из корзины Ленты: {name}"
+
+
+GONE = {DEC: "кнопки «−» на странице не стало", INC: "кнопки «+» на странице не стало (больше нет в наличии?)"}
+
+
+def _set(pid, quantity):
+    """Press «−» or «+» on the product page by the difference between the cart's count and quantity, at most 30 times:
+    (name, the cart then, why it may not hold quantity), or the reply when there was nothing to press."""
     tab = _tab()
     try:
         lookup, card = _load(tab, pid)
         name = (card or {}).get("name") or pid
         if lookup is None:
             return BLOCKED
-        n = math.ceil(_quantity(lookup[0], pid))     # a weighed line can be under one unit: 0.5 (kg)
-        if not n:
+        have = _quantity(lookup[0], pid)
+        if not have:
             return f"{name} в корзине Ленты нет"
-        _presses(tab, [DEC] * min(n, 30))      # «−» takes one unit; at one unit it removes the line
-        lookup, _ = _load(tab, pid)
+        # shortcut: «−» and «+» are taken to move one unit, as remove_from_cart always did; a weighed line whose button
+        # moves its sale step (0.5 kg) ends elsewhere and the reply shows it — read units.saleUnitQuantity once seen live
+        buttons = [DEC if quantity < have else INC] * min(math.ceil(abs(quantity - have)), 30)
+        pressed = _presses(tab, buttons)      # «−» at one unit removes the line
+        if buttons:
+            lookup, _ = _load(tab, pid)
     finally:
         tab.close()
     if lookup is None:
         return UNCHECKED.format(name)
-    return f"не удалось убрать {name} из корзины Ленты" if pid in lookup[0] else f"убрано из корзины Ленты: {name}"
+    return name, lookup, _why(buttons, pressed, abs(quantity - have))
+
+
+def _why(buttons, pressed, diff):
+    """The page took the button away, 30 presses were not enough, or the site did not say."""
+    if pressed < len(buttons):
+        return GONE[buttons[0]]
+    return "не больше 30 нажатий за вызов, повтори" if diff > 30 else "Лента не подтвердила изменение"
 
 
 def _favorite_ids(tab):
