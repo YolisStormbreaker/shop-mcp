@@ -222,11 +222,11 @@ class YmReviewsTests(unittest.TestCase):
 
 class Market:
     """The Market tab as the cart code drives it: every step lands in .log, in order.
-    carts and minus: the answers of the cart's rows script and of the «−» finder, one per run; the last one stays.
-    captcha: the navigations (1, 2, …) that show a captcha."""
-    def __init__(self, carts, captcha=(), visible=True, clicked=True, minus=(True,)):
-        self.log, self.carts, self.minus, self.captcha = [], list(carts), list(minus), set(captcha)
-        self.shown, self.clicked, self.pages = visible, clicked, 0
+    carts and steps: the answers of the cart's rows script and of the «−»/«+» finder, one per run; the last one stays.
+    offer: the card's main offer as the card script reads it. captcha: the navigations (1, 2, …) that show a captcha."""
+    def __init__(self, carts, captcha=(), visible=True, clicked=True, steps=(True,), offer=None):
+        self.log, self.carts, self.steps, self.captcha = [], list(carts), list(steps), set(captcha)
+        self.shown, self.clicked, self.pages, self.offer = visible, clicked, 0, offer or NEW
 
     def goto(self, url, site, wait_js=None):
         self.pages += 1
@@ -234,13 +234,15 @@ class Market:
 
     def js(self, expr):
         sku = re.search(r'r\.sku === ("[^"]*")', expr)
-        if sku and js_lines(expr) == js_lines(minus_js(json.loads(sku.group(1)))):
-            self.log.append(("minus", json.loads(sku.group(1))))
-            return _next(self.minus)
+        for side in ("−", "+"):
+            if sku and js_lines(expr) == js_lines(step_js(json.loads(sku.group(1)), side)):
+                self.log.append((side, json.loads(sku.group(1))))
+                return _next(self.steps)
         name, answer = {"performance.timeOrigin": ("origin", lambda: ORIGIN),
                         ym.CAPTCHA_JS: ("captcha?", lambda: self.pages in self.captcha),
                         "document.documentElement.outerHTML": ("html", lambda: "<html>"),
                         ym.ROWS_JS: ("rows", lambda: _next(self.carts)),
+                        ym.OFFER_JS: ("offer", lambda: self.offer),
                         RECT_JS: ("rect", lambda: [640.5, 360.0])}.get(expr, (None, None))
         if not name:
             raise AssertionError(f"unexpected page script: {expr[:100]}")
@@ -271,15 +273,19 @@ def js_lines(s):
     return [" ".join(x.split()) for x in s.splitlines()]
 
 
-def minus_js(sku):
-    """Finds the «−» before the row's own quantity field and marks it for the mouse."""
+FINDERS = {"−": "bs.filter(b => b.compareDocumentPosition(q) & Node.DOCUMENT_POSITION_FOLLOWING).pop()",
+           "+": "bs.find(b => q.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING && !b.dataset.auto)"}
+
+
+def step_js(sku, side):
+    """Finds the row's own «−» (the last button before its quantity field) or «+» (the first unnamed one after it:
+    the wishlist heart follows too) and marks it for the mouse."""
     return f"""(() => {{ const r = (window.__ymRows || []).find(r => r.sku === {json.dumps(sku)}); if (!r) return null;
-const q = r.el.querySelector('input[type=number]'); if (!q) return null;
-const b = [...r.el.querySelectorAll('button')].filter(b => b.compareDocumentPosition(q) & Node.DOCUMENT_POSITION_FOLLOWING).pop();  // «−» sits right before the field
-if (!b) return null; b.scrollIntoView({{block: 'center'}}); window.__ymMinus = b; return true; }})()"""
+const q = r.el.querySelector('input[type=number]'), bs = [...r.el.querySelectorAll('button')]; if (!q) return null;
+const b = {FINDERS[side]}; if (!b) return null; b.scrollIntoView({{block: 'center'}}); window.__ymStep = b; return true; }})()"""
 
 
-RECT_JS = "(() => { const r = window.__ymMinus.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()"
+RECT_JS = "(() => { const r = window.__ymStep.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()"
 
 
 def drive(fn, market, *args):
@@ -310,8 +316,15 @@ MOUSE = [("call", "Input.dispatchMouseEvent", {"type": t, "x": 640.5, "y": 360.0
          for t in ("mouseMoved", "mousePressed", "mouseReleased")]
 
 
-def minus_click(sku):
-    return [("minus", sku), ("sleep", 0.6), ("js", "rect")] + MOUSE + [("sleep", 1.5), ("js", "rows")]
+def step_click(sku, side):
+    return [(side, sku), ("sleep", 0.6), ("js", "rect")] + MOUSE + [("sleep", 1.5), ("js", "rows")]
+
+
+NEW = {"sku": "1002", "buy": True, "inCart": False}        # the card shows «В корзину»
+IN_CART = {"sku": "1002", "buy": False, "inCart": True}    # the card shows the − N + stepper instead
+OFFER = [("js", "offer"), ("visible",)]
+ON_CARD = TAB + FRONT + OPEN + page(ITEM_PAGE, ITEM_READY) + OFFER    # the cart read, the card open, its offer read
+PLUS_ONCE = ON_CARD + OPEN + step_click("1002", "+") + OPEN + CLOSE   # an offer already in the cart, one «+» on its line
 
 
 ROW_A = {"sku": "1001", "qty": "1", "checked": True, "text": "Кабель A 480 ₽ 500 ₽", "price": "480₽"}
@@ -344,25 +357,70 @@ class YmCartTests(unittest.TestCase):
 class YmAddToCartTests(unittest.TestCase):
     def test_adds_the_offer_by_a_relative_link(self):
         got, steps, _ = drive(ym.add_to_cart, Market([[ROW_A], [ROW_A, {**ROW_B, "qty": "1"}]]), "/card/zaryadka-b/1002")
-        self.assertEqual(got, "добавлено: sku 1002\n" + cart_text(LINE_A, "1002\t1\t1200₽\t\tЗарядка B 1 200 ₽"))
-        self.assertEqual(steps, TAB + FRONT + OPEN + page(ITEM_PAGE, ITEM_READY) + BUY + [("sleep", 2)] + OPEN + CLOSE)
+        self.assertEqual(got, "добавлено: sku 1002, в корзине 1 шт.\n" + cart_text(LINE_A, "1002\t1\t1200₽\t\tЗарядка B 1 200 ₽"))
+        self.assertEqual(steps, ON_CARD + BUY + [("sleep", 2)] + OPEN + CLOSE)
 
-    def test_one_more_piece_counts_as_added(self):
-        got = drive(ym.add_to_cart, Market([[ROW_A, ROW_B], [{**ROW_A, "qty": "2"}, ROW_B]]), ITEM_PAGE)[0]
-        self.assertEqual(got, "добавлено: sku 1001\n" + cart_text("1001\t2\t480₽\t✓\tКабель A 480 ₽ 500 ₽", LINE_B))
+    def test_one_plus_on_a_line_already_in_the_cart(self):
+        capped = {**ROW_B, "max": "3"}
+        line3 = "1002\t3\t1200₽\t\tЗарядка B 1 200 ₽"
+        cases = {"one more piece": (1, ROW_B, "3", "добавлено: sku 1002, в корзине 3 шт.", line3),
+                 "not past the line's limit": (5, capped, "3", "⚠️ добавлено 1 шт. из 5: sku 1002, в корзине 3 шт. — "
+                                               "Маркет даёт не больше 3 шт.", line3),
+                 "a «+» that changes nothing is not pressed again": (
+                     3, ROW_B, "2", "⚠️ добавлено 0 шт. из 3: sku 1002, в корзине 2 шт. — больше Маркет не прибавил "
+                                    "(лимит продавца или остаток)", LINE_B)}
+        for case, (quantity, row, after, head, line) in cases.items():
+            with self.subTest(case):
+                market = Market([[ROW_A, row], [ROW_A, row], [ROW_A, {**row, "qty": after}]], offer=IN_CART)
+                got, steps, _ = drive(ym.add_to_cart, market, ITEM_PAGE, quantity)
+                self.assertEqual(got, head + "\n" + cart_text(LINE_A, line))
+                self.assertEqual(steps, PLUS_ONCE)
+
+    def test_two_pieces_of_a_new_offer(self):
+        market = Market([[ROW_A], [ROW_A, {**ROW_B, "qty": "1"}], [ROW_A, ROW_B]])
+        got, steps, _ = drive(ym.add_to_cart, market, ITEM_PAGE, 2)
+        self.assertEqual(got, "добавлено: sku 1002, в корзине 2 шт.\n" + cart_text(LINE_A, LINE_B))
+        self.assertEqual(steps, ON_CARD + BUY + [("sleep", 2)] + OPEN
+                         + step_click("1002", "+") + OPEN + CLOSE)
+
+    def test_a_line_at_its_limit_gets_no_click(self):
+        full = {**ROW_B, "max": "2"}
+        got, steps, _ = drive(ym.add_to_cart, Market([[ROW_A, full]], offer=IN_CART), ITEM_PAGE)
+        self.assertEqual(got, "⚠️ добавлено 0 шт. из 1: sku 1002, в корзине 2 шт. — Маркет даёт не больше 2 шт.\n" + cart_text(LINE_A, LINE_B))
+        self.assertEqual(steps, ON_CARD + OPEN + CLOSE)
+
+    def test_a_line_that_shows_no_number_holds_one_piece(self):
+        unnumbered = {**ROW_B, "qty": "", "max": "1"}
+        got, steps, _ = drive(ym.add_to_cart, Market([[ROW_A, unnumbered]], offer=IN_CART), ITEM_PAGE)
+        self.assertEqual(got, "⚠️ добавлено 0 шт. из 1: sku 1002, в корзине 1 шт. — Маркет даёт не больше 1 шт.\n"
+                         + cart_text(LINE_A, "1002\t\t1200₽\t\tЗарядка B 1 200 ₽"))
+        self.assertEqual(steps, ON_CARD + OPEN + CLOSE)
+
+    def test_a_card_without_its_sku_is_found_by_the_changed_line(self):
+        market = Market([[ROW_A, ROW_B], [{**ROW_A, "qty": "2"}, ROW_B]], offer={**NEW, "sku": ""})
+        got = drive(ym.add_to_cart, market, ITEM_PAGE)[0]
+        self.assertEqual(got, "добавлено: sku 1001, в корзине 2 шт.\n" + cart_text("1001\t2\t480₽\t✓\tКабель A 480 ₽ 500 ₽", LINE_B))
 
     def test_unchanged_cart(self):
         got = drive(ym.add_to_cart, Market([[ROW_A]]), ITEM_PAGE)[0]
-        self.assertEqual(got, "⚠️ Маркет не подтвердил добавление (или товар уже был в корзине)\n" + cart_text(LINE_A))
+        self.assertEqual(got, "⚠️ Маркет не подтвердил добавление\n" + cart_text(LINE_A))
 
     def test_hidden_tab(self):
-        got, steps, _ = drive(ym.add_to_cart, Market([[ROW_A]], visible=False, clicked=False), ITEM_PAGE)
+        got, steps, _ = drive(ym.add_to_cart, Market([[ROW_A]], visible=False), ITEM_PAGE)
         self.assertEqual(got, "не добавлено: " + ym.NOT_ON_SCREEN)
-        self.assertEqual(steps, TAB + FRONT + OPEN + page(ITEM_PAGE, ITEM_READY) + BUY + [("visible",)] + CLOSE)
+        self.assertEqual(steps, ON_CARD + CLOSE)
 
     def test_no_button(self):
-        got = drive(ym.add_to_cart, Market([[ROW_A]], clicked=False), ITEM_PAGE)[0]
+        got, steps, _ = drive(ym.add_to_cart, Market([[ROW_A]], offer={**NEW, "buy": False}), ITEM_PAGE)
         self.assertEqual(got, "не добавлено: не нашёл кнопку «В корзину» у основного предложения")
+        self.assertEqual(steps, ON_CARD + CLOSE)
+
+    def test_less_than_one_piece(self):
+        for n in (0, -1):
+            with self.subTest(quantity=n):
+                got, steps, _ = drive(ym.add_to_cart, Market([[ROW_A]]), ITEM_PAGE, n)
+                self.assertEqual(got, "quantity — сколько штук добавить, от 1")
+                self.assertEqual(steps, [])
 
     def test_a_foreign_link_is_not_opened(self):
         got, steps, _ = drive(ym.add_to_cart, Market([[ROW_A]]), "https://www.ozon.ru/product/1")
@@ -372,29 +430,38 @@ class YmAddToCartTests(unittest.TestCase):
     def test_captcha_on_each_page(self):
         steps_to = {1: page(ym.CART_URL, CART_READY, captcha=True),
                     2: OPEN + page(ITEM_PAGE, ITEM_READY, captcha=True),
-                    3: OPEN + page(ITEM_PAGE, ITEM_READY) + BUY + [("sleep", 2)] + page(ym.CART_URL, CART_READY, captcha=True)}
+                    3: OPEN + page(ITEM_PAGE, ITEM_READY) + OFFER + BUY + [("sleep", 2)] + page(ym.CART_URL, CART_READY, captcha=True)}
         for n, steps in steps_to.items():
             with self.subTest(page=n):
                 got, log, _ = drive(ym.add_to_cart, Market([[ROW_A]], captcha={n}), ITEM_PAGE)
                 self.assertEqual(got, ym.BLOCKED)
                 self.assertEqual(log, TAB + FRONT + steps + CLOSE)
 
+
+    def test_captcha_after_the_plus(self):
+        market = Market([[ROW_A, ROW_B]], offer=IN_CART, captcha={4})
+        got, steps, _ = drive(ym.add_to_cart, market, ITEM_PAGE)
+        self.assertEqual(got, ym.BLOCKED)
+        self.assertEqual(steps, ON_CARD + OPEN + step_click("1002", "+")
+                         + page(ym.CART_URL, CART_READY, captcha=True) + CLOSE)
+
+
 class YmRemoveFromCartTests(unittest.TestCase):
     def test_takes_off_every_piece(self):
         market = Market([[ROW_A, ROW_B], [ROW_A, {**ROW_B, "qty": "1"}], [ROW_A]])
         got, steps, _ = drive(ym.remove_from_cart, market, 1002)
         self.assertEqual(got, "удалено: sku 1002\n" + cart_text(LINE_A))
-        self.assertEqual(steps, TAB + FRONT + OPEN + [("visible",)] + minus_click("1002") * 2 + OPEN + CLOSE)
+        self.assertEqual(steps, TAB + FRONT + OPEN + [("visible",)] + step_click("1002", "−") * 2 + OPEN + CLOSE)
 
     def test_a_line_without_a_quantity_takes_one_click(self):
         got, steps, _ = drive(ym.remove_from_cart, Market([[ROW_A, {**ROW_B, "qty": ""}], [ROW_A]]), "1002")
         self.assertEqual(got, "удалено: sku 1002\n" + cart_text(LINE_A))
-        self.assertEqual(steps, TAB + FRONT + OPEN + [("visible",)] + minus_click("1002") + OPEN + CLOSE)
+        self.assertEqual(steps, TAB + FRONT + OPEN + [("visible",)] + step_click("1002", "−") + OPEN + CLOSE)
 
     def test_no_minus_button(self):
-        got, steps, _ = drive(ym.remove_from_cart, Market([[ROW_A, ROW_B]], minus=(None,)), " 1002 ")
+        got, steps, _ = drive(ym.remove_from_cart, Market([[ROW_A, ROW_B]], steps=(None,)), " 1002 ")
         self.assertEqual(got, "⚠️ Маркет не подтвердил удаление: sku 1002\n" + cart_text(LINE_A, LINE_B))
-        self.assertEqual(steps, TAB + FRONT + OPEN + [("visible",), ("minus", "1002")] + OPEN + CLOSE)
+        self.assertEqual(steps, TAB + FRONT + OPEN + [("visible",), ("−", "1002")] + OPEN + CLOSE)
 
     def test_unknown_sku_is_not_clicked(self):
         got, steps, _ = drive(ym.remove_from_cart, Market([[ROW_A]]), "999")
@@ -408,7 +475,7 @@ class YmRemoveFromCartTests(unittest.TestCase):
 
     def test_captcha(self):
         steps_to = {1: page(ym.CART_URL, CART_READY, captcha=True),
-                    2: OPEN + [("visible",)] + minus_click("1001") + page(ym.CART_URL, CART_READY, captcha=True)}
+                    2: OPEN + [("visible",)] + step_click("1001", "−") + page(ym.CART_URL, CART_READY, captcha=True)}
         for n, steps in steps_to.items():
             with self.subTest(page=n):
                 got, log, _ = drive(ym.remove_from_cart, Market([[ROW_A]], captcha={n}), "1001")

@@ -325,13 +325,28 @@ ROWS_JS = r"""
     const qty = best && best.querySelector(QTY);
     if (!qty) continue;
     const cb = best.querySelector('input[type=checkbox]'), text = (best.innerText || '').replace(/\s+/g, ' ').trim();
-    rows.push({el: best, sku, qty: qty.value, checked: cb ? cb.checked : null, text: text.slice(0, 150),
+    rows.push({el: best, sku, qty: qty.value, max: qty.max, checked: cb ? cb.checked : null, text: text.slice(0, 150),
                price: ((text.match(/\d[\d\s\u2009\u00a0]*₽/) || [''])[0]).replace(/[\s\u2009\u00a0]/g, '')});
   }
   window.__ymRows = rows;
   return rows.map(({el, ...r}) => r);
 })()
 """
+# The card's main offer: its sku, and which control it shows — «В корзину», or the − N + stepper once it is in the cart.
+OFFER_JS = r"""
+(() => {
+  const main = document.querySelector('[data-auto="main"]');
+  let zone = {};
+  try { zone = JSON.parse(main?.querySelector('[data-zone-name="productSnippet"][data-zone-data]')?.getAttribute('data-zone-data') || '{}'); } catch (e) {}
+  return {sku: String(zone.marketSku || ''), buy: !!main?.querySelector('[data-auto="cartButton"]'),
+          inCart: !!main?.querySelector('[data-auto="counter-cart-button"]')};
+})()
+"""
+BUY = '[data-auto="main"] [data-auto="cartButton"]'    # the offer's own: every similar product has «В корзину» too
+# A cart line's stepper, by position around its quantity field: «−» is the last button before it,
+# «+» the first one after it that has no data-auto (the wishlist heart follows too).
+MINUS = "bs.filter(b => b.compareDocumentPosition(q) & Node.DOCUMENT_POSITION_FOLLOWING).pop()"
+PLUS = "bs.find(b => q.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING && !b.dataset.auto)"
 NOT_ON_SCREEN = ("вкладка Яндекс Маркета не на экране, а корзина меняется только кликами в видимой вкладке. "
                  "Попроси пользователя выполнить shop-chrome show и открыть вкладку market.yandex.ru, потом повтори.")
 
@@ -354,36 +369,83 @@ def cart():
     return BLOCKED if rows is None else _cart_text(rows)
 
 
-def add_to_cart(url):
+def add_to_cart(url, quantity=1):
     url = _market(url)
     if not url:
         return NOT_A_CARD
-    return _in_tab(lambda tab: _add(tab, url))
+    if int(quantity) < 1:
+        return "quantity — сколько штук добавить, от 1"
+    return _in_tab(lambda tab: _add(tab, url, int(quantity)))
 
 
-def _add(tab, url):
+def _add(tab, url, quantity):
+    """The card's button puts in the first piece; every other one is a «+» on the cart line."""
     tab.call("Page.bringToFront")      # the clicks need the visible tab: in a shown window this makes it so
     before = _open_cart(tab)
     if before is None:
         return BLOCKED
-    # the offer's own button: the page also has «В корзину» on every similar product
-    clicked = _load(tab, url, "add", "!!document.querySelector('h1')", lambda t: t.click('[data-auto="main"] [data-auto="cartButton"]'))
-    if clicked is None:
+    offer = _load(tab, url, "add", "!!document.querySelector('h1')", lambda t: t.js(OFFER_JS))
+    if offer is None:
         return BLOCKED
-    if not clicked:
-        return "не добавлено: " + (NOT_ON_SCREEN if not tab.visible() else "не нашёл кнопку «В корзину» у основного предложения")
-    time.sleep(2)
+    refused = _refused(tab, offer)
+    if refused:
+        return refused
+    if offer["buy"]:
+        tab.click(BUY)
+        time.sleep(2)
     rows = _open_cart(tab)
-    return BLOCKED if rows is None else _added(before, rows)
+    return BLOCKED if rows is None else _top_up(tab, before, rows, offer["sku"], quantity)
 
 
-def _added(before, rows):
-    """The reply from the cart's rows before and after the click."""
+def _refused(tab, offer):
+    if not tab.visible():
+        return "не добавлено: " + NOT_ON_SCREEN
+    if not offer["buy"] and not offer["inCart"]:
+        return "не добавлено: не нашёл кнопку «В корзину» у основного предложения"
+    return None
+
+
+def _top_up(tab, before, rows, sku, quantity):
+    """«+» on the offer's line until it has quantity more pieces than before, short of the line's limit; the reply."""
+    sku = _line(before, rows, sku)
+    if not sku:
+        return "⚠️ Маркет не подтвердил добавление\n" + _cart_text(rows)
+    want = _qty(before, sku) + quantity
+    cap = int(_row(rows, sku).get("max") or 0)
+    left = (min(want, cap) if cap else want) - _qty(rows, sku)
+    if left > 0:
+        _step(tab, _row(rows, sku), left, PLUS)
+        rows = _open_cart(tab)
+        if rows is None:
+            return BLOCKED
+    return _added(sku, _qty(before, sku), quantity, rows)
+
+
+def _row(rows, sku):
+    return next((r for r in rows if r["sku"] == sku), {})
+
+
+def _qty(rows, sku):
+    """Pieces of sku in the cart: 0 if it has no line, 1 if its line shows no number."""
+    row = _row(rows, sku)
+    return int(row["qty"] or 1) if row else 0
+
+
+def _line(before, rows, sku):
+    """The offer's cart line: the card's sku, else the one line the click changed (the card may not name its sku)."""
+    if _row(rows, sku):
+        return sku
     old = {r["sku"]: r["qty"] for r in before}
-    new = [r for r in rows if old.get(r["sku"]) != r["qty"]]  # the page does not name its sku reliably: diff the cart
-    if not new:
-        return "⚠️ Маркет не подтвердил добавление (или товар уже был в корзине)\n" + _cart_text(rows)
-    return f"добавлено: sku {', '.join(r['sku'] for r in new)}\n" + _cart_text(rows)
+    changed = [r["sku"] for r in rows if old.get(r["sku"]) != r["qty"]]
+    return changed[0] if len(changed) == 1 else None
+
+
+def _added(sku, had, asked, rows):
+    now, cap = _qty(rows, sku), int(_row(rows, sku).get("max") or 0)
+    if now >= had + asked:
+        return f"добавлено: sku {sku}, в корзине {now} шт.\n" + _cart_text(rows)
+    why = f"Маркет даёт не больше {cap} шт." if cap and now >= cap else "больше Маркет не прибавил (лимит продавца или остаток)"
+    return f"⚠️ добавлено {now - had} шт. из {asked}: sku {sku}, в корзине {now} шт. — {why}\n" + _cart_text(rows)
 
 
 def remove_from_cart(sku):
@@ -401,26 +463,30 @@ def _remove(tab, sku):
         return "такого sku в корзине нет\n" + _cart_text(rows)
     if not tab.visible():
         return "не удалено: " + NOT_ON_SCREEN
-    _take_off(tab, sku, int(row["qty"] or 1))
+    _step(tab, row, int(row["qty"] or 1), MINUS)
     rows = _open_cart(tab)
     return BLOCKED if rows is None else _removed(sku, rows)
 
 
-def _take_off(tab, sku, times):
-    """Click «−» at the row's own quantity field times: each click takes one off, the last one removes the line."""
-    minus = f"""(() => {{ const r = (window.__ymRows || []).find(r => r.sku === {json.dumps(sku)}); if (!r) return null;
-        const q = r.el.querySelector('input[type=number]'); if (!q) return null;
-        const b = [...r.el.querySelectorAll('button')].filter(b => b.compareDocumentPosition(q) & Node.DOCUMENT_POSITION_FOLLOWING).pop();  // «−» sits right before the field
-        if (!b) return null; b.scrollIntoView({{block: 'center'}}); window.__ymMinus = b; return true; }})()"""
+def _step(tab, row, times, button):
+    """Click the row's own «−» or «+» up to times, one piece a click; stop once a click changes nothing
+    (a «+» past the seller's limit). The last «−» removes the line."""
+    find = f"""(() => {{ const r = (window.__ymRows || []).find(r => r.sku === {json.dumps(row["sku"])}); if (!r) return null;
+        const q = r.el.querySelector('input[type=number]'), bs = [...r.el.querySelectorAll('button')]; if (!q) return null;
+        const b = {button}; if (!b) return null; b.scrollIntoView({{block: 'center'}}); window.__ymStep = b; return true; }})()"""
+    qty = row["qty"]
     for _ in range(times):
-        if not tab.js(minus):
+        if not tab.js(find):
             break
         time.sleep(0.6)
-        x, y = tab.js("(() => { const r = window.__ymMinus.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()")
+        x, y = tab.js("(() => { const r = window.__ymStep.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()")
         for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
             tab.call("Input.dispatchMouseEvent", type=typ, x=x, y=y, button="left", clickCount=1)
         time.sleep(1.5)
-        tab.js(ROWS_JS)  # the line re-renders after each change
+        now = _row(tab.js(ROWS_JS), row["sku"]).get("qty")  # the line re-renders after each change
+        if now == qty:
+            break
+        qty = now
 
 
 def _removed(sku, rows):
