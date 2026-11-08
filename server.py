@@ -44,7 +44,7 @@ INSTRUCTIONS = """\
 в Золотом яблоке; корзины Ozon, AliExpress, Wildberries, Яндекс Маркета, Lamoda и Золотого яблока; история
 заказов Ozon и AliExpress; мессенджер Авито; отзывы на купленное на Ozon и AliExpress; чтение отзывов
 покупателей (*_reviews) везде, кроме Авито; просмотр картинок по ссылке (shop_images). Действуют от имени
-пользователя *_add_to_cart, *_remove_from_cart, avito_send и *_leave_review —
+пользователя *_add_to_cart, *_remove_from_cart, ym_set_cart_quantity, avito_send и *_leave_review —
 только по его явной просьбе, текст сообщения или отзыва показать ему до отправки. Заказы нигде не оформляются и не оплачиваются.
 
 Куда идти — реши это первым:
@@ -570,6 +570,16 @@ def ym_remove_from_cart(sku: str) -> str:
     """Убрать товар из корзины Яндекс Маркета по sku из ym_cart (все штуки строки). Нужна видимая вкладка
     Маркета (shop-chrome show): иначе вернёт «не удалено…»."""
     return ym.remove_from_cart(sku)
+
+
+@mcp.tool()
+@logged
+def ym_set_cart_quantity(sku: str, quantity: int) -> str:
+    """Сколько штук товара оставить в корзине Яндекс Маркета: sku из ym_cart, quantity — новое число штук.
+    Меньше — кнопкой «−» в строке, больше — «+», 0 убирает строку; ~2 с на штуку. Больше лимита строки
+    (продавец, остаток) не ставит и так и пишет. Остальные строки и их выбор к оформлению не трогает.
+    Нужна видимая вкладка Маркета (shop-chrome show): иначе вернёт «не изменено…»."""
+    return ym.set_cart_quantity(sku, quantity)
 
 
 @mcp.tool()

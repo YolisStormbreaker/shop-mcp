@@ -367,8 +367,7 @@ class YmAddToCartTests(unittest.TestCase):
                  "not past the line's limit": (5, capped, "3", "⚠️ добавлено 1 шт. из 5: sku 1002, в корзине 3 шт. — "
                                                "Маркет даёт не больше 3 шт.", line3),
                  "a «+» that changes nothing is not pressed again": (
-                     3, ROW_B, "2", "⚠️ добавлено 0 шт. из 3: sku 1002, в корзине 2 шт. — больше Маркет не прибавил "
-                                    "(лимит продавца или остаток)", LINE_B)}
+                     3, ROW_B, "2", "⚠️ добавлено 0 шт. из 3: sku 1002, в корзине 2 шт. — Маркет не подтвердил изменение", LINE_B)}
         for case, (quantity, row, after, head, line) in cases.items():
             with self.subTest(case):
                 market = Market([[ROW_A, row], [ROW_A, row], [ROW_A, {**row, "qty": after}]], offer=IN_CART)
@@ -479,6 +478,62 @@ class YmRemoveFromCartTests(unittest.TestCase):
         for n, steps in steps_to.items():
             with self.subTest(page=n):
                 got, log, _ = drive(ym.remove_from_cart, Market([[ROW_A]], captcha={n}), "1001")
+                self.assertEqual(got, ym.BLOCKED)
+                self.assertEqual(log, TAB + FRONT + steps + CLOSE)
+
+
+def line_b(qty):
+    return f"1002\t{qty}\t1200₽\t\tЗарядка B 1 200 ₽"
+
+
+class YmSetCartQuantityTests(unittest.TestCase):
+    SET = TAB + FRONT + OPEN + [("visible",)]      # the cart read, the tab on screen
+
+    def test_the_line_steps_to_the_quantity(self):
+        capped = {**ROW_B, "max": "3"}
+        cases = {"fewer by «−»": (1, ROW_B | {"qty": "3"}, ["2", "1"], "−", "в корзине 1 шт.: sku 1002", [LINE_A, line_b(1)]),
+                 "more by «+»": (4, ROW_B, ["3", "4"], "+", "в корзине 4 шт.: sku 1002", [LINE_A, line_b(4)]),
+                 "0 removes the line": (0, ROW_B, ["1", None], "−", "удалено: sku 1002", [LINE_A]),
+                 "not past the line's limit": (5, capped, ["3"], "+", "⚠️ в корзине 3 шт., а не 5: sku 1002 — "
+                                               "Маркет даёт не больше 3 шт.", [LINE_A, line_b(3)]),
+                 "a «−» that changes nothing is not pressed again": (
+                     1, ROW_B, ["2"], "−", "⚠️ в корзине 2 шт., а не 1: sku 1002 — Маркет не подтвердил изменение", [LINE_A, LINE_B]),
+                 "a «−» that changes nothing on a line at its limit is not the limit": (
+                     1, ROW_B | {"max": "2"}, ["2"], "−", "⚠️ в корзине 2 шт., а не 1: sku 1002 — Маркет не подтвердил изменение",
+                     [LINE_A, LINE_B])}
+        for case, (quantity, row, after, side, head, lines) in cases.items():
+            with self.subTest(case):
+                carts = [[ROW_A, row]] + [[ROW_A] + ([{**row, "qty": q}] if q else []) for q in after]
+                got, steps, _ = drive(ym.set_cart_quantity, Market(carts), "1002", quantity)
+                self.assertEqual(got, head + "\n" + cart_text(*lines))
+                self.assertEqual(steps, self.SET + step_click("1002", side) * len(after) + OPEN + CLOSE)
+
+    def test_the_same_quantity_takes_no_click(self):
+        got, steps, _ = drive(ym.set_cart_quantity, Market([[ROW_A, ROW_B]]), " 1002 ", 2)
+        self.assertEqual(got, "в корзине 2 шт.: sku 1002\n" + cart_text(LINE_A, LINE_B))
+        self.assertEqual(steps, self.SET + CLOSE)
+
+    def test_unknown_sku_is_not_clicked(self):
+        got, steps, _ = drive(ym.set_cart_quantity, Market([[ROW_A]]), "999", 2)
+        self.assertEqual(got, "такого sku в корзине нет\n" + cart_text(LINE_A))
+        self.assertEqual(steps, TAB + FRONT + OPEN + CLOSE)
+
+    def test_hidden_tab(self):
+        got, steps, _ = drive(ym.set_cart_quantity, Market([[ROW_A, ROW_B]], visible=False), "1002", 1)
+        self.assertEqual(got, "не изменено: " + ym.NOT_ON_SCREEN)
+        self.assertEqual(steps, self.SET + CLOSE)
+
+    def test_less_than_nothing(self):
+        got, steps, _ = drive(ym.set_cart_quantity, Market([[ROW_A]]), "1001", -1)
+        self.assertEqual(got, "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)")
+        self.assertEqual(steps, [])
+
+    def test_captcha(self):
+        steps_to = {1: page(ym.CART_URL, CART_READY, captcha=True),
+                    2: OPEN + [("visible",)] + step_click("1002", "−") + page(ym.CART_URL, CART_READY, captcha=True)}
+        for n, steps in steps_to.items():
+            with self.subTest(page=n):
+                got, log, _ = drive(ym.set_cart_quantity, Market([[ROW_A, ROW_B], [ROW_A, {**ROW_B, "qty": "1"}]], captcha={n}), "1002", 1)
                 self.assertEqual(got, ym.BLOCKED)
                 self.assertEqual(log, TAB + FRONT + steps + CLOSE)
 

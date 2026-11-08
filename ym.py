@@ -410,15 +410,20 @@ def _top_up(tab, before, rows, sku, quantity):
     sku = _line(before, rows, sku)
     if not sku:
         return "⚠️ Маркет не подтвердил добавление\n" + _cart_text(rows)
-    want = _qty(before, sku) + quantity
-    cap = int(_row(rows, sku).get("max") or 0)
-    left = (min(want, cap) if cap else want) - _qty(rows, sku)
-    if left > 0:
-        _step(tab, _row(rows, sku), left, PLUS)
-        rows = _open_cart(tab)
-        if rows is None:
-            return BLOCKED
-    return _added(sku, _qty(before, sku), quantity, rows)
+    rows = _step_to(tab, rows, sku, _qty(before, sku) + quantity)
+    return BLOCKED if rows is None else _added(sku, _qty(before, sku), quantity, rows)
+
+
+def _step_to(tab, rows, sku, want):
+    """«+» or «−» on sku's line until it holds want pieces, «+» short of the line's limit; the cart after
+    (None behind a captcha), or rows as they are when no click is needed."""
+    row = _row(rows, sku)
+    cap = int(row.get("max") or 0)
+    to, have = (min(want, cap) if cap else want), _qty(rows, sku)
+    if to == have:
+        return rows
+    _step(tab, row, abs(to - have), PLUS if to > have else MINUS)
+    return _open_cart(tab)
 
 
 def _row(rows, sku):
@@ -441,31 +446,49 @@ def _line(before, rows, sku):
 
 
 def _added(sku, had, asked, rows):
-    now, cap = _qty(rows, sku), int(_row(rows, sku).get("max") or 0)
+    now = _qty(rows, sku)
     if now >= had + asked:
         return f"добавлено: sku {sku}, в корзине {now} шт.\n" + _cart_text(rows)
-    why = f"Маркет даёт не больше {cap} шт." if cap and now >= cap else "больше Маркет не прибавил (лимит продавца или остаток)"
-    return f"⚠️ добавлено {now - had} шт. из {asked}: sku {sku}, в корзине {now} шт. — {why}\n" + _cart_text(rows)
+    return f"⚠️ добавлено {now - had} шт. из {asked}: sku {sku}, в корзине {now} шт. — {_short(rows, sku, had + asked)}\n" + _cart_text(rows)
+
+
+def _short(rows, sku, want):
+    """Why sku's line does not hold want pieces: its limit, or Market did not take a click."""
+    now, cap = _qty(rows, sku), int(_row(rows, sku).get("max") or 0)
+    return f"Маркет даёт не больше {cap} шт." if cap and want > now >= cap else "Маркет не подтвердил изменение"
 
 
 def remove_from_cart(sku):
+    return set_cart_quantity(sku, 0)
+
+
+def set_cart_quantity(sku, quantity):
+    if int(quantity) < 0:
+        return "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
     sku = str(sku).strip()
-    return _in_tab(lambda tab: _remove(tab, sku))
+    return _in_tab(lambda tab: _set(tab, sku, int(quantity)))
 
 
-def _remove(tab, sku):
+def _set(tab, sku, want):
     tab.call("Page.bringToFront")
     rows = _open_cart(tab)
     if rows is None:
         return BLOCKED
-    row = next((r for r in rows if r["sku"] == sku), None)
-    if not row:
+    if not _row(rows, sku):
         return "такого sku в корзине нет\n" + _cart_text(rows)
     if not tab.visible():
-        return "не удалено: " + NOT_ON_SCREEN
-    _step(tab, row, int(row["qty"] or 1), MINUS)
-    rows = _open_cart(tab)
-    return BLOCKED if rows is None else _removed(sku, rows)
+        return ("не удалено: " if want == 0 else "не изменено: ") + NOT_ON_SCREEN
+    rows = _step_to(tab, rows, sku, want)
+    return BLOCKED if rows is None else _changed(sku, want, rows)
+
+
+def _changed(sku, want, rows):
+    now = _qty(rows, sku)
+    if want == 0:
+        return f"{'⚠️ Маркет не подтвердил удаление' if now else 'удалено'}: sku {sku}\n" + _cart_text(rows)
+    if now == want:
+        return f"в корзине {now} шт.: sku {sku}\n" + _cart_text(rows)
+    return f"⚠️ в корзине {now} шт., а не {want}: sku {sku} — {_short(rows, sku, want)}\n" + _cart_text(rows)
 
 
 def _step(tab, row, times, button):
@@ -487,8 +510,3 @@ def _step(tab, row, times, button):
         if now == qty:
             break
         qty = now
-
-
-def _removed(sku, rows):
-    gone = not any(r["sku"] == sku for r in rows)
-    return f"{'удалено' if gone else '⚠️ Маркет не подтвердил удаление'}: sku {sku}\n" + _cart_text(rows)
