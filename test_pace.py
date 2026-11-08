@@ -39,6 +39,15 @@ class PaceTest(unittest.TestCase):
             pace.acquire(site, kind)
 
 
+def count(site, window):
+    """The site's requests in the ledger over the last window s."""
+    db = pace._db()
+    try:
+        return pace._count_in(db, site, window, pace._now())
+    finally:
+        db.close()
+
+
 class SlotTests(PaceTest):
     def test_the_site_s_gap_between_requests(self):
         pace.acquire("ozon")
@@ -98,7 +107,7 @@ class SlotTests(PaceTest):
         self.burst("ozon", 3)
         self.clock.t += 2 * 3600
         pace.acquire("ozon")
-        self.assertEqual(pace._count("ozon", 3600), 1)
+        self.assertEqual(count("ozon", 3600), 1)
 
     def test_a_short_wait_is_slept_too(self):
         p = pace.Policy(gap={"page": 0.5, "api": 0.5}, caps=pace.DEFAULT.caps, cool=pace.DEFAULT.cool)
@@ -115,10 +124,10 @@ class SlotTests(PaceTest):
         self.burst("ozon", 2)
         self.clock.t += 100
         pace.acquire("ozon")
-        self.assertEqual(pace._count("ozon", 3600), 3)
+        self.assertEqual(count("ozon", 3600), 3)
         self.clock.t += 3590 - 100                           # the first is 59 min 50 s old: still in the hour
         pace.acquire("ozon")
-        self.assertEqual(pace._count("ozon", 3600), 4)
+        self.assertEqual(count("ozon", 3600), 4)
 
     def test_an_unknown_site_gets_the_default(self):
         self.assertIs(pace.policy("new-site"), pace.DEFAULT)
@@ -243,9 +252,14 @@ class CommandTests(PaceTest):
         self.assertEqual(self.run_cli("clear", "--ban", "perekrestok"), (0, "Перекрёсток: остановка снята"))
 
     def test_usage(self):
-        code, text = self.run_cli("nonsense")
-        self.assertEqual(code, 2)
-        self.assertTrue(text.startswith("shop-pace status | wait <сайт> [page|api] | clear [--ban] <сайт>"), text)
+        for argv in (["nonsense"], ["status", "ozon"], ["wait"], ["wait", "perekrestk"], ["wait", "ozon", "fast"],
+                     ["wait", "ozon", "api", "x"], ["clear"], ["clear", "perekrestk"], ["clear", "ozon", "ym"]):
+            with self.subTest(argv):
+                code, text = self.run_cli(*argv)
+                self.assertEqual(code, 2)
+                self.assertTrue(text.startswith("shop-pace status | wait <сайт> [page|api] | clear [--ban] <сайт>"), text)
+        self.assertEqual(self.clock.slept, [])               # a typo in the site takes no slot of a site that is not there
+        self.assertNotIn("perekrestk\t", pace.status())
 
 if __name__ == "__main__":
     unittest.main()

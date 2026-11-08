@@ -225,14 +225,6 @@ def status():
         db.close()
 
 
-def _count(site, window):
-    db = _db()
-    try:
-        return _count_in(db, site, window, _now())
-    finally:
-        db.close()
-
-
 def _count_in(db, site, window, now):
     return db.execute("SELECT COALESCE(SUM(cost), 0) FROM events WHERE site = ? AND t > ? AND t <= ?",
                       (site, now - window, now)).fetchone()[0]
@@ -272,27 +264,44 @@ USAGE = ("shop-pace status | wait <сайт> [page|api] | clear [--ban] <сай�
          "  --ban — снять и блокировку по IP: только сам пользователь. Сайты: " + ", ".join(POLICY))
 
 
-def main(argv):
-    """The shop-pace command; its exit code: 0 done, 1 refused, 2 wrong use."""
-    cmd, rest = (argv[0], argv[1:]) if argv else ("status", [])
-    if cmd == "status" and not rest:
-        print(status())
-        return 0
-    if cmd == "wait" and rest:
-        try:
-            acquire(rest[0], *rest[1:2])
-        except Refused as e:
-            print(e)
-            return 1
-        print("ok")
-        return 0
+def _status_cmd(rest):
+    if rest:
+        return None
+    print(status())
+    return 0
+
+
+def _wait_cmd(rest):
+    if not rest or rest[0] not in POLICY or rest[1:] not in ([], ["page"], ["api"]):
+        return None
+    try:
+        acquire(*rest)
+    except Refused as e:
+        print(e)
+        return 1
+    print("ok")
+    return 0
+
+
+def _clear_cmd(rest):
     sites = [a for a in rest if a != "--ban"]
-    if cmd == "clear" and len(sites) == 1:
-        said = clear(sites[0], ban="--ban" in rest)
-        print(said)
-        return 0 if said.endswith("остановка снята") or said.endswith("остановки нет") else 1
-    print(USAGE)
-    return 2
+    if len(sites) != 1 or sites[0] not in POLICY:
+        return None
+    print(clear(sites[0], ban="--ban" in rest))
+    return 0 if _block(sites[0]) is None else 1
+
+
+COMMANDS = {"status": _status_cmd, "wait": _wait_cmd, "clear": _clear_cmd}
+
+
+def main(argv):
+    """The shop-pace command; its exit code: 0 done, 1 refused, 2 wrong use (an unknown command, site or kind)."""
+    cmd, rest = (argv[0], argv[1:]) if argv else ("status", [])
+    code = COMMANDS[cmd](rest) if cmd in COMMANDS else None
+    if code is None:
+        print(USAGE)
+        return 2
+    return code
 
 
 if __name__ == "__main__":
