@@ -69,6 +69,14 @@ class LoggedTests(unittest.TestCase):
                 self.tool("итого\n" + text)()
                 self.assertEqual(self.log.log.call_args.args[0], 30)
 
+    def test_a_refusal_of_the_shared_budget_is_the_answer_not_a_failure(self):
+        # the agent gets the explanation (why, until when, what to do) as the tool's text, the log one warning line
+        out = self.tool(server.pace.Refused("⏸ Ozon: предел запросов — 30 за 1 мин. Следующий не раньше 15:01:00"))("чай")
+        self.assertEqual(out, "⏸ Ozon: предел запросов — 30 за 1 мин. Следующий не раньше 15:01:00")
+        self.log.log.assert_called_once_with(30, "%s ok in %.1f s, %d lines: %s", "wb_search ('чай',){}", 2.5, 1,
+                                             "⏸ Ozon: предел запросов — 30 за 1 мин. Следующий не раньше 15:01:00")
+        self.log.exception.assert_not_called()
+
     def test_failure_is_logged_with_its_time_and_raised(self):
         with self.assertRaisesRegex(ValueError, "boom"):
             self.tool(ValueError("boom"))("чай")
@@ -185,6 +193,11 @@ class ToolTests(unittest.TestCase):
             self.addCleanup(p.stop)
             p.start()
 
+    def test_shop_limits_is_the_shared_budget_s_status(self):
+        with patch.object(server.pace, "status", return_value="запросы к магазинам …") as status:
+            self.assertEqual(server.shop_limits(), "запросы к магазинам …")
+        status.assert_called_once_with()
+
     def test_shop_status_is_the_report_of_shop_chrome_status(self):
         done = subprocess.CompletedProcess([], 1, "Chrome: не запущен\n", "uv: нет\n")
         with patch("subprocess.run", return_value=done) as run:
@@ -198,7 +211,7 @@ class ToolTests(unittest.TestCase):
             self.assertIs(server.shop_images(["https://a.lmcdn.ru/x.jpg"], max_side=512), answer)
         images.assert_called_once_with(["https://a.lmcdn.ru/x.jpg"], 512)
 
-    SITES = ("ali", "avito", "goldapple", "grocery", "images", "lamoda", "messenger", "orders", "ozon", "reviews", "wb", "ym")
+    SITES = ("ali", "avito", "goldapple", "grocery", "images", "lamoda", "messenger", "orders", "ozon", "pace", "reviews", "wb", "ym")
     SAMPLE = {str: lambda n, i: f"<{n}>", int: lambda n, i: 7000 + i, list[str]: lambda n, i: [f"<{n}>"]}
 
     def test_every_tool_hands_its_arguments_to_a_site_function_that_takes_them(self):

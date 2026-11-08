@@ -31,6 +31,7 @@ import lamoda
 import messenger
 import orders
 import ozon
+import pace
 import reviews
 import wb
 import ym
@@ -71,6 +72,13 @@ INSTRUCTIONS = """\
 - Если совпадений нет, Wildberries и Яндекс Маркет молча показывают посторонние товары — сверяй названия с запросом.
 - Страницы: WB по 100 товаров, Lamoda по 60, Золотое яблоко по 24; Маркет на странице показывает
   только часть выдачи (8–40 карточек), за остальным иди на page=2, 3…
+- Запросы к каждому магазину идут из одного бюджета, общего для этого сервера, других сессий, агентов и скриптов:
+  паузы между запросами и пределы за 1/10/60 мин, а после проверки на бота или блокировки — остановка для всех.
+  Так сайт не банит IP пользователя. Ответ с «⏸» — магазин сейчас закрыт бюджетом или блокировкой: в нём
+  сказано, до какого времени и что делать. Не повторяй до этого времени и не обходи запрет другими способами;
+  займись другими магазинами. Проверку на бота может пройти только пользователь (shop-chrome show, затем
+  ~/shop-mcp/shop-pace clear <сайт>); блокировку по IP снимает только время. Перед длинной серией запросов
+  смотри shop_limits; распределяй работу по магазинам, не делай подряд десятки запросов в один.
 - Ответ с «⚠️» или таймаут — проверка на бота или капча. Не повторяй сразу: выполни `shop-chrome show`
   (или попроси пользователя), пусть он пройдёт проверку во вкладке сайта, потом `shop-chrome hide`.
   Chrome не отвечает — `shop-chrome restart`.
@@ -126,7 +134,7 @@ mcp = FastMCP("shop", instructions=INSTRUCTIONS)
 # old function until ozon itself is reloaded.
 # shoplog is left alone: reloading it would add a second log handler.
 # A new tool still needs a restart: tools are registered from server.py once, at start.
-_RELOADABLE = ("cdp", "capture", "images", "textsearch", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple",
+_RELOADABLE = ("pace", "cdp", "capture", "images", "textsearch", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple",
                "grocery.composition", "grocery.ids", "grocery.limits", "grocery.lenta", "grocery.samokat", "grocery.lavka", "grocery.perekrestok", "grocery.pyaterochka", "grocery.vkusvill",
                "grocery")
 _mtimes = {m: Path(sys.modules[m].__file__).stat().st_mtime for m in _RELOADABLE}
@@ -159,13 +167,15 @@ def logged(fn):
         try:
             _reload_changed()
             out = fn(*args, **kwargs)
+        except pace.Refused as e:
+            out = str(e)       # the shared budget said no: its explanation (why, until when, what instead) is the answer
         except Exception:
             log.exception("%s failed in %.1f s", call, time.time() - t)
             raise
         if Path(__file__).stat().st_mtime != _STARTED:   # tools are registered once, at start: a newer server.py needs a new process
             out = STALE + out if isinstance(out, str) else [STALE + out[0], *out[1:]]   # shop_images: its text comes first
         text = out if isinstance(out, str) else "\n".join(x for x in out if isinstance(x, str))  # shop_images: text + pictures
-        warn = any(w in text for w in ("⚠️", "блокировку", "проверка Авито"))
+        warn = any(w in text for w in ("⚠️", "⏸", "блокировку", "проверка Авито"))
         log.log(30 if warn else 20, "%s ok in %.1f s, %d lines: %s",
                 call, time.time() - t, text.count("\n") + 1, text.split("\n", 1)[0][:150])
         return out
@@ -884,6 +894,15 @@ def grocery_favorite(store: str, id_or_url: str, remove: bool = False) -> str:
     """Продукты: добавить товар в избранное (remove=True — убрать). Меняет аккаунт — только по просьбе пользователя.
     Есть у Ленты, Перекрёстка и Лавки. store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка), vkusvill (ВкусВилл)."""
     return grocery.call(store, "favorite", id_or_url, remove)
+
+
+@mcp.tool()
+@logged
+def shop_limits() -> str:
+    """Бюджет запросов к магазинам: сколько запросов было за 1/10/60 мин и их пределы, какие магазины
+    остановлены после проверки на бота или блокировки и до какого времени. Общий для всех сессий,
+    агентов и скриптов. Посмотри перед длинной серией запросов и после ответа с «⏸»."""
+    return pace.status()
 
 
 @mcp.tool()
