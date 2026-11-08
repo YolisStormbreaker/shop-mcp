@@ -216,5 +216,36 @@ class StatusTests(PaceTest):
         self.assertIn("Перекрёсток\t0/15\t0/60\t0/200\t⏸ блокировка по IP до 21:00 (ещё 6 ч 0 мин): «Проблемы со связью»", lines)
 
 
+
+class CommandTests(PaceTest):
+    """~/shop-mcp/shop-pace, for scripts and people: status, wait for a slot, clear a stop."""
+    def run_cli(self, *argv):
+        with patch("builtins.print") as out:
+            code = pace.main(list(argv))
+        return code, "\n".join(" ".join(map(str, c.args)) for c in out.call_args_list)
+
+    def test_status_is_the_default(self):
+        self.assertEqual(self.run_cli(), (0, pace.status()))
+        self.assertEqual(self.run_cli("status"), (0, pace.status()))
+
+    def test_wait_takes_a_slot_or_says_why_not(self):
+        self.assertEqual(self.run_cli("wait", "ozon"), (0, "ok"))
+        self.assertEqual(self.run_cli("wait", "ozon", "page"), (0, "ok"))
+        self.assertEqual(self.clock.slept, [4.0])
+        pace.blocked("ozon", "check", "капча")
+        code, text = self.run_cli("wait", "ozon")
+        self.assertEqual(code, 1)
+        self.assertTrue(text.startswith("⏸ Ozon: проверка на бота — капча"), text)
+
+    def test_clear_a_check_and_a_ban_only_with_the_flag(self):
+        pace.blocked("perekrestok", "ban", "IP")
+        self.assertEqual(self.run_cli("clear", "perekrestok")[0], 1)
+        self.assertEqual(self.run_cli("clear", "--ban", "perekrestok"), (0, "Перекрёсток: остановка снята"))
+
+    def test_usage(self):
+        code, text = self.run_cli("nonsense")
+        self.assertEqual(code, 2)
+        self.assertTrue(text.startswith("shop-pace status | wait <сайт> [page|api] | clear [--ban] <сайт>"), text)
+
 if __name__ == "__main__":
     unittest.main()

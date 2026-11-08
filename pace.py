@@ -264,3 +264,36 @@ def _span(s):
         return f"{s} с"
     h, m = divmod(s // 60, 60)
     return f"{h} ч {m} мин" if h else f"{m} мин"
+
+
+USAGE = ("shop-pace status | wait <сайт> [page|api] | clear [--ban] <сайт>\n"
+         "  status — запросы к магазинам и остановки; wait — взять слот перед своим запросом к сайту (ждёт до 20 с\n"
+         "  или отказывает с причиной); clear — снять остановку после проверки, которую прошёл пользователь;\n"
+         "  --ban — снять и блокировку по IP: только сам пользователь. Сайты: " + ", ".join(POLICY))
+
+
+def main(argv):
+    """The shop-pace command; its exit code: 0 done, 1 refused, 2 wrong use."""
+    cmd, rest = (argv[0], argv[1:]) if argv else ("status", [])
+    if cmd == "status" and not rest:
+        print(status())
+        return 0
+    if cmd == "wait" and rest:
+        try:
+            acquire(rest[0], *rest[1:2])
+        except Refused as e:
+            print(e)
+            return 1
+        print("ok")
+        return 0
+    sites = [a for a in rest if a != "--ban"]
+    if cmd == "clear" and len(sites) == 1:
+        said = clear(sites[0], ban="--ban" in rest)
+        print(said)
+        return 0 if said.endswith("остановка снята") or said.endswith("остановки нет") else 1
+    print(USAGE)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

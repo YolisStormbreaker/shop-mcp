@@ -1,0 +1,3 @@
+#!/bin/zsh
+# The shared request budget of the shop sites (pace.py): status, wait for a slot before a request of your own, clear a stop.
+exec /usr/bin/python3 -I -B "${0:A:h}/pace.py" "$@"
