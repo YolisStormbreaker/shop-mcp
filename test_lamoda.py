@@ -288,12 +288,32 @@ class LamodaCartTests(unittest.TestCase):
         self.assertEqual(got, lamoda.BLOCKED)
         tab.close.assert_called_once()
 
-    def add(self, sku_or_url="MP002XW0ABCD", size=None, sizes=SIZES, geo="test-aoid", answers=({}, CART)):
-        return self.call(lamoda.add_to_cart, sku_or_url, size, answers=answers, js=[sizes, geo])
+    def add(self, sku_or_url="MP002XW0ABCD", size=None, sizes=SIZES, geo="test-aoid", answers=({}, CART), quantity=1):
+        return self.call(lamoda.add_to_cart, sku_or_url, size, quantity, answers=answers, js=[sizes, geo])
+
+    def test_add_more_than_one_piece(self):
+        # cart/add puts in one piece (live 2026-11-08: 1, then 2), so the rest go by the cart's own count
+        stocked = {**SWEATER, "size": {**SWEATER["size"], "stock_quantity": 2}}
+        cases = {"all of them": (3, {**stocked, "size": {**stocked["size"], "stock_quantity": 5}}, 3, 3,
+                                 "добавлено: MP002XW0ABCDE420, размер 42, в корзине 3 шт."),
+                 "up to the stock": (3, stocked, 2, 2, "⚠️ добавлено: MP002XW0ABCDE420, размер 42, в корзине 2 шт., а не 3 — в наличии всего 2 шт.")}
+        for case, (quantity, line, sent, now, head) in cases.items():
+            with self.subTest(case):
+                before, after = lamoda_cart(line), lamoda_cart({**line, "quantity": now})
+                got, requests, _, _ = self.add(size="42", answers=[{}, before, {}, after], quantity=quantity)
+                self.assertEqual(got, head + "\n" + lamoda._cart_text(after))
+                self.assertEqual(requests[2], ("POST", "/api/v1/cart/update", json.dumps(
+                    {"quantity": {"sku": "MP002XW0ABCDE420", "quantity": sent}, "geo": {"aoid": "test-aoid"}, "items_included_in_order": ["MP002XW0ABCDE420"]})))
+                self.assertEqual(len(requests), 4)
+
+    def test_add_less_than_one_piece(self):
+        got, sent, _, lm_tab = self.call(lamoda.add_to_cart, "MP002XW0ABCD", "42", 0)
+        self.assertEqual((got, sent), ("quantity: целое число от 1", []))
+        lm_tab.assert_not_called()
 
     def test_add_a_size_by_its_brand_name(self):
         got, sent, tab, _ = self.add(size="xs")
-        self.assertEqual(got, "добавлено: MP002XW0ABCDE420, размер 42\n" + CART_TEXT)
+        self.assertEqual(got, "добавлено: MP002XW0ABCDE420, размер 42, в корзине 1 шт.\n" + CART_TEXT)
         self.assertEqual(sent, [("POST", "/api/v1/cart/add", '{"sku": "MP002XW0ABCDE420", "geo": {"aoid": "test-aoid"}}'), GET])
         self.assertEqual(tab.goto.call_args_list, [call(
             "https://www.lamoda.ru/p/mp002xw0abcd/", "lamoda", wait_js='window.__NUXT__?.payload?.state?.payload?.product?.sku === "MP002XW0ABCD"')])
@@ -304,13 +324,13 @@ class LamodaCartTests(unittest.TestCase):
         cart = {"total_quantity": 1, "total_price": 2500, "packages": [{"items": [{**SWEATER, "size": {"sku": "MP002XW0ABCDE460", "title": "46"}}]}]}
         for size in (" 46 ", "mp002xw0abcde460"):
             got, sent, tab, _ = self.add(" https://www.lamoda.ru/p/mp002xw0abcd/clothes-befree-sviter/?utm=x ", size, answers=[{}, cart])
-            self.assertEqual(got.splitlines()[0], "добавлено: MP002XW0ABCDE460, размер 46")
+            self.assertEqual(got.splitlines()[0], "добавлено: MP002XW0ABCDE460, размер 46, в корзине 1 шт.")
             self.assertEqual(sent[0], ("POST", "/api/v1/cart/add", '{"sku": "MP002XW0ABCDE460", "geo": {"aoid": "test-aoid"}}'))
             self.assertEqual(tab.goto.call_args.args[0], "https://www.lamoda.ru/p/mp002xw0abcd/")
 
     def test_add_the_only_size_without_naming_it(self):
         got, sent, _, _ = self.add(" mp002xw0abcd ", sizes=SIZES[:1])
-        self.assertEqual(got, "добавлено: MP002XW0ABCDE420, размер 42\n" + CART_TEXT)
+        self.assertEqual(got, "добавлено: MP002XW0ABCDE420, размер 42, в корзине 1 шт.\n" + CART_TEXT)
         self.assertEqual(sent[0][2], '{"sku": "MP002XW0ABCDE420", "geo": {"aoid": "test-aoid"}}')
 
     def test_add_not_confirmed(self):
@@ -378,6 +398,55 @@ class LamodaCartTests(unittest.TestCase):
         self.assertEqual((got, len(sent)), (lamoda.BLOCKED, 3))
         tab.close.assert_called_once()
 
+
+
+def lamoda_cart(*lines):
+    """A cart of these lines, all of them chosen for the order."""
+    return {"total_quantity": sum(i["quantity"] for i in lines), "total_price": 1, "packages": [{"items": list(lines)}],
+            "items_included_in_order": [i["size"]["sku"] for i in lines]}
+
+
+class LamodaSetCartQuantityTests(LamodaCartTests):
+    def set(self, quantity, before, after=None, size_sku="ab123xy45678one "):
+        return self.call(lamoda.set_cart_quantity, size_sku, quantity, answers=[before, {}, after], js=["test-aoid"])
+
+    def test_the_line_gets_the_count(self):
+        stocked = {**SCARF, "size": {**SCARF["size"], "stock_quantity": 3}}
+        cases = {"fewer": (1, SCARF, 1, 1, "в корзине 1 шт.: AB123XY45678ONE"),
+                 "more": (3, stocked, 3, 3, "в корзине 3 шт.: AB123XY45678ONE"),
+                 "not past the stock": (5, stocked, 3, 3, "⚠️ в корзине 3 шт., а не 5: AB123XY45678ONE — в наличии всего 3 шт."),
+                 "Lamoda kept the old count": (1, SCARF, 1, 2, "⚠️ в корзине 2 шт., а не 1: AB123XY45678ONE — Lamoda не подтвердила изменение"),
+                 "kept it under the stock": (1, stocked, 1, 2, "⚠️ в корзине 2 шт., а не 1: AB123XY45678ONE — Lamoda не подтвердила изменение")}
+        for case, (quantity, line, sent, now, head) in cases.items():
+            with self.subTest(case):
+                before, after = lamoda_cart(SWEATER, line), lamoda_cart(SWEATER, {**line, "quantity": now})
+                got, requests, _, _ = self.set(quantity, before, after)
+                self.assertEqual(got, head + "\n" + lamoda._cart_text(after))
+                self.assertEqual(requests, [GET, ("POST", "/api/v1/cart/update", json.dumps(
+                    {"quantity": {"sku": "AB123XY45678ONE", "quantity": sent}, "geo": {"aoid": "test-aoid"},
+                     "items_included_in_order": ["MP002XW0ABCDE420", "AB123XY45678ONE"]})), GET])
+
+    def test_the_line_gone_after_the_change_or_the_cart_blocked(self):
+        got, _, _, _ = self.set(1, lamoda_cart(SWEATER, SCARF), lamoda_cart(SWEATER))
+        self.assertEqual(got, "⚠️ в корзине 0 шт., а не 1: AB123XY45678ONE — Lamoda не подтвердила изменение\n" + lamoda._cart_text(lamoda_cart(SWEATER)))
+        self.assertEqual(self.set(1, lamoda_cart(SCARF), None)[0], lamoda.BLOCKED)
+
+    def test_the_same_count_sends_nothing(self):
+        got, requests, _, _ = self.set(2, lamoda_cart(SCARF))
+        self.assertEqual((got, requests), ("в корзине 2 шт.: AB123XY45678ONE\n" + lamoda._cart_text(lamoda_cart(SCARF)), [GET]))
+
+    def test_zero_removes_the_line(self):
+        got, requests, _, _ = self.set(0, lamoda_cart(SWEATER, SCARF), lamoda_cart(SWEATER))
+        self.assertEqual(got, "удалено: AB123XY45678ONE\n" + lamoda._cart_text(lamoda_cart(SWEATER)))
+        self.assertEqual(requests[1], ("POST", "/api/v1/cart/remove", '{"skus": ["AB123XY45678ONE"], "geo": {"aoid": "test-aoid"}}'))
+
+    def test_not_in_the_cart_blocked_and_less_than_nothing(self):
+        got, requests, _, _ = self.set(1, lamoda_cart(SWEATER))
+        self.assertEqual((got, requests), ("такого sku размера в корзине нет\n" + lamoda._cart_text(lamoda_cart(SWEATER)), [GET]))
+        self.assertEqual(self.set(1, None)[:2], (lamoda.BLOCKED, [GET]))
+        got, requests, _, lm_tab = self.call(lamoda.set_cart_quantity, "AB123XY45678ONE", -1)
+        self.assertEqual((got, requests), ("quantity — сколько штук оставить в строке, от 0 (0 убирает строку)", []))
+        lm_tab.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

@@ -612,11 +612,12 @@ def lamoda_cart() -> str:
 
 @mcp.tool()
 @logged
-def lamoda_add_to_cart(sku_or_url: str, size: str | None = None) -> str:
-    """Положить товар Lamoda в корзину, 1 шт: sku товара (из lamoda_search) или ссылка и size — размер как
+def lamoda_add_to_cart(sku_or_url: str, size: str | None = None, quantity: int = 1) -> str:
+    """Положить товар Lamoda в корзину: sku товара (из lamoda_search) или ссылка и size — размер как
     в lamoda_item (российский или брендовый; у одноразмерных не нужен, без него у многоразмерных вернёт
-    список). Заказ не оформляет. Работает со скрытым браузером. Возвращает корзину."""
-    return lamoda.add_to_cart(sku_or_url, size)
+    список). quantity — сколько штук добавить; если этот размер уже в корзине, добавляет к тем, что там
+    есть (не больше остатка). Заказ не оформляет. Работает со скрытым браузером. Возвращает корзину."""
+    return lamoda.add_to_cart(sku_or_url, size, quantity)
 
 
 @mcp.tool()
@@ -624,6 +625,15 @@ def lamoda_add_to_cart(sku_or_url: str, size: str | None = None) -> str:
 def lamoda_remove_from_cart(size_sku: str) -> str:
     """Убрать строку из корзины Lamoda по sku размера из lamoda_cart. Работает со скрытым браузером."""
     return lamoda.remove_from_cart(size_sku)
+
+
+@mcp.tool()
+@logged
+def lamoda_set_cart_quantity(size_sku: str, quantity: int) -> str:
+    """Сколько штук оставить в корзине Lamoda: sku размера из lamoda_cart, quantity — новое число штук,
+    0 убирает строку. Больше остатка размера не ставит и так и пишет. Выбор строк к оформлению не меняет.
+    Работает со скрытым браузером."""
+    return lamoda.set_cart_quantity(size_sku, quantity)
 
 
 @mcp.tool()
@@ -638,7 +648,8 @@ def goldapple_cart() -> str:
 @logged
 def goldapple_add_to_cart(id_or_url: str, quantity: int = 1) -> str:
     """Положить товар Золотого яблока в корзину: артикул варианта (из goldapple_item — у каждого объёма
-    и цвета свой) или ссылка. Заказ не оформляет. Работает со скрытым браузером. Возвращает корзину."""
+    и цвета свой) или ссылка. quantity — сколько штук добавить; если товар уже в корзине, добавляет к тем,
+    что там есть. Заказ не оформляет. Работает со скрытым браузером. Возвращает корзину."""
     return goldapple.add_to_cart(id_or_url, quantity)
 
 
@@ -647,6 +658,15 @@ def goldapple_add_to_cart(id_or_url: str, quantity: int = 1) -> str:
 def goldapple_remove_from_cart(sku: str) -> str:
     """Убрать строку из корзины Золотого яблока по артикулу из goldapple_cart. Работает со скрытым браузером."""
     return goldapple.remove_from_cart(sku)
+
+
+@mcp.tool()
+@logged
+def goldapple_set_cart_quantity(sku: str, quantity: int) -> str:
+    """Сколько штук оставить в корзине Золотого яблока: артикул из goldapple_cart, quantity — новое число
+    штук, 0 убирает строку. Если сайт не даёт столько (остаток, лимит), пишет его причину. Остальные строки
+    не трогает. Работает со скрытым браузером."""
+    return goldapple.set_cart_quantity(sku, quantity)
 
 
 @mcp.tool()

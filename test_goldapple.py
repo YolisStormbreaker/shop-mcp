@@ -345,5 +345,62 @@ class GoldAppleCartTests(unittest.TestCase):
         self.assertEqual(got, "нужен артикул из goldapple_cart")
         ga_tab.assert_not_called()
 
+def ga_cart(*lines):
+    return {"data": {"rawCart": {"items": list(lines)}}}
+
+
+def updates(sku, qty):
+    """The cart's own count request (updateItemQty in its code): the body names the cart, the sku and the new count."""
+    return ("POST", "/front/api/cart/v3/items/update-qty?locale=ru",
+            json.dumps({"cartId": CART_ID, "itemSKU": sku, "itemQty": qty, "includeDeliveryThreshold": False}))
+
+
+class GoldAppleSetCartQuantityTests(GoldAppleCartTests):
+    def test_the_line_gets_the_count(self):
+        cases = {"fewer": (1, {}, 1, "в корзине 1 шт.: артикул 19000163536"),
+                 "more": (3, {}, 3, "в корзине 3 шт.: артикул 19000163536"),
+                 "the site says why not": (9, {"data": {"cart": None, "message": "Доступно только 4 шт."}}, 2,
+                                           "⚠️ в корзине 2 шт., а не 9: артикул 19000163536 — Доступно только 4 шт."),
+                 "the site kept the old count": (3, {"data": {"cart": {}, "message": None}}, 2,
+                                                 "⚠️ в корзине 2 шт., а не 3: артикул 19000163536 — Золотое яблоко не подтвердило изменение")}
+        for case, (quantity, answer, now, head) in cases.items():
+            with self.subTest(case):
+                after = ga_cart({**CUSHION, "qty": now}, SHAMPOO)
+                got, sent, _, _ = self.call(goldapple.set_cart_quantity, "https://goldapple.ru/19000163536-cushion", quantity,
+                                            answers=[GA_CART, answer, after])
+                self.assertEqual(got, head + "\n" + goldapple._cart_text(after))
+                self.assertEqual(sent, [GA_STATE, updates("19000163536", quantity), GA_STATE])
+
+    def test_the_line_gone_after_the_change(self):
+        got, _, _, _ = self.call(goldapple.set_cart_quantity, "19000163536", 1, answers=[GA_CART, {}, SHAMPOO_CART])
+        self.assertEqual(got, "⚠️ в корзине 0 шт., а не 1: артикул 19000163536 — Золотое яблоко не подтвердило изменение\n" + SHAMPOO_TEXT)
+
+    def test_no_more_in_stock(self):
+        after = ga_cart({**CUSHION, "cantAddMore": True}, SHAMPOO)
+        got, _, _, _ = self.call(goldapple.set_cart_quantity, "19000163536", 5, answers=[GA_CART, {}, after])
+        self.assertEqual(got.splitlines()[0], "⚠️ в корзине 2 шт., а не 5: артикул 19000163536 — больше нет в наличии")
+
+    def test_the_same_count_sends_nothing(self):
+        got, sent, _, _ = self.call(goldapple.set_cart_quantity, "19000163536", 2, answers=[GA_CART])
+        self.assertEqual((got, sent), ("в корзине 2 шт.: артикул 19000163536\n" + GA_CART_TEXT, [GA_STATE]))
+
+    def test_zero_removes_the_line(self):
+        got, sent, _, _ = self.call(goldapple.set_cart_quantity, "19000163536", 0, answers=[GA_CART, {}, SHAMPOO_CART])
+        self.assertEqual(got, "удалено: артикул 19000163536\n" + SHAMPOO_TEXT)
+        self.assertEqual(sent[1][0], "DELETE")
+
+    def test_not_in_the_cart_blocked_no_cart_and_bad_arguments(self):
+        got, sent, _, _ = self.call(goldapple.set_cart_quantity, "19000000002", 1, answers=[GA_CART])
+        self.assertEqual((got, sent), ("такого артикула в корзине нет\n" + GA_CART_TEXT, [GA_STATE]))
+        self.assertEqual(self.call(goldapple.set_cart_quantity, "19000163536", 1, answers=[None])[0], goldapple.BLOCKED)
+        self.assertEqual(self.call(goldapple.set_cart_quantity, "19000163536", 1, answers=[GA_CART, {}, None])[0], goldapple.BLOCKED)
+        self.assertEqual(self.call(goldapple.set_cart_quantity, "19000163536", 1, cart_id=None)[:2], (goldapple.NO_CART, []))
+        for args, want in ((("кушон", 1), "нужен артикул из goldapple_cart"),
+                           (("19000163536", -1), "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)")):
+            got, _, _, ga_tab = self.call(goldapple.set_cart_quantity, *args)
+            self.assertEqual(got, want)
+            ga_tab.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

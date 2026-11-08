@@ -230,7 +230,7 @@ def _review_text(x, sn):
     return " ".join(((x.get("text") or "") + (f" | {params}" if params else "")).split())
 
 
-# Cart: the site's own API client (cartGet / cartAdd / cartRemove in its code) — same-origin JSON with
+# Cart: the site's own API client (cartGet / cartAdd / cartRemove / cartUpdate in its code) — same-origin JSON with
 # the session cookie, so it works from a background tab. geo is the delivery region the site keeps in
 # the gd_aoid cookie; the tab must be on lamoda.ru for relative URLs and that cookie.
 def _lm_tab():
@@ -276,10 +276,12 @@ def cart():
 SIZES_JS = f"({STATE}?.product?.sizes || []).map(s => ({{sku: s.sku, title: s.title, brand: s.brand_title || '', stock: s.stock_quantity || 0}}))"
 
 
-def add_to_cart(sku_or_url, size=None):
+def add_to_cart(sku_or_url, size=None, quantity=1):
     sku = _product_sku(sku_or_url)
     if not sku:
         return "нужен sku товара (из lamoda_search) или ссылка на товар"
+    if int(quantity) < 1:
+        return "quantity: целое число от 1"
     tab = _lm_tab()
     try:
         tab.goto(f"https://www.lamoda.ru/p/{sku.lower()}/", "lamoda", wait_js=f"{STATE}?.product?.sku === {json.dumps(sku)}")
@@ -291,12 +293,21 @@ def add_to_cart(sku_or_url, size=None):
             return "⚠️ не нашёл регион доставки Lamoda (cookie gd_aoid): открой сайт и выбери город"
         _api(tab, "POST", "/api/v1/cart/add", {"sku": pick["sku"], "geo": geo})
         d = _api(tab, "GET", "/api/v1/cart/get")
+        line = _cart_line(d, pick["sku"])
+        want = line and line["quantity"] + int(quantity) - 1     # cart/add puts in one piece; the rest go by the cart's count
+        if line and want != line["quantity"]:
+            d = _set_line(tab, d, line, want, geo)
     finally:
         tab.close()
-    if d is None:
-        return BLOCKED
-    ok = _has(d, pick["sku"])
-    return f"{'добавлено' if ok else '⚠️ Lamoda не подтвердила добавление'}: {pick['sku']}, размер {pick['title']}\n" + _cart_text(d)
+    return BLOCKED if d is None else _added(d, pick, line, want)
+
+
+def _added(d, pick, line, want):
+    now = (_cart_line(d, pick["sku"]) or {}).get("quantity")
+    if not now:
+        return f"⚠️ Lamoda не подтвердила добавление: {pick['sku']}, размер {pick['title']}\n" + _cart_text(d)
+    head = f"добавлено: {pick['sku']}, размер {pick['title']}, в корзине {now} шт."
+    return (head if now == want else f"⚠️ {head}, а не {want} — {_short(line, now, want)}") + "\n" + _cart_text(d)
 
 
 def _product_sku(sku_or_url):
@@ -331,8 +342,56 @@ def _find_size(sizes, size):
     return next((x for x in sizes if want in (x["title"].lower(), x["brand"].lower(), x["sku"].lower())), None)
 
 
+def _cart_line(d, size_sku):
+    return next((i for i in _lines(d) if i["size"].get("sku") == size_sku), None)
+
+
 def _has(d, size_sku):
-    return any(i["size"].get("sku") == size_sku for i in _lines(d))
+    return _cart_line(d, size_sku) is not None
+
+
+def _set_line(tab, d, line, want, geo):
+    """The cart after setting line to want pieces, at most its size's stock, by the cart's own update; d if it holds them already.
+    The update names the lines chosen for the order, as the site does: those it leaves out are unchosen."""
+    to = min(want, line["size"].get("stock_quantity") or want)
+    if to == line.get("quantity"):
+        return d
+    _api(tab, "POST", "/api/v1/cart/update", {"quantity": {"sku": line["size"]["sku"], "quantity": to}, "geo": geo,
+                                              "items_included_in_order": d.get("items_included_in_order") or []})
+    return _api(tab, "GET", "/api/v1/cart/get")
+
+
+def _short(line, now, want):
+    """Why the line holds now pieces, not want: its size's stock, or Lamoda did not take the change."""
+    stock = line["size"].get("stock_quantity")
+    return f"в наличии всего {stock} шт." if stock and want > now >= stock else "Lamoda не подтвердила изменение"
+
+
+def set_cart_quantity(size_sku, quantity):
+    if int(quantity) < 0:
+        return "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
+    if not int(quantity):
+        return remove_from_cart(size_sku)
+    size_sku = size_sku.strip().upper()
+    tab = _lm_tab()
+    try:
+        d = _api(tab, "GET", "/api/v1/cart/get")
+        if d is None:
+            return BLOCKED
+        line = _cart_line(d, size_sku)
+        if not line:
+            return "такого sku размера в корзине нет\n" + _cart_text(d)
+        d = _set_line(tab, d, line, int(quantity), _geo(tab))
+    finally:
+        tab.close()
+    return BLOCKED if d is None else _quantity_text(size_sku, int(quantity), line, d)
+
+
+def _quantity_text(size_sku, want, line, d):
+    now = (_cart_line(d, size_sku) or {}).get("quantity") or 0
+    if now == want:
+        return f"в корзине {now} шт.: {size_sku}\n" + _cart_text(d)
+    return f"⚠️ в корзине {now} шт., а не {want}: {size_sku} — {_short(line, now, want)}\n" + _cart_text(d)
 
 
 def remove_from_cart(size_sku):

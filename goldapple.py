@@ -220,7 +220,7 @@ def _review_text(r):
 
 # The cart is a plain same-origin API with the session cookie (names from the site's own code:
 # getState, addItemsBySku, deleteItems), so it works from a background tab. Every request names the
-# cart by the id the site keeps in localStorage (its guestV3.getId()); without it the state is
+# cart by the id the site keeps in localStorage (its guestV3.getId()); updateItemQty sets a line's count. Without the id the state is
 # «Quote is not active» and an add goes to a cart no page shows (2026-11).
 STATE = "/front/api/cart/v3/state?locale=ru&includeDeliveryThreshold=false"
 CART_ID_JS = "(() => { try { return JSON.parse(localStorage.getItem('ga-cart-id')) } catch (e) { return null } })()"
@@ -303,8 +303,12 @@ def add_to_cart(id_or_url, quantity=1):
     return f"{'добавлено' if ok else '⚠️ Золотое яблоко не подтвердило добавление'}: артикул {sku}\n" + _cart_text(d)
 
 
+def _line(d, sku):
+    return next((i for i in _items(d) if str(i.get("productSku")) == sku), None)
+
+
 def _in_cart(d, sku):
-    return any(str(i.get("productSku")) == sku for i in _items(d))
+    return _line(d, sku) is not None
 
 
 def remove_from_cart(id_or_url):
@@ -329,3 +333,42 @@ def remove_from_cart(id_or_url):
         return BLOCKED
     gone = not _in_cart(d, sku)
     return f"{'удалено' if gone else '⚠️ Золотое яблоко не подтвердило удаление'}: артикул {sku}\n" + _cart_text(d)
+
+
+def set_cart_quantity(id_or_url, quantity):
+    sku = _sku(id_or_url)
+    if not sku:
+        return "нужен артикул из goldapple_cart"
+    if int(quantity) < 0:
+        return "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
+    if not int(quantity):
+        return remove_from_cart(id_or_url)
+    tab = _ga_tab()
+    try:
+        cid = _cart_id(tab)
+        if not cid:
+            return NO_CART
+        d = _state(tab, cid)
+        if d is None:
+            return BLOCKED
+        if not _in_cart(d, sku):
+            return "такого артикула в корзине нет\n" + _cart_text(d)
+        answer = None
+        if _line(d, sku).get("qty") != int(quantity):
+            answer = _api(tab, "POST", "/front/api/cart/v3/items/update-qty?locale=ru",
+                          {"cartId": cid, "itemSKU": sku, "itemQty": int(quantity), "includeDeliveryThreshold": False})
+            d = _state(tab, cid)
+    finally:
+        tab.close()
+    return BLOCKED if d is None else _quantity_text(sku, int(quantity), answer, d)
+
+
+def _quantity_text(sku, want, answer, d):
+    line = _line(d, sku) or {}
+    now = line.get("qty") or 0
+    if now == want:
+        return f"в корзине {now} шт.: артикул {sku}\n" + _cart_text(d)
+    # the site's own reason when it has one (the cart page shows it as the error), else its line's flag
+    why = (((answer or {}).get("data") or {}).get("message")
+           or ("больше нет в наличии" if line.get("cantAddMore") and want > now else "Золотое яблоко не подтвердило изменение"))
+    return f"⚠️ в корзине {now} шт., а не {want}: артикул {sku} — {why}\n" + _cart_text(d)
