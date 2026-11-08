@@ -1,6 +1,6 @@
 """ВкусВилл: the catalog API's JSON and the site's pages -> search results, the product card, reviews; the cart and
-favorites, with the buttons add_to_cart and remove_from_cart would press on fake site pages and the request favorite
-would send.  No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_vkusvill"""
+favorites, with the buttons add_to_cart, remove_from_cart and set_cart_quantity would press on fake site pages and the
+request favorite would send.  No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_vkusvill"""
 import json
 import re
 import unittest
@@ -285,9 +285,10 @@ def sent(expr):
 class Site:
     """The site in the tab: the cart it keeps (read by its dropdown endpoint), the product page with the product's add
     button while it is not in the cart and its «+» once it is, the cart page with a «−» on the product's row, and the
-    favorites. A click or a favorites request changes the site unless it ignores that one."""
-    def __init__(self, qty=0, absent=(), ignored=(), favs=()):
-        self.qty, self.absent, self.ignored, self.favs = qty, set(absent), set(ignored), list(favs)
+    favorites. A click or a favorites request changes the site unless it ignores that one; max is the line's stock
+    at the user's address."""
+    def __init__(self, qty=0, absent=(), ignored=(), favs=(), max=None):
+        self.qty, self.absent, self.ignored, self.favs, self.max = qty, set(absent), set(ignored), list(favs), max
         self.page, self.clicks, self.tries, self.gotos, self.posts = None, [], [], [], []
         self.tab = MagicMock()
         self.tab.js.side_effect = self.js
@@ -306,7 +307,8 @@ class Site:
     def js(self, expr, timeout=None):
         if expr == vkusvill.CART_JS:
             assert timeout == 40
-            mine = {"158": {"q": float(self.qty), "price": 98.0, "total": 98.0 * self.qty, "name": "Кефир", "unit": "шт", "can": "Y"}}
+            mine = {"158": {"q": float(self.qty), "price": 98.0, "total": 98.0 * self.qty, "name": "Кефир", "unit": "шт", "can": "Y",
+                            "max": self.max}}
             return {"basket": {**MILK, **(mine if self.qty else {})}, "totals": {}}
         if expr == vkusvill.FAV_JS:
             assert timeout == 40
@@ -377,6 +379,10 @@ class VkusvillAddToCartTests(unittest.TestCase):
         got, clicks, _, _ = change(vkusvill.add_to_cart, site, "158", 3)
         self.assertEqual((got, clicks, site.tries), (NOT_ADDED, [], ["+"]))
 
+    def test_a_plus_the_site_ignores_stops_the_presses(self):
+        got, clicks, _, _ = change(vkusvill.add_to_cart, Site(qty=1, ignored=["+"]), "158", 3)
+        self.assertEqual((got, clicks), (NOT_ADDED, ["+"]))
+
     def test_not_an_id(self):
         with patch.object(vkusvill, "_tab") as tab, self.assertRaises(ValueError):
             vkusvill.add_to_cart("кефир")
@@ -405,6 +411,64 @@ class VkusvillRemoveFromCartTests(unittest.TestCase):
     def test_not_an_id(self):
         with patch.object(vkusvill, "_tab") as tab, self.assertRaises(ValueError):
             vkusvill.remove_from_cart("кефир")
+        tab.assert_not_called()
+
+
+def shows(now, want, why=None):
+    """set_cart_quantity's answer: the count the cart shows, with why it is not want."""
+    return f"в корзине ВкусВилла: Кефир — {now}" if why is None else f"⚠️ в корзине {now} шт., а не {want}: Кефир — {why}"
+
+
+class VkusvillSetCartQuantityTests(unittest.TestCase):
+    def test_fewer_by_the_cart_rows_minus_without_waiting_for_a_removal(self):
+        got, clicks, gotos, sleeps = change(vkusvill.set_cart_quantity, Site(qty=3), "https://vkusvill.ru/goods/kefir-3-158/", 1)
+        self.assertEqual((got, clicks, gotos), (shows(1, 1), ["−"] * 2, [CART_PAGE]))
+        self.assertNotIn(call(5), sleeps)
+
+    def test_more_by_add_to_carts_plus(self):
+        got, clicks, gotos, _ = change(vkusvill.set_cart_quantity, Site(qty=1), "158", "3")
+        self.assertEqual((got, clicks, gotos), (shows(3, 3), ["+"] * 2, [PRODUCT_PAGE]))
+
+    def test_the_same_count_presses_nothing(self):
+        got, clicks, gotos, _ = change(vkusvill.set_cart_quantity, Site(qty=2), "158", 2)
+        self.assertEqual((got, clicks, gotos), (shows(2, 2), [], []))
+
+    def test_zero_is_remove_from_cart(self):
+        got, clicks, gotos, sleeps = change(vkusvill.set_cart_quantity, Site(qty=2), "158", 0)
+        self.assertEqual((got, clicks, gotos, sleeps[-1]), ("убрано из корзины ВкусВилла: 158", ["−"] * 2, [CART_PAGE], call(5)))
+
+    def test_not_in_the_cart(self):
+        got, clicks, gotos, _ = change(vkusvill.set_cart_quantity, Site(), "158", 2)
+        self.assertEqual((got, clicks, gotos), ("товара 158 в корзине ВкусВилла нет", [], []))
+
+    def test_a_press_that_changes_nothing_stops_the_presses(self):
+        for button, start, want, stock in (("+", 1, 31, 19), ("−", 3, 1, None)):
+            with self.subTest(button):
+                got, clicks, _, _ = change(vkusvill.set_cart_quantity, Site(qty=start, ignored=[button], max=stock), "158", want)
+                self.assertEqual((got, clicks), (shows(start, want, "ВкусВилл не подтвердил изменение"), [button]))
+
+    def test_no_more_than_the_site_has_at_the_address(self):
+        got, clicks, _, _ = change(vkusvill.set_cart_quantity, Site(qty=2, ignored=["+"], max=2), "158", 5)
+        self.assertEqual((got, clicks), (shows(2, 5, "на адрес пользователя есть только 2 шт."), ["+"]))
+
+    def test_thirty_presses_a_call(self):
+        for start, want, now, button in ((1, 99, 31, "+"), (40, 1, 10, "−")):
+            with self.subTest(want):
+                got, clicks, _, _ = change(vkusvill.set_cart_quantity, Site(qty=start), "158", want)
+                self.assertEqual((got, clicks), (shows(now, want, "за один вызов не больше 30 нажатий, вызови ещё раз"), [button] * 30))
+
+    def test_a_line_gone_after_the_presses_shows_none(self):
+        self.assertEqual(vkusvill._set_text("Кефир", 3, {}, 2), shows(0, 2, "ВкусВилл не подтвердил изменение"))
+
+    def test_negative_quantity(self):
+        with patch.object(vkusvill, "_tab") as tab:
+            got = vkusvill.set_cart_quantity("158", -1)
+        self.assertEqual(got, "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)")
+        tab.assert_not_called()
+
+    def test_not_an_id(self):
+        with patch.object(vkusvill, "_tab") as tab, self.assertRaises(ValueError):
+            vkusvill.set_cart_quantity("кефир", 1)
         tab.assert_not_called()
 
 

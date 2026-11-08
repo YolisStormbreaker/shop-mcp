@@ -273,7 +273,7 @@ CART_JS = r"""(async () => {
   const m = (r.html || '').match(/basketPageData\s*=\s*JSON\.parse\('([\s\S]*?)'\)/);
   if (!m) return {basket: {}};
   const d = JSON.parse(Function("return '" + m[1] + "'")());
-  return {basket: Object.fromEntries(Object.values(d.basket || {}).map(i => [String(i.PRODUCT_ID), {q: +i.Q, price: +i.PRICE, total: +i.TOTAL, name: i.NAME, unit: i.UNIT, can: i.CAN_BUY}])),
+  return {basket: Object.fromEntries(Object.values(d.basket || {}).map(i => [String(i.PRODUCT_ID), {q: +i.Q, price: +i.PRICE, total: +i.TOTAL, name: i.NAME, unit: i.UNIT, can: i.CAN_BUY, max: +i.MAX_Q}])),
           totals: d.totals || {}};
 })()"""
 
@@ -328,17 +328,38 @@ def _add_buttons(pid, start, quantity):
     return ([plus] if start else [_el(add)]) + [plus] * (min(int(quantity), 30) - 1)
 
 
+def _minus(pid):
+    return _el(f".js-delivery__basket--row[data-product-id='{pid}'] .Q_Down")
+
+
+def _open(tab, pid, more):
+    """The product page, where add_to_cart's buttons are, for more pieces; the cart page, with the line's «−», for fewer."""
+    if more:
+        tab.goto(f"{SITE}/goods/x-{pid}/", "vkusvill", wait_js="!!document.querySelector('.js-delivery__basket--add')")
+    else:
+        tab.goto(f"{SITE}/cart/", "vkusvill", wait_js="document.readyState === 'complete'")
+    time.sleep(1.5)
+
+
+def _press(tab, pid, els):
+    """Click els in turn, each waiting for the cart to change; stop at one that is missing or changes nothing."""
+    q = _q(tab, pid)
+    for el in els:
+        if not _click(tab, el, pid, q):
+            return
+        q, before = _q(tab, pid), q
+        if q == before:
+            return
+
+
 def add_to_cart(id_or_url, quantity=1):
     pid = _id(id_or_url)
     tab = _tab()
     try:
-        tab.goto(f"{SITE}/goods/x-{pid}/", "vkusvill", wait_js="!!document.querySelector('.js-delivery__basket--add')")
-        time.sleep(1.5)
+        _open(tab, pid, True)
         name = tab.js("document.querySelector('h1')?.innerText || ''")
         start = _q(tab, pid)
-        for el in _add_buttons(pid, start, quantity):
-            if not _click(tab, el, pid, _q(tab, pid)):
-                break
+        _press(tab, pid, _add_buttons(pid, start, quantity))
         n = _q(tab, pid)
     finally:
         tab.close()
@@ -347,13 +368,57 @@ def add_to_cart(id_or_url, quantity=1):
     return f"в корзине ВкусВилла: {name} — {n:g}"
 
 
+def set_cart_quantity(id_or_url, quantity):
+    if int(quantity) < 0:
+        return "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
+    if not int(quantity):
+        return remove_from_cart(id_or_url)
+    pid, want = _id(id_or_url), int(quantity)
+    tab = _tab()
+    try:
+        line = _cart(tab)["basket"].get(pid) or {}
+        if not line.get("q"):
+            return f"товара {pid} в корзине ВкусВилла нет"
+        after = _set(tab, pid, line["q"], want)
+    finally:
+        tab.close()
+    return _set_text(line["name"], line["q"], after, want)
+
+
+def _set(tab, pid, q, want):
+    """The cart's line after the presses from q pieces to want: «+» as add_to_cart presses it, or the cart row's «−»
+    (it removes nothing here, so there is no undo window to wait out); 30 presses at most."""
+    els = _add_buttons(pid, q, want - q) if want > q else [_minus(pid)] * min(int(q - want), 30)
+    if els:
+        _open(tab, pid, want > q)
+        _press(tab, pid, els)
+    return _cart(tab)["basket"].get(pid) or {}
+
+
+def _set_text(name, start, line, want):
+    now = line.get("q") or 0
+    if now == want:
+        return f"в корзине ВкусВилла: {name} — {now:g}"
+    return f"⚠️ в корзине {now:g} шт., а не {want}: {name} — {_short(line, start, now, want)}"
+
+
+def _short(line, start, now, want):
+    """Why the line holds now pieces, not want: the site's stock at the user's address, the 30 presses of a call, or the
+    site did not take the change."""
+    mx = line.get("max")
+    if mx and want > now >= mx:
+        return f"на адрес пользователя есть только {mx:g} шт."
+    if abs(want - start) > 30:
+        return "за один вызов не больше 30 нажатий, вызови ещё раз"
+    return "ВкусВилл не подтвердил изменение"
+
+
 def remove_from_cart(id_or_url):
     pid = _id(id_or_url)
     tab = _tab()
     try:
-        tab.goto(f"{SITE}/cart/", "vkusvill", wait_js="document.readyState === 'complete'")
-        time.sleep(1.5)
-        minus = _el(f".js-delivery__basket--row[data-product-id='{pid}'] .Q_Down")
+        _open(tab, pid, False)
+        minus = _minus(pid)
         pressed = 0
         while pressed < 40:
             q = _q(tab, pid)
