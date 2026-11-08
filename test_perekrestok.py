@@ -353,9 +353,11 @@ BREAD = {"id": 7002, "title": "Хлеб", "masterData": {"plu": 42}, "balanceSta
 class Basket:
     """The site's basket: «+» puts one unit of a product in, deleting the line takes it out; every call answers
     the whole basket.  answers() gives run() the paths the cart code calls."""
-    def __init__(self, kefir=0, bread=0, state=None, plus=None, delete=True):
-        """plus: {n: answer} for the «+» calls that answer otherwise (the first is 1)."""
+    def __init__(self, kefir=0, bread=0, state=None, plus=None, delete=True, stock=None, amount=None):
+        """plus: {n: answer} for the «+» calls that answer otherwise (the first is 1). stock: the most kefir the site
+        sets a line to; amount: what setting a count answers instead of the basket (an error)."""
         self.lines, self.state, self.plus_answers, self.delete, self.pluses = {"7001": kefir, "7002": bread}, state or {}, plus or {}, delete, 0
+        self.stock, self.amount_answer = stock, amount
 
     def view(self):
         items = [{"product": p, "quantity": self.lines[str(p["id"])], "price": 10999, "cost": 10999 * self.lines[str(p["id"])]}
@@ -369,6 +371,12 @@ class Basket:
         self.lines["7001"] += 1
         return self.view()
 
+    def amount(self, body):
+        if self.amount_answer:
+            return self.amount_answer
+        self.lines["7001"] = body["amount"] if self.stock is None else min(body["amount"], self.stock)
+        return self.view()
+
     def remove(self, _):
         if self.delete:
             self.lines["7001"] = 0
@@ -378,6 +386,7 @@ class Basket:
         """basket: what GET /basket answers in turn instead of the basket itself (None there: the basket)."""
         reads = list(basket or [])
         return {"/catalog/product/plu2093082": KEFIR, "/basket/plu2093082/plus": self.plus, "/basket/item/7001": self.remove,
+                "/basket/7001/amount": self.amount,
                 "/basket": lambda _: (reads.pop(0) if reads else None) or self.view()}
 
 
@@ -471,6 +480,50 @@ class RemoveFromCartTests(unittest.TestCase):
         self.assertEqual(got, "Кефир 2,5%, 930г: Перекрёсток не отдал корзину, и не видно, что получилось — проверь grocery_cart, "
                               "прежде чем повторять")
         self.assertEqual(calls, [PRODUCT, BASKET, ("delete", "/basket/item/7001", None), BASKET])
+
+
+def amount(n):
+    """The site's own setItem: PUT /basket/<product id>/amount."""
+    return ("put", "/basket/7001/amount", {"amount": n})
+
+
+class SetCartQuantityTests(unittest.TestCase):
+    def test_the_line_gets_the_count(self):
+        cases = {"fewer": (Basket(kefir=3), 1, [amount(1), BASKET], "в корзине Перекрёстка: Кефир 2,5%, 930г — 1 шт × 109.99 ₽ = 109.99 ₽"),
+                 "more": (Basket(kefir=1), 4, [amount(4), BASKET], "в корзине Перекрёстка: Кефир 2,5%, 930г — 4 шт × 109.99 ₽ = 439.96 ₽"),
+                 "the same count is not sent": (Basket(kefir=2), 2, [], "в корзине Перекрёстка: Кефир 2,5%, 930г — 2 шт × 109.99 ₽ = 219.98 ₽"),
+                 "under the minimum order": (Basket(kefir=2, state={"state": "too_cheap", "disabledButtonTitle": "Ещё 300 ₽"}), 1,
+                                             [amount(1), BASKET], "в корзине Перекрёстка: Кефир 2,5%, 930г — 1 шт × 109.99 ₽ = 109.99 ₽\n"
+                                                                  "до минимального заказа ещё 300 ₽"),
+                 "the stock is short": (Basket(kefir=1, stock=3), 5, [amount(5), BASKET],
+                                        "⚠️ в корзине 3 шт., а не 5: Кефир 2,5%, 930г — Перекрёсток не подтвердил изменение"),
+                 "the line gone": (Basket(kefir=2, stock=0), 1, [amount(1), BASKET],
+                                   "⚠️ в корзине 0 шт., а не 1: Кефир 2,5%, 930г — Перекрёсток не подтвердил изменение"),
+                 "refused": (Basket(kefir=1, amount={"__error": 400}), 3, [amount(3), BASKET],
+                             "⚠️ в корзине 1 шт., а не 3: Кефир 2,5%, 930г — Перекрёсток отказал: 400")}
+        for case, (basket, quantity, sent, want) in cases.items():
+            with self.subTest(case):
+                got, calls = run(pk.set_cart_quantity, basket.answers(), f"{SITE}/cat/1589/p/kefir-2-5-930g-2093082", quantity)
+                self.assertEqual((got, calls), (want, [PRODUCT, BASKET] + sent))
+
+    def test_zero_removes_the_line(self):
+        got, calls = run(pk.set_cart_quantity, Basket(kefir=2).answers(), "2093082", 0)
+        self.assertEqual((got, calls[2]), ("убрано из корзины Перекрёстка: Кефир 2,5%, 930г", ("delete", "/basket/item/7001", None)))
+
+    def test_not_in_the_cart(self):
+        got, calls = run(pk.set_cart_quantity, Basket(bread=1).answers(), "2093082", 2)
+        self.assertEqual((got, calls), ("Кефир 2,5%, 930г в корзине Перекрёстка нет", [PRODUCT, BASKET]))
+
+    def test_basket_that_did_not_come_or_come_back(self):
+        got, calls = run(pk.set_cart_quantity, Basket(kefir=1).answers([{"__error": 500}]), "2093082", 2)
+        self.assertEqual((got, calls), (pk.BLOCKED, [PRODUCT, BASKET]))
+        got, _ = run(pk.set_cart_quantity, Basket(kefir=1).answers([None, {"__error": 500}]), "2093082", 2)
+        self.assertEqual(got, pk.UNCHECKED.format("Кефир 2,5%, 930г"))
+
+    def test_less_than_nothing(self):
+        with patch.object(pk, "_tab") as tab:
+            self.assertEqual(pk.set_cart_quantity("2093082", -1), "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)")
+        tab.assert_not_called()
 
 
 class FavoritesTests(unittest.TestCase):

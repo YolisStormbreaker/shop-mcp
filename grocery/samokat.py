@@ -331,3 +331,25 @@ def remove_from_cart(id_or_url):
     finally:
         tab.close()
     return f"не удалось убрать «{name}» из корзины Самоката" if left else f"убрано из корзины Самоката: {name}"
+
+
+def set_cart_quantity(id_or_url, quantity):
+    """The line at quantity pieces by the site's own cart sync, as add and remove do; 0 removes it."""
+    if int(quantity) < 0:
+        return "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
+    if not int(quantity):
+        return remove_from_cart(id_or_url)
+    tab = _tab()
+    if tab is None:
+        return BLOCKED
+    try:
+        pid, name = _uuid(tab, id_or_url)
+        have = _qty(tab, pid) if pid else 0
+        if not have:
+            return f"«{name}» в корзине Самоката нет"
+        now = have if have == int(quantity) else _set(tab, pid, quantity)
+    finally:
+        tab.close()
+    if now == int(quantity):
+        return f"в корзине Самоката: {name} — {now} шт"
+    return f"⚠️ в корзине {now} шт., а не {quantity}: {name} — Самокат не подтвердил изменение (нет столько на складе?)"

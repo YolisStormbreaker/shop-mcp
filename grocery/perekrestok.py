@@ -382,8 +382,12 @@ def add_to_cart(id_or_url, quantity=1):
     it, state = _line(b, plu)
     if not it:
         return f"Перекрёсток: {title} в корзине не появился (нет в наличии?)"
+    return _line_text(title, it, state) + (f"\nположено {done} из {n}, дальше Перекрёсток отказал: {refused}" if done < n else "")
+
+
+def _line_text(title, it, state):
     return (f"в корзине Перекрёстка: {title} — {it.get('quantity')} шт × {_rub(it.get('price'))} ₽ = {_rub(it.get('cost'))} ₽"
-            + (f"\n{state}" if state else "") + (f"\nположено {done} из {n}, дальше Перекрёсток отказал: {refused}" if done < n else ""))
+            + (f"\n{state}" if state else ""))
 
 
 def _plus(tab, plu, n):
@@ -395,6 +399,45 @@ def _plus(tab, plu, n):
             return b, done, r.get("__error") if isinstance(r, dict) else r
         b = r
     return b, n, None
+
+
+def set_cart_quantity(id_or_url, quantity):
+    """The line at quantity pieces by the site's own setItem (PUT /basket/<product id>/amount); 0 removes it.
+    shortcut: a weighed line's amount goes in the cart's own units, not tried on one live; try one before trusting it."""
+    if int(quantity) < 0:
+        return "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
+    if not int(quantity):
+        return remove_from_cart(id_or_url)
+    plu = _plu(id_or_url)
+    tab = _tab()
+    try:
+        pid, title = _product_id(tab, plu)
+        b = _call(tab, "get", "/basket") or {}
+        if _failed(b):
+            return BLOCKED
+        if not _line(b, plu)[0]:
+            return f"{title} в корзине Перекрёстка нет"
+        b, refused = _set_amount(tab, b, plu, pid, int(quantity))
+    finally:
+        tab.close()
+    return UNCHECKED.format(title) if _failed(b) else _set_text(title, int(quantity), refused, b, plu)
+
+
+def _set_amount(tab, b, plu, pid, want):
+    """(the basket after setting plu's line to want, the site's refusal or None); b as it is when it holds want already."""
+    if _line(b, plu)[0].get("quantity") == want:
+        return b, None
+    r = _call(tab, "put", f"/basket/{pid}/amount", {"amount": want})
+    return _call(tab, "get", "/basket") or {}, (r["__error"] if _failed(r) else None)
+
+
+def _set_text(title, want, refused, b, plu):
+    it, state = _line(b, plu)
+    now = (it or {}).get("quantity") or 0
+    if now == want:
+        return _line_text(title, it, state)
+    why = f"Перекрёсток отказал: {refused}" if refused else "Перекрёсток не подтвердил изменение"
+    return f"⚠️ в корзине {now} шт., а не {want}: {title} — {why}"
 
 
 def remove_from_cart(id_or_url):

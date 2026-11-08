@@ -304,9 +304,10 @@ WATER = {"id": "u2", "quantity": 1, "price": 4990}
 
 class Cart:
     """The site's cart behind the fake page: the «cart» endpoint answers what it holds, SET_JS (the site's own cart sync)
-    sets one product's quantity unless the site refuses. `args` are the cart query's own arguments the page keeps."""
-    def __init__(self, qty=0, card=CARD, args=None, refuses=False):
-        self.qty, self.card, self.args, self.refuses = qty, card, args, refuses
+    sets one product's quantity unless the site refuses, up to the stock if it has one. `args` are the cart query's own
+    arguments the page keeps."""
+    def __init__(self, qty=0, card=CARD, args=None, refuses=False, stock=None):
+        self.qty, self.card, self.args, self.refuses, self.stock = qty, card, args, refuses, stock
         self.calls, self.sent = [], []
         self.tab = MagicMock()
         self.tab.js.side_effect = self.js
@@ -318,7 +319,7 @@ class Cart:
         pid, qty = json.loads("[" + expr[len(samokat.SET_JS) + 1:-1] + "]")
         self.sent.append((pid, qty))
         if not self.refuses:
-            self.qty = qty
+            self.qty = qty if self.stock is None else min(qty, self.stock)
         return True
 
     def call(self, tab, name, args):
@@ -390,6 +391,40 @@ class SamokatRemoveFromCartTests(unittest.TestCase):
     def test_the_site_refuses(self):
         got, sent, _ = change(samokat.remove_from_cart, Cart(qty=2, refuses=True), UUID)
         self.assertEqual((got, sent), (f"не удалось убрать «{UUID}» из корзины Самоката", [(UUID, 0)]))
+
+
+class SamokatSetCartQuantityTests(unittest.TestCase):
+    def test_the_line_gets_the_count(self):
+        cases = {"fewer": (Cart(qty=3), 1, [(UUID, 1)], f"в корзине Самоката: {KEFIR} — 1 шт"),
+                 "more": (Cart(qty=1), 4, [(UUID, 4)], f"в корзине Самоката: {KEFIR} — 4 шт"),
+                 "the same count is not sent": (Cart(qty=2), 2, [], f"в корзине Самоката: {KEFIR} — 2 шт"),
+                 "the stock is short": (Cart(qty=1, stock=3), 5, [(UUID, 5)],
+                                        f"⚠️ в корзине 3 шт., а не 5: {KEFIR} — Самокат не подтвердил изменение (нет столько на складе?)"),
+                 "the site refuses": (Cart(qty=2, refuses=True), 1, [(UUID, 1)],
+                                      f"⚠️ в корзине 2 шт., а не 1: {KEFIR} — Самокат не подтвердил изменение (нет столько на складе?)")}
+        for case, (cart, quantity, want_sent, want) in cases.items():
+            with self.subTest(case):
+                got, sent, calls = change(samokat.set_cart_quantity, cart, "kefir-2-5-930-g", quantity)
+                self.assertEqual((got, sent), (want, want_sent))
+                self.assertEqual(calls, [LOOKUP, CART] + [CART] * len(want_sent))
+
+    def test_zero_removes_the_line(self):
+        got, sent, _ = change(samokat.set_cart_quantity, Cart(qty=3), "kefir-2-5-930-g", 0)
+        self.assertEqual((got, sent), (f"убрано из корзины Самоката: {KEFIR}", [(UUID, 0)]))
+
+    def test_not_in_the_cart(self):
+        for cart in (Cart(), Cart(card=None)):
+            with self.subTest(card=cart.card):
+                got, sent, _ = change(samokat.set_cart_quantity, cart, "kefir-2-5-930-g", 2)
+                self.assertEqual(sent, [])
+                self.assertTrue(got.endswith("» в корзине Самоката нет"), got)
+
+    def test_less_than_nothing_and_blocked(self):
+        with patch.object(samokat, "_tab") as tab:
+            self.assertEqual(samokat.set_cart_quantity(UUID, -1), "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)")
+        tab.assert_not_called()
+        with patch.object(samokat, "_tab", return_value=None):
+            self.assertEqual(samokat.set_cart_quantity(UUID, 2), samokat.BLOCKED)
 
 
 class SamokatCartTests(unittest.TestCase):
