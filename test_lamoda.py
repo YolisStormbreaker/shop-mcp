@@ -1,4 +1,4 @@
-"""Lamoda: the page state (window.__NUXT__, in the shape the site has used since 2026-10), the reviews and cart APIs -> the tools' text.
+"""Lamoda: the page state (window.__NUXT__, in the shape the site has used since 2026-11), the reviews and cart APIs -> the tools' text.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_lamoda"""
 import json
 import unittest
@@ -7,26 +7,26 @@ from unittest.mock import MagicMock, call, patch
 import lamoda
 
 
-def product(sku, title, prices, sizes, ad=False, rating=4.9, reviews=563):
-    p = {"sku": sku, "title": title, "brand": {"title": "Omsa"}, "seo_tail": "clothes-omsa-noski", "prices": prices,
-         "average_rating": rating, "counters": {"reviews": reviews},
-         "sizes": [{"brand_title": t, "stock_quantity": n} for t, n in sizes]}
+def product(sku, name, prices, sizes, ad=False, rating=98.0, reviews=563):
+    """A search result as the page has it since 2026-11: the product itself, not wrapped; its rating out of 100."""
+    p = {"sku": sku, "name": name, "type": "Clothes", "brand": {"name": "Omsa"}, "seo_tail": "clothes-omsa-noski", "prices": prices,
+         "rating": {"average_rating": rating, "reviews_count": reviews},
+         "sizes": [{"brand_size": t, "stock_quantity": n} for t, n in sizes]}
     if ad:
         p["ad_params"] = "token"
-    return {"type": "product", "product": p, "rating": {"is_show": True}}
+    return p
 
 
 STATE = {
     "pagination": {"page": 1, "pages": 226, "found": 13523},
     "products": [
         product("MP002XM01L0O", "Носки 5 пар",
-                {"action": {"discount": {"active_to": "2026-10-29T23:59:59.000+03:00", "percent": 30}, "price": "728"},
-                 "original": {"price": "1 040"}},
+                [{"price": "1 040"}, {"discount": {"active_to": "2026-10-29T23:59:59.000+03:00", "percent": 30, "type": "onsite_promo"}, "price": "728"}],
                 [("39/41", 233), ("42/44", 0), ("45/47", 289)]),
         {"type": "ads_row_banner", "banner": {"title": "Скидки"}},
-        product("RTLADB123456", "Носки 3 пары", {"onsite": {"discount": {"percent": 15}, "price": "660"}, "original": {"price": "777"}},
+        product("RTLADB123456", "Носки 3 пары", [{"price": "777"}, {"discount": {"percent": 15, "type": "onsite"}, "price": "660"}],
                 [("38", 4)], ad=True, rating=None, reviews=0),
-        product("RTLADB654321", "Носки", {"original": {"price": "1 227"}}, [("40", 0)]),
+        product("RTLADB654321", "Носки", [{"price": "1 227"}], [("40", 0)]),
     ],
 }
 
@@ -72,7 +72,7 @@ class LamodaSearchTests(unittest.TestCase):
                           "(пусто)"])
 
     def test_bare_product(self):
-        state = {"pagination": {}, "products": [{"type": "product", "product": {"sku": "AB123"}}]}
+        state = {"pagination": {}, "products": [{"sku": "AB123"}]}
         self.assertEqual(self.search(state)[3], "1\tAB123\t0\t\t\t\t\t\t\t\t\t/p/ab123//")
 
     def test_blocked_page_is_saved(self):

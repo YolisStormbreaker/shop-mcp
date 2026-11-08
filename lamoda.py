@@ -50,7 +50,7 @@ def _search_url(query, price_min, price_max, sort, page):
 
 
 def _search_table(r, url, limit):
-    products = [x["product"] for x in r["products"] if x.get("type") == "product"]   # the rest are ad banners
+    products = [x for x in r["products"] if x.get("sku")]   # the rest are ad banners
     rows = [_search_row(i + 1, p) for i, p in enumerate(products[:limit])]
     pg = r["pagination"]
     head = (f"Lamoda · {pg.get('found', len(products))} найдено · страница {pg.get('page') or 1} из {pg.get('pages') or 1} · {url}\n"
@@ -66,19 +66,20 @@ def _rub(price):
 
 def _offers(prices):
     """(the final price, the highest, when the final one ends) from {"original": {"price": "1 040"},
-    "action": {"price": "728", "discount": {"active_to": …}}, …}"""
-    offers = [x for x in (prices or {}).values() if _rub(x)]
+    "action": {"price": "728", "discount": {"active_to": …}}, …} on the card, the same offers as a list in search"""
+    offers = [x for x in (prices.values() if isinstance(prices, dict) else prices or []) if _rub(x)]
     final = min(offers, key=_rub, default={})
     return _rub(final), max(map(_rub, offers), default=0), ((final.get("discount") or {}).get("active_to") or "")[:10]
 
 
 def _search_row(n, p):
     price, base, until = _offers(p.get("prices"))
-    sizes = " ".join(s["brand_title"] for s in p.get("sizes") or [] if s.get("stock_quantity"))
+    sizes = " ".join(s["brand_size"] for s in p.get("sizes") or [] if s.get("stock_quantity"))
+    rating = p.get("rating") or {}     # out of 100 here, out of 5 on the card: 97.03 is the card's 4.9
     return "\t".join(map(str, [
         n, p["sku"], price, base if base > price else "", until,
-        (p.get("brand") or {}).get("title", ""), p.get("title", ""), f"{p['average_rating']:.1f}" if p.get("average_rating") else "",
-        (p.get("counters") or {}).get("reviews") or "", sizes, "реклама" if p.get("ad_params") else "",
+        (p.get("brand") or {}).get("name", ""), p.get("name", ""), f"{rating['average_rating'] / 20:.1f}" if rating.get("average_rating") else "",
+        rating.get("reviews_count") or "", sizes, "реклама" if p.get("ad_params") else "",
         f"/p/{p['sku'].lower()}/{p.get('seo_tail', '')}/"]))
 
 
