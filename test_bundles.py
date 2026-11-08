@@ -30,7 +30,8 @@ class BundleTests(unittest.TestCase):
         d = tempfile.TemporaryDirectory()
         self.addCleanup(d.cleanup)
         self.tab = fake_tab()
-        for p in (patch.object(bundles, "CACHE", Path(d.name)), patch.object(bundles.cdp, "tab_for", return_value=self.tab)):
+        for p in (patch.object(bundles, "CACHE", Path(d.name) / "cache" / "bundles"),       # not there yet, as on a fresh copy
+                  patch.object(bundles.cdp, "tab_for", return_value=self.tab)):
             p.start()
             self.addCleanup(p.stop)
         self.pace = patch.object(bundles, "pace").start()
@@ -64,6 +65,7 @@ class BundleTests(unittest.TestCase):
     def test_search_shows_each_hit_in_its_context(self):
         hits = bundles.search(SCRIPTS, r"/amount", context=12)
         self.assertEqual(hits, [("https://www.perekrestok.ru/a.js", '".concat(t,"/amount"),{amount:r')])   # 12 on each side
+        self.assertEqual(bundles.search({"c.js": "amount=1;rest"}, "amount", context=3), [("c.js", "amount=1;")])   # from the start
 
     def run_cli(self, *argv):
         with patch("builtins.print") as out:
@@ -73,7 +75,7 @@ class BundleTests(unittest.TestCase):
     def test_the_command(self):
         code, said = self.run_cli("perekrestok", PAGE, "amount", "8")
         self.assertEqual(code, 0)
-        self.assertEqual(said[0], "скриптов: 2, совпадений: 2")
+        self.assertEqual(said, ["скриптов: 2, совпадений: 2", '- a.js: cat(t,"/amount"),{amou', '- a.js: ount"),{amount:r});y'])
 
     def test_the_command_says_why_the_budget_refused(self):
         self.pace.acquire.side_effect = pace.Refused("⏸ Перекрёсток: блокировка по IP")

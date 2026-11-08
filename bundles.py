@@ -57,7 +57,7 @@ def main(argv):
     hits = search(texts, regex, int(ctx[0]) if ctx else 160)
     print(f"скриптов: {len(texts)}, совпадений: {len(hits)}")
     for name, snippet in hits[:40]:
-        print(f"- {name.rsplit('/', 1)[-1][:50]}: {' '.join(snippet.split())}")
+        print(f"- {name.split('/')[-1][:50]}: {' '.join(snippet.split())}")
     return 0
 
 
