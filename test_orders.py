@@ -26,10 +26,11 @@ class CacheInTempDir(unittest.TestCase):
         self.file = Path(tmp.name) / "cache" / "orders.json"
         self.log, self.sleep = MagicMock(), MagicMock()
         for p in (patch.object(orders, "CACHE", self.file), patch.object(orders, "log", self.log),
-                  patch.object(orders.time, "time", return_value=NOW), patch.object(orders.time, "sleep", self.sleep),
-                  patch.object(ali, "_last_call", NOW - 1.0)):          # the last request to Ali a second ago
+                  patch.object(orders.time, "time", return_value=NOW), patch.object(orders.time, "sleep", self.sleep)):
             p.start()
             self.addCleanup(p.stop)
+        self.pace = patch.object(orders, "pace").start()
+        self.addCleanup(patch.stopall)
 
     def seed(self, entries):
         self.file.parent.mkdir()
@@ -311,8 +312,7 @@ class AliOrdersTests(CacheInTempDir):
         self.assertEqual(out, "\n".join(["AliExpress: заказы — найдено 4, просмотрено заказов 4", HEAD] + ALI_ROWS))
         self.assertEqual(pages, [("active", 1), ("active", 2), ("archive", 1)])
         self.assertEqual(read, [B1, B2, B3, B4])
-        self.assertEqual(self.sleep.call_args_list, [call(0.5)] + [call(1.5)] * 3)     # 1.5 s between requests
-        self.assertEqual(ali._last_call, NOW)
+        self.assertEqual(self.pace.acquire.call_args_list, [call("ali")] * 4)          # one slot per order read
         self.log.info.assert_called_once_with("ali_orders %r: %d found, %d scanned, %d fetched", None, 4, 4, 4)
         c = self.cached()
         self.assertEqual(c["ali:live"], {"at": NOW, "active": [[B1, "Ожидает получения", "1 234,56 ₽", ["1005001"]],

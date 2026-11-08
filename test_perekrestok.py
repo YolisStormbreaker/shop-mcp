@@ -227,7 +227,7 @@ def api_tab(*replies, found=True, path="/"):
 
 class CallTests(unittest.TestCase):
     def setUp(self):
-        for p in (patch.object(pk.time, "sleep"), patch.object(pk, "log")):
+        for p in (patch.object(pk.time, "sleep"), patch.object(pk, "log"), patch.object(pk, "pace")):
             setattr(self, p.attribute, p.start())
             self.addCleanup(p.stop)
 
@@ -240,10 +240,10 @@ class CallTests(unittest.TestCase):
         self.assertTrue(tab.js.call_args.args[0].startswith('window.__shopApi.post("/catalog/product/feed", {"page": 1}).then('))
         tab.goto.assert_not_called()
 
-    def test_calls_are_spaced(self):
-        pk._last = pk.time.time()
+    def test_every_call_takes_a_slot_of_the_shared_budget(self):
         self.call(api_tab("null"), "get", "/basket")
-        self.assertGreater(self.sleep.call_args.args[0], 1)
+        self.pace.acquire.assert_called_once_with("perekrestok")
+        self.pace.blocked.assert_not_called()
 
     def test_no_answer(self):
         tab = api_tab("")
@@ -267,6 +267,7 @@ class CallTests(unittest.TestCase):
         self.assertEqual(self.call(tab, "get", "/basket"), {"__error": 403})
         self.assertEqual(self.log.warning.call_args.args[-1], " again after reload")
         tab.goto.assert_called_once()
+        self.pace.blocked.assert_called_once_with("perekrestok", "throttle", "HTTP 403 и после обновления страницы")
 
     def test_renewal_shows_the_bot_check(self):
         with self.assertRaisesRegex(RuntimeError, "ServicePipe"):

@@ -21,6 +21,7 @@ from pathlib import Path
 
 import ali
 import ozon
+import pace
 import textsearch
 from shoplog import log
 
@@ -234,10 +235,7 @@ ALI_DETAIL_JS = """fetch(%s, {credentials: "include"}).then(r => r.text()).then(
 
 
 def _ali_detail(tab, oid):
-    gap = 1.5 - (time.time() - ali._last_call)
-    if gap > 0:
-        time.sleep(gap)
-    ali._last_call = time.time()                # the same pacing as ali._fetch
+    pace.acquire("ali")                         # the same budget as ali._fetch
     return tab.js(ALI_DETAIL_JS % json.dumps(f"/order-list/{oid}"), timeout=60)
 
 

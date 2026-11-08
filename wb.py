@@ -12,6 +12,7 @@ import time
 import urllib.parse
 import urllib.request
 
+import pace
 from capture import capture
 from cdp import tab_for
 from shoplog import log
@@ -101,6 +102,7 @@ def _nm(id_or_url):
 
 def _get(url):
     """Public WB JSON (CDN, feedbacks): no token needed. Feedbacks come gzipped even unasked."""
+    pace.acquire("wb")                       # the same IP as the site's tab
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 Chrome/154", "Accept-Encoding": "gzip"})
     with urllib.request.urlopen(req, timeout=20) as r:
         b = r.read()

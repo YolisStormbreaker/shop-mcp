@@ -4,6 +4,7 @@ import re
 import time
 import urllib.parse
 
+import pace
 from cdp import tab_for
 from shoplog import dump, log
 
@@ -105,7 +106,10 @@ def _shipping(tab, paths):
 
     Shorter than paths if Avito started its security check: the rest were not asked.
     """
-    return tab.js(f"{SHIP_JS}({json.dumps(paths)})", timeout=15 + 4 * len(paths)) if paths else []
+    if not paths:
+        return []
+    pace.acquire("avito", cost=len(paths))   # one request per item, spaced inside the page
+    return tab.js(f"{SHIP_JS}({json.dumps(paths)})", timeout=15 + 4 * len(paths))
 
 
 def _ship_cell(s):
@@ -144,6 +148,7 @@ def search(query, region="sankt-peterburg", price_min=None, price_max=None,
         if r["blocked"]:
             saved = dump("avito", "block", tab.js("document.documentElement.outerHTML"))
             log.warning("avito search %s: block or captcha, page %s", r["url"], saved)
+            pace.blocked("avito", "check", "проверка Авито на странице поиска")
         items = r["items"][:limit]
         ship = [None] * len(items)
         note = ""
@@ -154,6 +159,7 @@ def search(query, region="sankt-peterburg", price_min=None, price_max=None,
                 ship[i] = s
             if got and (got[-1] or {}).get("blocked"):
                 log.warning("avito shipping: 439 after %d of %d items, search %s", len(got) - 1, len(idx), r["url"])
+                pace.blocked("avito", "throttle", "HTTP 439 «Доступ ограничен» на запросах доставки")
                 note = "\n⚠️ Авито включил проверку безопасности — цену доставки узнали не для всех; подождать 10–30 минут."
             elif len([x for x in items if x["delivery"] and x["url"]]) > len(idx):   # the ones we would look up
                 note = f"\nцена доставки — только у первых {len(idx)} объявлений с доставкой (shipping={shipping})"
@@ -202,6 +208,7 @@ def item(url, full=False):
         if not r["title"]:
             saved = dump("avito", "item", tab.js("document.documentElement.outerHTML"))
             log.warning("avito item %s: no title, page %s", url, saved)
+        pace.acquire("avito")
         r["ship"] = (tab.js(f"{SHIP_JS}([location.pathname])") or [None])[0]
         if not r["address"]:
             if tab.visible():

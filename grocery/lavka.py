@@ -11,6 +11,7 @@ import re
 import time
 import urllib.parse
 
+import pace
 from cdp import site_tab
 from shoplog import log
 
@@ -43,11 +44,13 @@ def _tab():
 
 
 def _post(tab, path, body, depot="regular"):
+    pace.acquire("lavka")
     d = tab.js(f"{POST_JS}({json.dumps(path)}, {json.dumps(body)}, {json.dumps(depot)})")
     if isinstance(d, dict) and "__error" in d:
         log.warning("lavka %s: %s", path, d["__error"])
         if d["__error"] in (401, 403, "no page state"):   # stale CSRF token or a captcha page: reload once
             tab.goto(SITE + "/", "lavka", wait_js="!!window.storeDehydratedState && !!window.__PAGE_PROPS__")
+            pace.acquire("lavka")
             d = tab.js(f"{POST_JS}({json.dumps(path)}, {json.dumps(body)}, {json.dumps(depot)})")
     return None if not isinstance(d, dict) or "__error" in d else d
 

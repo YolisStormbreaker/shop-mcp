@@ -10,6 +10,7 @@ import re
 import time
 import urllib.parse
 
+import pace
 from cdp import tab_for
 from shoplog import log
 
@@ -45,15 +46,8 @@ def _tab():
     return tab
 
 
-_last = 0.0
-
-
 def _get(tab, url, retried=False):
-    global _last
-    wait = 0.7 - (time.time() - _last)            # same ServicePipe as Перекрёсток: no bursts
-    if wait > 0:
-        time.sleep(wait)
-    _last = time.time()
+    pace.acquire("5ka")
     r = tab.js(f"fetch({json.dumps(url)}, {{credentials: 'include'}}).then(async r => ({{s: r.status, b: await r.text()}}))"
                ".catch(e => ({s: 0, b: String(e)}))")
     try:

@@ -266,10 +266,10 @@ class TabTests(unittest.TestCase):
 
 
 class GetTests(unittest.TestCase):
-    def get(self, *answers, last=0.0):
+    def get(self, *answers):
         tab = MagicMock()
         tab.js.side_effect = list(answers)
-        with patch.object(pyaterochka, "_last", last), patch.object(pyaterochka.time, "sleep") as sleep, \
+        with patch.object(pyaterochka, "pace") as self.pace, patch.object(pyaterochka.time, "sleep") as sleep, \
                 patch.object(pyaterochka, "log") as log:
             got = pyaterochka._get(tab, "https://5d.5ka.ru/api/x")
         return got, tab, sleep, log
@@ -282,9 +282,9 @@ class GetTests(unittest.TestCase):
         tab.goto.assert_not_called()
         log.warning.assert_not_called()
 
-    def test_requests_are_spaced(self):
-        _, _, sleep, _ = self.get({"s": 200, "b": "[]"}, last=time.time())
-        self.assertGreater(sleep.call_args.args[0], 0.5)
+    def test_every_request_takes_a_slot_of_the_shared_budget(self):
+        self.get({"s": 200, "b": "[]"})
+        self.pace.acquire.assert_called_once_with("5ka")
 
     def test_waf_page_renews_the_cookies_once(self):
         got, tab, _, log = self.get({"s": 403, "b": "<html>"}, {"s": 200, "b": "[1]"})

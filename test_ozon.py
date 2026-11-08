@@ -14,10 +14,10 @@ def answer(body, status=200):
 
 
 class FetchTests(unittest.TestCase):
-    def fetch(self, *answers, last_call=0.0):
+    def fetch(self, *answers):
         tab = MagicMock()
         tab.js.side_effect = list(answers)
-        with patch.object(ozon, "_last_call", last_call), patch.object(ozon.time, "sleep") as sleep, \
+        with patch.object(ozon, "pace") as self.pace, patch.object(ozon.time, "sleep") as sleep, \
                 patch.object(ozon, "dump", return_value="logs/bodies/x.html"), \
                 patch.object(ozon, "log") as log:
             try:
@@ -33,15 +33,14 @@ class FetchTests(unittest.TestCase):
                          '{"method": "GET", "credentials": "include"}).then(async r => ({s: r.status, b: await r.text()}))')
         sleep.assert_not_called()
 
-    def test_waits_out_the_gap_since_the_last_call(self):
-        _, _, sleep, _ = self.fetch(answer({}), last_call=time.time())
-        self.assertGreater(sleep.call_args.args[0], 1.0)
-        self.assertLessEqual(sleep.call_args.args[0], 1.5)
+    def test_every_fetch_takes_a_slot_of_the_shared_budget(self):
+        self.fetch(answer("<html>antibot</html>", 403), answer({}))
+        self.assertEqual(self.pace.acquire.call_args_list, [unittest.mock.call("ozon")] * 2)
 
     def test_post_sends_json_body(self):
         tab = MagicMock()
         tab.js.return_value = answer({"ok": 1})
-        with patch.object(ozon, "_last_call", 0.0), patch.object(ozon.time, "sleep"):
+        with patch.object(ozon, "pace"), patch.object(ozon.time, "sleep"):
             self.assertEqual(ozon._fetch(tab, "/api/x", "POST", {"pageType": "pdp"}), {"ok": 1})
         self.assertIn('{"method": "POST", "credentials": "include", "headers": {"Content-Type": "application/json"}, '
                       '"body": "{\\"pageType\\": \\"pdp\\"}"}', tab.js.call_args.args[0])
@@ -60,6 +59,7 @@ class FetchTests(unittest.TestCase):
                                    "(вероятно, проверка на бота: shop-chrome show). Ответ целиком: logs/bodies/x.html")
         self.assertEqual(tab.goto.call_count, 1)
         log.error.assert_called_once()
+        self.pace.blocked.assert_called_once_with("ozon", "check", "ответ 403 не JSON и после перезагрузки вкладки")
 
 
 def page(widgets=None, next_page=None):

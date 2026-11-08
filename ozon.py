@@ -8,13 +8,13 @@ import re
 import time
 import urllib.parse
 
+import pace
 import textsearch
 from cdp import site_tab
 from shoplog import dump, log
 
 SORTS = ("score", "new", "price", "price_desc", "rating", "discount")
 API = "/api/entrypoint-api.bx/page/json/v2?url="
-_last_call = 0.0
 DATE_RE = re.compile(r"Сегодня|Завтра|Послезавтра|\d+\s+(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)|\d+\s*(?:час|дн)", re.I)
 
 
@@ -23,11 +23,7 @@ def _tab():
 
 
 def _fetch(tab, path, method="GET", body=None, retried=False):
-    global _last_call
-    gap = 1.5 - (time.time() - _last_call)
-    if gap > 0:
-        time.sleep(gap)
-    _last_call = time.time()
+    pace.acquire("ozon")
     opts = {"method": method, "credentials": "include"}
     if body is not None:
         opts["headers"] = {"Content-Type": "application/json"}
@@ -40,6 +36,7 @@ def _fetch(tab, path, method="GET", body=None, retried=False):
     saved = dump("ozon", r["s"], r["b"])
     if retried:
         log.error("ozon %s %s: %s again after reload, body %s", method, path[:150], r["s"], saved)
+        pace.blocked("ozon", "check", f"ответ {r['s']} не JSON и после перезагрузки вкладки")
         raise RuntimeError(f"Ozon ответил {r['s']} не-JSON и после перезагрузки вкладки "
                            f"(вероятно, проверка на бота: shop-chrome show). Ответ целиком: {saved}")
     # A tab left idle for hours loses its anti-bot cookie; fetch() cannot pass the JS check,

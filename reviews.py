@@ -12,6 +12,7 @@ import re
 
 import ali
 import ozon
+import pace
 
 OZON_TEXT_MAX = 3000        # textAreaCell.maxLength of the form
 ALI_TEXT_MAX = 10000        # create-review-config text.limit
@@ -100,6 +101,7 @@ def ozon_review(sku_or_url, rating, text, anonymous=False, accept_conditions=Fal
 def _ali_first_page(tab):
     """The first page of the list comes only inside the server-rendered «Мои отзывы» page,
     as props of the RedWaitingForReview widget; the API serves the pages after it."""
+    pace.acquire("ali")
     h = tab.js("fetch('https://feedback.aliexpress.ru/management/feedbackBuyerList.htm', "
                "{credentials: 'include'}).then(r => r.text())", timeout=60) or ""
     i = h.find("RedWaitingForReview")

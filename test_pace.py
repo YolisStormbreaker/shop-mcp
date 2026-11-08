@@ -29,7 +29,7 @@ class PaceTest(unittest.TestCase):
         d = tempfile.TemporaryDirectory()
         self.addCleanup(d.cleanup)
         self.clock = Clock()
-        for p in (patch.object(pace, "DB", Path(d.name) / "pace.sqlite"), patch.object(pace, "_now", self.clock.now),
+        for p in (patch.object(pace, "OFF", False), patch.object(pace, "DB", Path(d.name) / "pace.sqlite"), patch.object(pace, "_now", self.clock.now),
                   patch.object(pace, "_sleep", self.clock.sleep)):
             p.start()
             self.addCleanup(p.stop)
@@ -86,6 +86,13 @@ class SlotTests(PaceTest):
             with self.assertRaises(pace.Refused):
                 pace.acquire("avito", cost=2)
             pace.acquire("avito")
+
+    def test_a_batch_larger_than_a_window_is_refused_even_on_a_quiet_site(self):
+        with self.assertRaises(pace.Refused) as e:
+            pace.acquire("avito", cost=17)
+        self.assertEqual(str(e.exception), "⏸ Авито: 17 запросов за раз больше предела 16 за 1 мин. Уменьши пакет "
+                                           "(у avito_search — shipping) и не повторяй его таким.")
+        pace.acquire("avito", cost=16)                       # a search with its 15 delivery look-ups fits a quiet minute
 
     def test_old_requests_are_forgotten(self):
         self.burst("ozon", 3)

@@ -11,6 +11,7 @@ import re
 import time
 import urllib.parse
 
+import pace
 from cdp import tab_for
 from shoplog import log
 
@@ -64,9 +65,7 @@ def _checked(tab):
     return "/xpvnsulc/" in (tab.js("location.pathname") or "")
 
 
-_last = 0.0
 _cache: dict = {}            # (method, path, body) → (time, data) for slow-changing reads: delivery terms, search facets
-GAP = 1.5                    # s between calls: a burst of ~30 in a few seconds brought ServicePipe's bot check (2026-10-13)
 
 
 def _cached(tab, method, path, body=None, ttl=600):
@@ -83,16 +82,14 @@ def _cached(tab, method, path, body=None, ttl=600):
 def _call(tab, method, path, body=None, retried=False):
     """The site's client: method get/post/put/delete. Only response data comes back, never the request config.
     401/403: the page's session or anti-bot cookie went stale (2026-10-13, after an hour of calls) — a reload renews it."""
-    global _last
-    wait = GAP - (time.time() - _last)
-    if wait > 0:
-        time.sleep(wait)
-    _last = time.time()
+    pace.acquire("perekrestok")
     d = _request(tab, method, path, body)
     if _failed(d):
         log.warning("perekrestok %s %s: %s%s", method, path[:120], d["__error"], " again after reload" if retried else "")
         if d["__error"] in (401, 403) and not retried and _renew(tab):
             return _call(tab, method, path, body, True)
+        if d["__error"] in (401, 403) and retried:
+            pace.blocked("perekrestok", "throttle", f"HTTP {d['__error']} и после обновления страницы")
     return d
 
 

@@ -14,10 +14,10 @@ def answer(body, status=200):
 
 
 class FetchTests(unittest.TestCase):
-    def fetch(self, *answers, last_call=0.0, call=lambda tab: ali._fetch(tab, "/aer-webapi/v1/search", {"page": 1})):
+    def fetch(self, *answers, call=lambda tab: ali._fetch(tab, "/aer-webapi/v1/search", {"page": 1})):
         tab = MagicMock()
         tab.js.side_effect = list(answers)
-        with patch.object(ali, "_last_call", last_call), patch.object(ali.time, "sleep") as sleep, \
+        with patch.object(ali, "pace") as self.pace, patch.object(ali.time, "sleep") as sleep, \
                 patch.object(ali, "dump", return_value="logs/bodies/x.html"), \
                 patch.object(ali, "log") as log:
             try:
@@ -42,16 +42,16 @@ class FetchTests(unittest.TestCase):
                       '{"method": "GET", "credentials": "include", "headers": {"Content-Type": "application/json"}})',
                       tab.js.call_args.args[0])
 
-    def test_waits_out_the_gap_since_the_last_call(self):
-        _, _, sleep, _ = self.fetch(answer({}), last_call=time.time())
-        self.assertGreater(sleep.call_args.args[0], 1.0)
-        self.assertLessEqual(sleep.call_args.args[0], 1.5)
+    def test_every_fetch_takes_a_slot_of_the_shared_budget(self):
+        self.fetch(answer({}))
+        self.pace.acquire.assert_called_once_with("ali")
 
     def test_slider_check_holding_the_request(self):
         got, tab, _, _ = self.fetch(None, True)
         self.assertEqual(str(got), "⚠️ AliExpress показал проверку на бота (слайдер) и держит запросы: shop-chrome show, "
                                    "пройти её во вкладке aliexpress.ru, shop-chrome hide")
         self.assertEqual(tab.js.call_args.args[0], "!!document.querySelector('.baxia-dialog-content')")
+        self.pace.blocked.assert_called_once_with("ali", "check", "слайдер AliExpress держит запросы")
 
     def test_no_answer_in_25_seconds(self):
         got, _, _, _ = self.fetch(None, False)

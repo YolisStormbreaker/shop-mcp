@@ -253,15 +253,13 @@ class VkusvillApiTests(unittest.TestCase):
     def test_api_error(self):
         self.assertEqual(self.call(answer(error="нет товара"))[0], "ВкусВилл API: нет товара")
 
-    def test_rate_limit_waits_and_retries_once(self):
-        got, urlopen, sleep = self.call(http(429, {"X-RateLimit-Reset": "120"}), answer({"id": 3}))
-        self.assertEqual((got, urlopen.call_count), ({"id": 3}, 2))
-        sleep.assert_called_once_with(60)
-
-    def test_rate_limit_twice(self):
-        got, urlopen, sleep = self.call(http(429), http(429))
-        self.assertEqual((got, urlopen.call_count), ("ВкусВилл API: HTTP 429", 2))
-        sleep.assert_called_once_with(20)
+    def test_a_rate_limit_stops_the_site_instead_of_retrying_into_it(self):
+        with patch.object(vkusvill, "pace") as pace:
+            pace.blocked.return_value = RuntimeError("⏸ стоп")
+            got, urlopen, sleep = self.call(http(429, {"X-RateLimit-Reset": "120"}), answer({"id": 3}))
+        self.assertEqual((got, urlopen.call_count), ("⏸ стоп", 1))
+        pace.blocked.assert_called_once_with("vkusvill", "throttle", "HTTP 429 от API ВкусВилла (просит паузу 120 с)")
+        sleep.assert_not_called()
 
     def test_server_error(self):
         got, urlopen, sleep = self.call(http(500))

@@ -7,12 +7,12 @@ import json
 import re
 import time
 
+import pace
 import textsearch
 from cdp import site_tab
 from shoplog import dump, log
 
 SORTS = {"default": "", "orders": "total_tranpro_desc", "price": "price_asc", "price_desc": "price_desc"}
-_last_call = 0.0
 
 
 def _tab():
@@ -20,11 +20,7 @@ def _tab():
 
 
 def _fetch(tab, path, body=None, method="POST", retried=False):
-    global _last_call
-    gap = 1.5 - (time.time() - _last_call)
-    if gap > 0:
-        time.sleep(gap)
-    _last_call = time.time()
+    pace.acquire("ali")
     opts = {"method": method, "credentials": "include", "headers": {"Content-Type": "application/json"}}
     if body is not None:
         opts["body"] = json.dumps(body)
@@ -34,6 +30,7 @@ def _fetch(tab, path, body=None, method="POST", retried=False):
                " new Promise(res => setTimeout(() => res(null), 25000))])", timeout=40)
     if r is None:
         if tab.js("!!document.querySelector('.baxia-dialog-content')"):
+            pace.blocked("ali", "check", "слайдер AliExpress держит запросы")
             raise RuntimeError("⚠️ AliExpress показал проверку на бота (слайдер) и держит запросы: shop-chrome show, "
                                "пройти её во вкладке aliexpress.ru, shop-chrome hide")
         raise RuntimeError(f"AliExpress не ответил за 25 с на {path}")
@@ -44,6 +41,7 @@ def _fetch(tab, path, body=None, method="POST", retried=False):
     saved = dump("ali", r["s"], r["b"])
     if retried:
         log.error("ali %s %s: %s again after reload, body %s", method, path, r["s"], saved)
+        pace.blocked("ali", "check", f"ответ {r['s']} не JSON и после перезагрузки вкладки")
         raise RuntimeError(f"AliExpress ответил {r['s']} не-JSON и после перезагрузки вкладки "
                            f"(вероятно, проверка на бота: shop-chrome show). Ответ целиком: {saved}")
     # Same idea as Ozon: a real page load renews anti-bot cookies that fetch() cannot.

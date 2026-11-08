@@ -14,11 +14,16 @@ The numbers below are cautious guesses from the incidents named next to them, no
 records how many requests the site had in the last 1/10/60 min (blocks.n1/n10/n60) — set the caps from those.
 """
 import sqlite3
+import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-DB = Path(__file__).parent / "cache" / "pace.sqlite"
+# `python -m unittest` (and coverage's and mutator's runs of it) drives fakes, not the shops: there nothing is paced or
+# recorded and the real ledger is never opened. test_pace turns pacing back on with its own database and clock.
+OFF = sys.argv[0].endswith("-m unittest")      # what unittest's own __main__ sets it to
+DB = Path(tempfile.gettempdir()) / "shop-pace-test.sqlite" if OFF else Path(__file__).parent / "cache" / "pace.sqlite"
 MAX_WAIT = 20.0      # s a call may sleep for its slot; longer and it is refused (a tool call must answer in time)
 _now, _sleep = time.time, time.sleep
 
@@ -40,8 +45,8 @@ POLICY = {
     "ozon": DEFAULT, "wb": DEFAULT, "lamoda": DEFAULT, "goldapple": DEFAULT, "lenta": DEFAULT, "lavka": DEFAULT,
     "ali": DEFAULT,                  # its slider after a burst of review requests (2026-10-22)
     "ym": Policy(gap={"page": 5.0, "api": 2.0}, caps=((60, 12), (600, 60), (3600, 240)), cool=DEFAULT.cool),   # captcha
-    "avito": Policy(gap={"page": 6.0, "api": 3.0}, caps=((60, 10), (600, 40), (3600, 120)),                   # 439 on bursts,
-                    cool={"check": 1800, "throttle": 1800, "ban": 6 * 3600}),                              # a CGNAT IP
+    "avito": Policy(gap={"page": 6.0, "api": 3.0}, caps=((60, 16), (600, 40), (3600, 120)),   # 439 on bursts, a CGNAT IP;
+                    cool={"check": 1800, "throttle": 1800, "ban": 6 * 3600}),              # a search + its 15 look-ups = 16
     "vkusvill": Policy(gap=DEFAULT.gap, caps=((60, 30), (600, 150), (3600, 600)), cool=DEFAULT.cool),         # its API: 429 at 60/min
     "perekrestok": SERVICEPIPE, "5ka": SERVICEPIPE,
     "samokat": Policy(gap={"page": 20.0, "api": 2.0}, caps=((60, 15), (600, 60), (3600, 200)),               # its check after
@@ -75,6 +80,8 @@ def policy(site):
 
 def acquire(site, kind="api", cost=1):
     """Take the site's next slot and sleep until it comes, or raise Refused (a block on record, or no slot soon)."""
+    if OFF:
+        return
     wait = _reserve(site, kind, cost)
     if wait > 0:
         _sleep(wait)
@@ -100,6 +107,11 @@ def _reserve(site, kind, cost):
         if block:
             db.execute("ROLLBACK")
             raise _refusal(site, block, now)
+        too_big = next(((w, most) for w, most in pol.caps if cost > most), None)
+        if too_big:
+            db.execute("ROLLBACK")
+            raise Refused(f"⏸ {_name(site)}: {cost} запросов за раз больше предела {too_big[1]} за {_window(too_big[0])}. "
+                          "Уменьши пакет (у avito_search — shipping) и не повторяй его таким.")
         rows = db.execute("SELECT t, cost FROM events WHERE site = ? AND t > ? ORDER BY t",
                           (site, now - max(w for w, _ in pol.caps))).fetchall()
         t, cap = _slot(rows, pol, kind, cost, now)
@@ -137,6 +149,8 @@ def _budget_text(site, cap, t, now):
 def blocked(site, kind, detail):
     """Record that the site showed a block of kind (check / throttle / ban): every request to it stops for the kind's
     time, twice that for each block of the last 24 h. The Refused to raise, with the explanation."""
+    if OFF:
+        return Refused(f"⏸ {_name(site)}: {KINDS[kind]} — {detail}")
     now, pol = _now(), policy(site)
     db = _db()
     try:
@@ -183,7 +197,7 @@ def clear(site, ban=False):
 def check_page(site, probe):
     """After a page load: if the page is a block page, record the block and raise its Refused. probe: {url, title,
     text (the start of the body's text), size (the body text's length), slider}, None when the page could not be read."""
-    for where, sign, kind, what in SIGNS if probe else ():
+    for where, sign, kind, what in SIGNS if probe and not OFF else ():
         if _shows(probe, where, sign):
             raise blocked(site, kind, what)
 

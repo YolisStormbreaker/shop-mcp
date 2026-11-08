@@ -13,6 +13,7 @@ import time
 import urllib.parse
 import urllib.request
 
+import pace
 from cdp import site_tab
 from shoplog import log
 
@@ -27,7 +28,8 @@ SORT = {"popular": "popularity", "price": "price_asc", "price_desc": "price_desc
 DEF = {"веган": 5, "без добавленного сахара": 6, "без сахара": 6, "только вкусвилл": 3}
 
 
-def _mcp(tool, args, retried=False):
+def _mcp(tool, args):
+    pace.acquire("vkusvill")
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": args}}).encode()
     # its anti-bot answers 403 to the default «Python-urllib» agent (any other name passes, 2026-10-13)
     req = urllib.request.Request(MCP, data=body, headers={"Content-Type": "application/json", "User-Agent": "shop-mcp/1.0",
@@ -36,9 +38,8 @@ def _mcp(tool, args, retried=False):
         with urllib.request.urlopen(req, timeout=30) as r:
             raw = r.read().decode()
     except urllib.error.HTTPError as e:
-        if e.code == 429 and not retried:            # 60 calls a minute
-            time.sleep(min(int(e.headers.get("X-RateLimit-Reset") or 20), 60))
-            return _mcp(tool, args, True)
+        if e.code == 429:                            # 60 calls a minute: stop everyone instead of retrying into it
+            raise pace.blocked("vkusvill", "throttle", f"HTTP 429 от API ВкусВилла (просит паузу {e.headers.get('X-RateLimit-Reset') or '?'} с)") from e
         raise RuntimeError(f"ВкусВилл API: HTTP {e.code}") from e
     if raw.startswith("event:") or "\ndata:" in raw:    # an SSE answer: take its data line
         raw = next(l[5:] for l in raw.splitlines() if l.startswith("data:"))
@@ -93,6 +94,7 @@ def _site(url):
         log.warning("vkusvill tab: %s", e)
         return None
     try:
+        pace.acquire("vkusvill")
         return tab.js(f"{STOCK_JS}({json.dumps(url)})", timeout=40)
     except Exception as e:
         log.warning("vkusvill site %s: %s", url, e)
@@ -258,6 +260,7 @@ def reviews(id_or_url, sort="useful", with_media=False, page=1, limit=10):
         {"id": pid, "sort": REVIEW_SORTS[sort], "brand": "", "filter": 0, "page": page, "isInited": "N" if page == 1 else "Y"})
     tab = _tab()
     try:
+        pace.acquire("vkusvill")
         d = tab.js(f"{REVIEWS_JS}({json.dumps(url)})", timeout=40) or {}
     finally:
         tab.close()
@@ -280,6 +283,7 @@ CART_JS = r"""(async () => {
 
 
 def _cart(tab):
+    pace.acquire("vkusvill")
     return tab.js(CART_JS, timeout=40) or {"basket": {}}
 
 
@@ -446,6 +450,7 @@ FAV_JS = r"""(async () => {
 def favorites():
     tab = _tab()
     try:
+        pace.acquire("vkusvill")
         items = tab.js(FAV_JS, timeout=40) or []
     finally:
         tab.close()
@@ -459,6 +464,7 @@ def favorite(id_or_url, remove=False):
     pid = _id(id_or_url)
     tab = _tab()
     try:
+        pace.acquire("vkusvill", cost=2)             # the change, then the list read back
         r = tab.js(_favorite_js(pid, remove))
         ids = [x["id"] for x in tab.js(FAV_JS, timeout=40) or []]
     finally:

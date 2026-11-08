@@ -11,6 +11,7 @@ Prices are kopecks, for the user's address (one dark store, «showcase»). No re
 import json
 import re
 
+import pace
 from cdp import tab_for
 from shoplog import log
 
@@ -82,6 +83,7 @@ def _tab():
 
 
 def _call(tab, name, args):
+    pace.acquire("samokat")
     r = tab.js(f"{CALL_JS}({json.dumps(name)}, {json.dumps(args, ensure_ascii=False)})", timeout=40) or {}
     if "__error" in r:
         log.warning("samokat %s: %s", name, r["__error"])
