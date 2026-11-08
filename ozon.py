@@ -360,3 +360,41 @@ def remove_from_cart(sku_or_url):
         return "удалено. " + _cart_text(_fetch(tab, API + "%2Fcart", "POST", body))
     finally:
         tab.close()
+
+
+def set_cart_quantity(sku_or_url, quantity):
+    """quantity pieces of the line in the cart, by the request of the cart's own quantity control; 0 removes the line."""
+    if int(quantity) < 0:
+        return "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
+    if not int(quantity):
+        return remove_from_cart(sku_or_url)
+    sku = _sku(sku_or_url)
+    tab = _tab()
+    try:
+        page = _page(tab, "/cart")
+        control = _quantity_control(page, sku)
+        if control is None:
+            return "такого sku в корзине нет\n" + _cart_text(page)
+        to = min(int(quantity), control.get("maximum") or int(quantity))
+        if to != control.get("current"):
+            body = {"name": "changeItemQuantity", "params": json.dumps({"item": sku, "quantity": str(to)})}
+            page = _fetch(tab, API + "%2Fcart", "POST", body)
+    finally:
+        tab.close()
+    return _quantity_text(sku, int(quantity), control.get("maximum"), page)
+
+
+def _quantity_control(page, sku):
+    """The quantity control of sku's cart line, None if the cart has no such line."""
+    return next((it.get("controls", {}).get("quantity", {}) for split in _widgets(page, "cartSplit")
+                 for it in split.get("cartItems", []) if _cart_sku(it) == str(sku)), None)
+
+
+def _quantity_text(sku, want, most, page):
+    now = (_quantity_control(page, sku) or {}).get("current")
+    if now is None:
+        return f"⚠️ Ozon не подтвердил изменение: в ответе нет строки sku {sku}: {json.dumps(page, ensure_ascii=False)[:300]}"
+    if now == want:
+        return f"в корзине {now} шт.: sku {sku}\n" + _cart_text(page)
+    why = f"Ozon даёт не больше {most} шт." if now == most < want else "Ozon не подтвердил изменение"
+    return f"⚠️ в корзине {now} шт., а не {want}: sku {sku} — {why}\n" + _cart_text(page)

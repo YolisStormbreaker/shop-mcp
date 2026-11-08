@@ -370,17 +370,20 @@ def add_to_cart(id_or_url, size=None, quantity=1):
         if not p:
             return BLOCKED
         s, why = _size(p.get("sizes") or [], size)
-        if why:
-            return why
-        chrt = s["optionId"]
-        items = _cart(tab)
-        if items is None:
-            return BLOCKED
-        if _has(items, chrt):
-            return "уже в корзине, ничего не менял\n" + _cart_text(items)
-        items = _cart(tab, [_add_op(nm, chrt, quantity)])
+        return why or _put(tab, nm, s["optionId"], p, int(quantity))
     finally:
         tab.close()
+
+
+def _put(tab, nm, chrt, p, quantity):
+    """quantity more pieces of size chrt of product p: a new line by an add operation, or more on its line."""
+    items = _cart(tab)
+    if items is None:
+        return BLOCKED
+    line = next((i for i in items if i.get("id") == chrt), None)
+    if line:
+        return _set(tab, items, line, line["quantity"] + quantity)
+    items = _cart(tab, [_add_op(nm, chrt, quantity)])
     return BLOCKED if items is None else _added_text(items, chrt, p, quantity)
 
 
@@ -412,44 +415,79 @@ def _add_op(nm, chrt, quantity):
             "op_type": 1, "target_url": "", "meta_json": None, "analytics_json": None}
 
 
-# Removing is done the way the site does it: drop the line from the browser's cart and queue a
-# remove operation; the page sends the queue with its own signed sync on the next load. Sending
-# op_type 3 ourselves deletes it on the server only, and the page keeps showing the stale line.
-REMOVE_JS = """((chrt, qty) => {
+# Removing a line or changing its count is done the way the site does it: change the browser's
+# cart and queue the operation (op_type 3 remove, 2 set the count); the page sends the queue with
+# its own signed sync on the next load. Sending op_type 3 ourselves deletes it on the server only,
+# and the page keeps showing the stale line.
+QUEUE_JS = """(op => {
   const b = Object.keys(localStorage).find(k => k.startsWith('wb_basket_'));
   const q = Object.keys(localStorage).find(k => k.startsWith('wb___basketStorage_'));
   if (!b || !q) return false;
   const basket = JSON.parse(localStorage.getItem(b)), queue = JSON.parse(localStorage.getItem(q));
-  basket.basketItems = (basket.basketItems || []).filter(i => i.id !== chrt);
+  const mine = i => i.id === op.chrt_id;
+  basket.basketItems = (basket.basketItems || []).filter(i => op.op_type !== 3 || !mine(i)).map(i => mine(i) ? {...i, quantity: op.quantity} : i);
   basket.totalQuantity = basket.basketItems.reduce((n, i) => n + (i.quantity || 0), 0);
-  queue.operations = (queue.operations || []).concat([{chrt_id: chrt, quantity: qty, client_ts: Math.floor(Date.now() / 1000), op_type: 3}]);
+  queue.operations = (queue.operations || []).concat([op]);
   localStorage.setItem(b, JSON.stringify(basket));
   localStorage.setItem(q, JSON.stringify(queue));
   return true;
 })"""
+MOST = 255  # the site's maxQuantityPerItemInCart
 
 
 def remove_from_cart(id_or_url_or_chrt):
+    return set_cart_quantity(id_or_url_or_chrt, 0)
+
+
+def set_cart_quantity(id_or_url_or_chrt, quantity):
     key = _nm(id_or_url_or_chrt)
     if not key:
         return "нужен артикул WB, chrt из wb_cart или ссылка на товар"
+    if int(quantity) < 0:
+        return "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
     tab = tab_for("wildberries.ru")
     try:
         items = _cart(tab)
         if items is None:
             return BLOCKED
         it, why = _line(items, key)
-        if why:
-            return why
-        if not tab.js(f"{REMOVE_JS}({int(it['id'])}, {int(it['quantity'])})"):
-            return "⚠️ не нашёл корзину Wildberries в браузере, ничего не удалил"
-        items = _cart(tab)  # the page syncs the queued removal on this load
+        return why or _set(tab, items, it, int(quantity))
     finally:
         tab.close()
-    if items is None:
-        return BLOCKED
-    return (f"{'⚠️ Wildberries не подтвердил удаление' if _has(items, it['id']) else 'удалено'}: {it.get('goodsName', '')}\n"
-            + _cart_text(items))
+
+
+def _set(tab, items, it, want):
+    """it's line at want pieces (0 removes it), at most what the warehouses hold; the reply."""
+    to = min(want, _most(it))
+    if to != it.get("quantity"):
+        if not tab.js(f"{QUEUE_JS}({json.dumps(_op(it, to))})"):
+            return f"⚠️ не нашёл корзину Wildberries в браузере, ничего не {'изменил' if want else 'удалил'}"
+        items = _cart(tab)  # the page syncs the queued change on this load
+        if items is None:
+            return BLOCKED
+    return _changed(it, want, items)
+
+
+def _most(it):
+    """How many pieces the line can hold: the stock of all warehouses (the site's maxQuantity), at most MOST."""
+    return min(sum(s.get("qty") or 0 for s in it.get("stocks") or []) or MOST, MOST)
+
+
+def _op(it, to):
+    """The operation the site queues: 3 removes the line, 2 sets its count."""
+    if not to:
+        return {"chrt_id": it["id"], "quantity": it["quantity"], "client_ts": int(time.time()), "op_type": 3}
+    return {"chrt_id": it["id"], "quantity": to, "cod_1s": it["cod1S"], "client_ts": int(time.time()), "op_type": 2}
+
+
+def _changed(it, want, items):
+    name, now = it.get("goodsName", ""), next((i.get("quantity") for i in items if i.get("id") == it["id"]), 0)
+    if not want:
+        return f"{'⚠️ Wildberries не подтвердил удаление' if now else 'удалено'}: {name}\n" + _cart_text(items)
+    if now == want:
+        return f"в корзине {now} шт.: {name}\n" + _cart_text(items)
+    why = f"на складах всего {now} шт." if now == _most(it) < want else "Wildberries не подтвердил изменение"
+    return f"⚠️ в корзине {now} шт., а не {want}: {name} — {why}\n" + _cart_text(items)
 
 
 def _line(items, key):

@@ -434,5 +434,73 @@ class CartTests(unittest.TestCase):
         tab.assert_not_called()
 
 
+
+def one_line(qty, maximum=None):
+    """A cart of one line of SKU: qty pieces, at most maximum."""
+    line = cart_line(["hoco Кабель USB Type-A/USB Type-C, 1 м"], ["149 ₽"], qty, deletes(str(SKU)))
+    if maximum:
+        line["controls"]["quantity"]["maximum"] = maximum
+    return page({"cartSplit-1": {"cartItems": [line]}, "total-2": {"summary": {"footer": {"price": "149 ₽"}}}})
+
+
+def one_row(qty):
+    return f"корзина Ozon, итого 149 ₽\nsku\tшт\tцена\tназвание\tгруппа\n{SKU}\t{qty}\t149 ₽\thoco Кабель USB Type-A/USB Type-C, 1 м\t"
+
+
+def changes(qty):
+    """The quantity control's request: the count is a string inside JSON inside JSON."""
+    return {"name": "changeItemQuantity", "params": json.dumps({"item": SKU, "quantity": str(qty)})}
+
+
+class SetCartQuantityTests(unittest.TestCase):
+    def set(self, quantity, before, after=None, sku=SKU):
+        tab = MagicMock()
+        with patch.object(ozon, "_tab", return_value=tab), patch.object(ozon, "_page", return_value=before) as get, \
+                patch.object(ozon, "_fetch", return_value=after) as fetch:
+            out = ozon.set_cart_quantity(sku, quantity)
+        tab.close.assert_called_once()
+        return out, tab, get, fetch
+
+    def test_the_line_gets_the_count(self):
+        cases = {"fewer": (1, one_line(3), 1, 1, f"в корзине 1 шт.: sku {SKU}"),
+                 "more": (3, one_line(1, maximum=5), 3, 3, f"в корзине 3 шт.: sku {SKU}"),
+                 "not past the line's maximum": (5, one_line(1, maximum=2), 2, 2,
+                                                 f"⚠️ в корзине 2 шт., а не 5: sku {SKU} — Ozon даёт не больше 2 шт."),
+                 "Ozon kept the old count": (3, one_line(1), 3, 1, f"⚠️ в корзине 1 шт., а не 3: sku {SKU} — Ozon не подтвердил изменение")}
+        for case, (quantity, before, sent, now, head) in cases.items():
+            with self.subTest(case):
+                out, tab, get, fetch = self.set(quantity, before, one_line(now), sku=f"https://www.ozon.ru/product/kabel-{SKU}/")
+                get.assert_called_once_with(tab, "/cart")
+                fetch.assert_called_once_with(tab, "/api/entrypoint-api.bx/page/json/v2?url=%2Fcart", "POST", changes(sent))
+                self.assertEqual(out, head + "\n" + one_row(now))
+
+    def test_an_answer_without_the_line(self):
+        out, *_ = self.set(3, one_line(1), {"error": "Товар закончился"})
+        self.assertEqual(out, f"⚠️ Ozon не подтвердил изменение: в ответе нет строки sku {SKU}: " + '{"error": "Товар закончился"}')
+
+    def test_the_same_count_sends_nothing(self):
+        out, _, _, fetch = self.set(2, one_line(2))
+        fetch.assert_not_called()
+        self.assertEqual(out, f"в корзине 2 шт.: sku {SKU}\n" + one_row(2))
+
+    def test_zero_removes_the_line(self):
+        out, tab, get, fetch = self.set(0, None, page({"emptyCart-1": {}}))
+        get.assert_not_called()
+        fetch.assert_called_once_with(tab, "/api/entrypoint-api.bx/page/json/v2?url=%2Fcart", "POST",
+                                      {"name": "deleteItems", "params": json.dumps({"items": [str(SKU)]})})
+        self.assertEqual(out, "удалено. корзина Ozon пуста")
+
+    def test_not_in_the_cart(self):
+        out, _, _, fetch = self.set(2, one_line(1), sku=42424242)
+        fetch.assert_not_called()
+        self.assertEqual(out, "такого sku в корзине нет\n" + one_row(1))
+
+    def test_less_than_nothing(self):
+        with patch.object(ozon, "_tab") as tab:
+            self.assertEqual(ozon.set_cart_quantity(SKU, -1), "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)")
+        tab.assert_not_called()
+
+
+
 if __name__ == "__main__":
     unittest.main()

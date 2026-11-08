@@ -4,6 +4,7 @@ would send.  Today is fixed to 29 Oct 2026, the clock to 1700000000.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_wb"""
 import datetime
 import fnmatch
+import json
 import types
 import unittest
 from unittest.mock import DEFAULT, MagicMock, patch
@@ -286,6 +287,19 @@ def sync(body):
     return wb.CART, {"sync": ["basket/sync"]}, (SYNC_URL, body), SYNC_URL
 
 
+def queued(op):
+    """The page script that applies op to the browser's cart and queues it for the page's next sync."""
+    return wb.QUEUE_JS + "(" + json.dumps(op) + ")"
+
+
+def drop(chrt, qty):
+    return queued({"chrt_id": chrt, "quantity": qty, "client_ts": 1700000000, "op_type": 3})
+
+
+def count(chrt, nm, qty):
+    return queued({"chrt_id": chrt, "quantity": qty, "cod_1s": nm, "client_ts": 1700000000, "op_type": 2})
+
+
 def add(chrt, nm, quantity):
     return {"chrt_id": chrt, "quantity": quantity, "cod_1s": nm, "client_ts": 1700000000, "op_type": 1, "target_url": "",
             "meta_json": None, "analytics_json": None}
@@ -385,10 +399,11 @@ class AddToCartTests(CartTests):
         self.assertEqual(self.sent()[2], sync('[{"chrt_id": 555, "quantity": 1, "cod_1s": 101, "client_ts": 1700000000, '
                                               '"op_type": 1, "target_url": "", "meta_json": null, "analytics_json": null}]'))
 
-    def test_already_in_the_cart(self):
-        got, opened = self.add(detail(101, P1), [view(L1, L2)], "101", quantity=5)
-        self.assertEqual(got, "уже в корзине, ничего не менял\n" + CART_HEAD + f"{R1}\n{R2}")
-        self.assertEqual(self.sent(), opened + [VIEW])
+    def test_already_in_the_cart_gets_more_pieces(self):
+        got, opened = self.add(detail(101, P1), [view(L1, L2), view({**L1, "quantity": 7}, L2)], "101", quantity=5)
+        self.assertEqual(got, "в корзине 7 шт.: Кабель A\n" + CART_HEAD + R1.replace("\t2\t", "\t7\t", 1) + "\n" + R2)
+        self.assertEqual(self.sent(), opened + [VIEW, VIEW])
+        self.assertEqual([c.args[0] for c in self.tab.js.call_args_list], [count(555, 101, 7)])
 
     def test_sizes_to_choose_from(self):
         got, opened = self.add(detail(102, P2), [], "102")
@@ -459,13 +474,13 @@ class RemoveFromCartTests(CartTests):
     def test_removes_the_line_of_an_article(self):
         got = self.remove("https://www.wildberries.ru/catalog/101/detail.aspx", view(L1, L2), view(L2))
         self.assertEqual(got, "удалено: Кабель A\n" + CART_HEAD + R2)
-        self.tab.js.assert_called_once_with(wb.REMOVE_JS + "(555, 2)")
+        self.tab.js.assert_called_once_with(drop(555, 2))
         self.assertEqual(self.sent(), [VIEW, VIEW])
 
     def test_one_size_by_chrt(self):
         got = self.remove("557", view(L1, L2, L3), view(L1, L2))
         self.assertEqual(got, "удалено: Футболка B\n" + CART_HEAD + f"{R1}\n{R2}")
-        self.tab.js.assert_called_once_with(wb.REMOVE_JS + "(557, 1)")
+        self.tab.js.assert_called_once_with(drop(557, 1))
 
     def test_site_did_not_confirm(self):
         got = self.remove("101", view(L1), view(L1))
@@ -496,10 +511,61 @@ class RemoveFromCartTests(CartTests):
 
     def test_cart_not_answered_after(self):
         self.assertEqual(self.remove("101", view(L1), {}), wb.BLOCKED)
-        self.assertEqual(self.page_scripts(), [wb.REMOVE_JS + "(555, 2)"])
+        self.assertEqual(self.page_scripts(), [drop(555, 2)])
 
     def test_not_an_id(self):
         self.assertEqual(wb.remove_from_cart("abc"), "нужен артикул WB, chrt из wb_cart или ссылка на товар")
+        self.tab_for.assert_not_called()
+
+
+class SetCartQuantityTests(CartTests):
+    def set(self, key, quantity, *answers, found=True):
+        self.answers(*answers)
+        self.tab.js.return_value = found
+        got = wb.set_cart_quantity(key, quantity)
+        self.assertClosed()
+        return got
+
+    def test_the_line_gets_the_count(self):
+        stocked = {**L1, "stocks": [{"wh": 1, "qty": 2}, {"wh": 2, "qty": 1}, {"wh": 3}]}    # a warehouse without qty holds none
+        cases = {"fewer": (1, L1, 1, 1, "в корзине 1 шт.: Кабель A"),
+                 "more": (4, L1, 4, 4, "в корзине 4 шт.: Кабель A"),
+                 "not past the stock": (5, stocked, 3, 3, "⚠️ в корзине 3 шт., а не 5: Кабель A — на складах всего 3 шт."),
+                 "WB kept the old count": (1, L1, 1, 2, "⚠️ в корзине 2 шт., а не 1: Кабель A — Wildberries не подтвердил изменение")}
+        for case, (quantity, line, sent, now, head) in cases.items():
+            with self.subTest(case):
+                self.tab_for.reset_mock()
+                self.tab.reset_mock()
+                self.capture.reset_mock()
+                got = self.set("https://www.wildberries.ru/catalog/101/detail.aspx", quantity, view(line, L2), view({**line, "quantity": now}, L2))
+                self.assertEqual(got, head + "\n" + CART_HEAD + R1.replace("\t2\t", f"\t{now}\t", 1) + "\n" + R2)
+                self.tab.js.assert_called_once_with(count(555, 101, sent))
+                self.assertEqual(self.sent(), [VIEW, VIEW])
+
+    def test_the_same_count_changes_nothing(self):
+        got = self.set("555", 2, view(L1, L2))
+        self.assertEqual(got, "в корзине 2 шт.: Кабель A\n" + CART_HEAD + f"{R1}\n{R2}")
+        self.tab.js.assert_not_called()
+        self.assertEqual(self.sent(), [VIEW])
+
+    def test_zero_removes_the_line(self):
+        got = self.set("101", 0, view(L1, L2), view(L2))
+        self.assertEqual(got, "удалено: Кабель A\n" + CART_HEAD + R2)
+        self.tab.js.assert_called_once_with(drop(555, 2))
+
+    def test_no_cart_in_the_browser(self):
+        got = self.set("101", 1, view(L1), found=False)
+        self.assertEqual(got, "⚠️ не нашёл корзину Wildberries в браузере, ничего не изменил")
+        self.assertEqual(self.sent(), [VIEW])
+
+    def test_not_in_the_cart(self):
+        got = self.set("999", 1, view(L1))
+        self.assertEqual(got, "такого товара в корзине нет\n" + CART_HEAD + R1)
+        self.tab.js.assert_not_called()
+
+    def test_less_than_nothing_and_not_an_id(self):
+        self.assertEqual(wb.set_cart_quantity("101", -1), "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)")
+        self.assertEqual(wb.set_cart_quantity("abc", 1), "нужен артикул WB, chrt из wb_cart или ссылка на товар")
         self.tab_for.assert_not_called()
 
 

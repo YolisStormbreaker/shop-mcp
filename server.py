@@ -44,7 +44,7 @@ INSTRUCTIONS = """\
 в Золотом яблоке; корзины Ozon, AliExpress, Wildberries, Яндекс Маркета, Lamoda и Золотого яблока; история
 заказов Ozon и AliExpress; мессенджер Авито; отзывы на купленное на Ozon и AliExpress; чтение отзывов
 покупателей (*_reviews) везде, кроме Авито; просмотр картинок по ссылке (shop_images). Действуют от имени
-пользователя *_add_to_cart, *_remove_from_cart, ym_set_cart_quantity, avito_send и *_leave_review —
+пользователя *_add_to_cart, *_remove_from_cart, *_set_cart_quantity, avito_send и *_leave_review —
 только по его явной просьбе, текст сообщения или отзыва показать ему до отправки. Заказы нигде не оформляются и не оплачиваются.
 
 Куда идти — реши это первым:
@@ -263,6 +263,15 @@ def ozon_cart() -> str:
 def ozon_remove_from_cart(sku_or_url: str) -> str:
     """Убрать товар из корзины Ozon по sku или ссылке."""
     return ozon.remove_from_cart(sku_or_url)
+
+
+@mcp.tool()
+@logged
+def ozon_set_cart_quantity(sku_or_url: str, quantity: int) -> str:
+    """Сколько штук товара оставить в корзине Ozon: sku из ozon_cart или ссылка, quantity — новое число штук,
+    0 убирает строку. Больше лимита строки не ставит и так и пишет. Остальные строки и их выбор к оформлению
+    не трогает. Работает со скрытым браузером."""
+    return ozon.set_cart_quantity(sku_or_url, quantity)
 
 
 @mcp.tool()
@@ -531,8 +540,9 @@ def wb_cart() -> str:
 def wb_add_to_cart(id_or_url: str, size: str | None = None, quantity: int = 1) -> str:
     """Положить товар Wildberries в корзину по артикулу или ссылке. Заказ не оформляет.
 
-    size — обязателен, если у товара несколько размеров (без него вернёт список). Если товар уже в
-    корзине, ничего не меняет. Работает со скрытым браузером, ~15 с. Возвращает итоговую корзину.
+    size — обязателен, если у товара несколько размеров (без него вернёт список). quantity — сколько штук
+    добавить; если этот размер уже в корзине, добавляет к тем, что там есть (не больше остатка на складах).
+    Работает со скрытым браузером, ~15 с. Возвращает итоговую корзину.
     """
     return wb.add_to_cart(id_or_url, size, quantity)
 
@@ -543,6 +553,15 @@ def wb_remove_from_cart(id_or_url_or_chrt: str) -> str:
     """Убрать строку из корзины Wildberries по артикулу, ссылке или chrt из wb_cart (если в корзине
     несколько размеров одного товара — нужен chrt). Убирает все штуки строки. ~10 с."""
     return wb.remove_from_cart(id_or_url_or_chrt)
+
+
+@mcp.tool()
+@logged
+def wb_set_cart_quantity(id_or_url_or_chrt: str, quantity: int) -> str:
+    """Сколько штук товара оставить в корзине Wildberries: артикул, ссылка или chrt из wb_cart (если в корзине
+    несколько размеров одного товара — нужен chrt), quantity — новое число штук, 0 убирает строку. Больше
+    остатка на складах не ставит и так и пишет. Остальные строки не трогает. Работает со скрытым браузером, ~10 с."""
+    return wb.set_cart_quantity(id_or_url_or_chrt, quantity)
 
 
 @mcp.tool()
