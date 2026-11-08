@@ -309,6 +309,11 @@ def _added(c, depot, start, got):
     n = _quantity(items, c["id"])
     if n <= start:
         return f"Лавка не положила {title} в корзину (кнопка не сработала)"
+    return _shows(title, depot, n, r)
+
+
+def _shows(title, depot, n, r):
+    """The product's line as the depot's cart answer r shows it: its count and the cart's total."""
     return (f"в корзине {DEPOTS[depot]}: {title} — {n:g} шт; корзина {r.get('totalItemsPrice')} ₽ без доставки"
             + (f" · к заказу пока нельзя: {r.get('checkoutUnavailableReason')}" if not r.get("availableForCheckout") else ""))
 
@@ -325,24 +330,64 @@ def _take(tab, pid, depot, left):
     return left
 
 
-def remove_from_cart(id_or_url):
+def _in_cart(tab, id_or_url):
+    """(the product, its depot, how many of it the depot's cart has) on its open page, or what to say when that cart
+    did not come or has none of it."""
     pid, depot = _pid(id_or_url)
+    c = _open_good(tab, pid, depot)
+    n = _qty(tab, c["id"], depot)
+    if n is None:
+        return BLOCKED
+    return (c, depot, n) if n else f"{_clean(c.get('longTitle'))} в корзине {DEPOTS[depot]} нет"
+
+
+def remove_from_cart(id_or_url):
     tab = _tab()
     try:
-        c = _open_good(tab, pid, depot)
-        pid = c["id"]
-        left = _qty(tab, pid, depot)
-        if left is None:
-            return BLOCKED
-        if not left:
-            return f"{_clean(c.get('longTitle'))} в корзине {DEPOTS[depot]} нет"
-        left = _take(tab, pid, depot, left)
+        line = _in_cart(tab, id_or_url)
+        if isinstance(line, str):
+            return line
+        c, depot, left = line
+        left = _take(tab, c["id"], depot, left)
     finally:
         tab.close()
     title = _clean(c.get("longTitle"))
     if left is None:
         return UNCHECKED.format(title)
     return f"не удалось убрать {title} из корзины Лавки" if left else f"убрано из корзины {DEPOTS[depot]}: {title}"
+
+
+def set_cart_quantity(id_or_url, quantity):
+    want = int(quantity)
+    if want < 0:
+        return "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
+    if not want:
+        return remove_from_cart(id_or_url)
+    tab = _tab()
+    try:
+        line = _in_cart(tab, id_or_url)
+        if isinstance(line, str):
+            return line
+        c, depot, now = line
+        # all presses, then one read, as add_to_cart adds: a read lagging behind the page would make a press-and-check loop overshoot
+        _clicks(tab, [MINUS if want < now else PLUS] * min(int(abs(want - now)), 30))
+        got = _cart_items(tab, depot)
+    finally:
+        tab.close()
+    return _set(c, depot, want, got)
+
+
+def _set(c, depot, want, got):
+    title = _clean(c.get("longTitle"))
+    if got is None:
+        return UNCHECKED.format(title)
+    items, r = got
+    n = _quantity(items, c["id"])
+    if n == want:
+        return _shows(title, depot, n, r)
+    cap = c.get("maxAmount")          # what the site lets order (stock or its limit), the same as its quantityLimit; «+» does nothing past it
+    why = f"Лавка даёт не больше {cap} шт." if cap and want > n >= cap else "Лавка не подтвердила изменение"
+    return f"⚠️ в корзине {n:g} шт., а не {want}: {title} — {why}"
 
 
 def cart():

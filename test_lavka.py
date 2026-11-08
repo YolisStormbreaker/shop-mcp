@@ -245,7 +245,7 @@ UNCHECKED = "Кефир 2,5%: Лавка не отдала корзину, и н
 class Shop:
     """The site as the cart code meets it: the product API, the cart of each depot (cart/v1/retrieve), the product
     page with «В корзину» while its depot's cart has none of the product, «+» and «−» while it has some, a click
-    changing that cart.  sent: API calls (path, body, depot), page loads and clicks in order."""
+    changing that cart («+» in vain at the product's maxAmount).  sent: API calls (path, body, depot), page loads and clicks in order."""
     def __init__(self, qty=0, depot="regular", good=GOOD, buttons=True, reads=(True,), checkout=True):
         """reads: whether each cart read in turn gets an answer (the last one goes for the reads after it)."""
         self.carts = {"regular": {}, "supermarket": {}}
@@ -278,7 +278,7 @@ class Shop:
         if not self.buttons or (name == "В корзину") != (not cart["a1b2"]):
             return False
         self.sent.append(name)
-        cart["a1b2"] += -1 if name == "−" else 1
+        cart["a1b2"] = min(cart["a1b2"] + (-1 if name == "−" else 1), self.good.get("maxAmount") or 100)
         return True
 
     def run(self, fn, *args):
@@ -389,6 +389,69 @@ class LavkaRemoveFromCartTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Лавка: товар zz не найден"):
             shop.run(lavka.remove_from_cart, "zz")
         nothing_but_the_lookup(self, shop)
+
+
+class LavkaSetCartQuantityTests(unittest.TestCase):
+    def test_fewer_by_minus_the_same_count_by_no_press(self):
+        for qty, want, presses in ((3, 1, ["−", "−"]), (2, 2, [])):
+            with self.subTest(qty=qty, want=want):
+                shop = Shop(qty=qty)
+                self.assertEqual(shop.run(lavka.set_cart_quantity, "a1b2", want),
+                                 f"в корзине Лавка у дома: Кефир 2,5% — {want} шт; корзина {115 * want} ₽ без доставки")
+                self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE] + presses + [RETRIEVE])
+
+    def test_more_by_plus_as_add_to_cart_adds_them(self):
+        shop = Shop(qty=1)
+        self.assertEqual(shop.run(lavka.set_cart_quantity, "https://lavka.yandex.ru/good/kefir-1", "3"),
+                         "в корзине Лавка у дома: Кефир 2,5% — 3 шт; корзина 345 ₽ без доставки")
+        self.assertEqual(shop.sent, [("v1/product", {"productId": "kefir-1", "enableUnavailable": True}, "regular"), PAGE, RETRIEVE,
+                                     "+", "+", RETRIEVE])
+
+    def test_big_lavka_fewer_and_under_the_minimum(self):
+        shop = Shop(qty=3, depot="supermarket", checkout=False)
+        self.assertEqual(shop.run(lavka.set_cart_quantity, "s:a1b2", 2), "в корзине Большая лавка: Кефир 2,5% — 2 шт; "
+                         "корзина 230 ₽ без доставки · к заказу пока нельзя: минимальный заказ 500 ₽")
+        sup = ("cart/v1/retrieve", {}, "supermarket")
+        self.assertEqual(shop.sent, [("v1/product", {"productId": "a1b2", "enableUnavailable": True}, "supermarket"),
+                                     "https://lavka.yandex.ru/supermarket/good/kefir-1", sup, "−", sup])
+
+    def test_zero_is_remove_from_cart(self):
+        shop = Shop(qty=2)
+        got = shop.run(lavka.set_cart_quantity, "a1b2", 0)
+        self.assertEqual((got, shop.sent[3:]), ("убрано из корзины Лавка у дома: Кефир 2,5%", ["−", RETRIEVE, "−", RETRIEVE]))
+
+    def test_less_than_zero_opens_no_tab(self):
+        with patch.object(lavka, "_tab") as tab:
+            self.assertEqual(lavka.set_cart_quantity("a1b2", -1), "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)")
+        tab.assert_not_called()
+
+    def test_the_sites_limit(self):
+        shop = Shop(qty=1, good=dict(GOOD, maxAmount=2))
+        self.assertEqual(shop.run(lavka.set_cart_quantity, "a1b2", 4), "⚠️ в корзине 2 шт., а не 4: Кефир 2,5% — Лавка даёт не больше 2 шт.")
+        self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE, "+", "+", "+", RETRIEVE])
+
+    def test_not_confirmed(self):
+        # no buttons, so the count stays; the limit is named only when more were asked and the count stands at it
+        for qty, want, limit in ((1, 3, None), (3, 1, 3), (1, 3, 5)):
+            with self.subTest(qty=qty, want=want, limit=limit):
+                shop = Shop(qty=qty, buttons=False, good=dict(GOOD, maxAmount=limit))
+                self.assertEqual(shop.run(lavka.set_cart_quantity, "a1b2", want),
+                                 f"⚠️ в корзине {qty} шт., а не {want}: Кефир 2,5% — Лавка не подтвердила изменение")
+
+    def test_at_most_thirty_presses(self):
+        for qty, want, press, left in ((1, 100, "+", 31), (40, 1, "−", 10)):
+            with self.subTest(want):
+                shop = Shop(qty=qty)
+                self.assertEqual(shop.run(lavka.set_cart_quantity, "a1b2", want),
+                                 f"⚠️ в корзине {left} шт., а не {want}: Кефир 2,5% — Лавка не подтвердила изменение")
+                self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE] + [press] * 30 + [RETRIEVE])
+
+    def test_answers_the_other_cart_functions_give(self):
+        for shop, reply, sent in ((Shop(qty=1, depot="supermarket"), "Кефир 2,5% в корзине Лавка у дома нет", [OPEN, PAGE, RETRIEVE]),
+                                  (Shop(qty=1, reads=(False,)), lavka.BLOCKED, [OPEN, PAGE, RETRIEVE]),
+                                  (Shop(qty=1, reads=(True, False)), UNCHECKED, [OPEN, PAGE, RETRIEVE, "+", RETRIEVE])):
+            with self.subTest(reply):
+                self.assertEqual((shop.run(lavka.set_cart_quantity, "a1b2", 2), shop.sent), (reply, sent))
 
 
 class LavkaCartTests(unittest.TestCase):
