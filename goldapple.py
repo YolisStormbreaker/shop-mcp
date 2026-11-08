@@ -219,8 +219,13 @@ def _review_text(r):
 
 
 # The cart is a plain same-origin API with the session cookie (names from the site's own code:
-# getState, addItemsBySku, deleteItems), so it works from a background tab.
+# getState, addItemsBySku, deleteItems), so it works from a background tab. Every request names the
+# cart by the id the site keeps in localStorage (its guestV3.getId()); without it the state is
+# «Quote is not active» and an add goes to a cart no page shows (2026-11).
 STATE = "/front/api/cart/v3/state?locale=ru&includeDeliveryThreshold=false"
+CART_ID_JS = "(() => { try { return JSON.parse(localStorage.getItem('ga-cart-id')) } catch (e) { return null } })()"
+# shortcut: the site makes its cart on the first add by hand; make it here too if a fresh profile needs it
+NO_CART = "⚠️ у Золотого яблока в этом браузере ещё нет корзины: попроси пользователя (shop-chrome show) положить товар на goldapple.ru, потом повтори"
 
 
 def _ga_tab():
@@ -235,7 +240,18 @@ def _items(d):
     return (((d or {}).get("data") or {}).get("rawCart") or {}).get("items") or []
 
 
+def _cart_id(tab):
+    return tab.js(CART_ID_JS)
+
+
+def _state(tab, cid):
+    return _api(tab, "GET", f"{STATE}&cartId={urllib.parse.quote(cid, safe='')}")
+
+
 def _cart_text(d):
+    error = ((d or {}).get("data") or {}).get("errorCode")
+    if error:
+        return f"⚠️ Золотое яблоко не отдало корзину: {d['data'].get('message') or error}"
     items = _items(d)
     if not items:
         return "корзина Золотого яблока пуста"
@@ -259,7 +275,8 @@ def _sku(id_or_url):
 def cart():
     tab = _ga_tab()
     try:
-        d = _api(tab, "GET", STATE)
+        cid = _cart_id(tab)
+        d = _state(tab, cid) if cid else {}
     finally:
         tab.close()
     return BLOCKED if d is None else _cart_text(d)
@@ -271,10 +288,13 @@ def add_to_cart(id_or_url, quantity=1):
         return "нужен артикул варианта (из goldapple_item) или ссылка на товар"
     tab = _ga_tab()
     try:
+        cid = _cart_id(tab)
+        if not cid:
+            return NO_CART
         _api(tab, "POST", "/front/api/cart/v3/items-by-sku?locale=ru",
-             {"products": [{"sku": sku, "quantity": int(quantity), "analyticsDetailParams": {"itemId": sku}}],
+             {"cartId": cid, "products": [{"sku": sku, "quantity": int(quantity), "analyticsDetailParams": {"itemId": sku}}],
               "meta": {"source": "pdp/product"}, "includeDeliveryThreshold": False})
-        d = _api(tab, "GET", STATE)
+        d = _state(tab, cid)
     finally:
         tab.close()
     if d is None:
@@ -293,13 +313,16 @@ def remove_from_cart(id_or_url):
         return "нужен артикул из goldapple_cart"
     tab = _ga_tab()
     try:
-        d = _api(tab, "GET", STATE)
+        cid = _cart_id(tab)
+        if not cid:
+            return NO_CART
+        d = _state(tab, cid)
         if d is None:
             return BLOCKED
         if not _in_cart(d, sku):
             return "такого артикула в корзине нет\n" + _cart_text(d)  # not cart(): that would wait for this very tab
-        _api(tab, "DELETE", f"/front/api/cart/v3/items?locale=ru&includeDeliveryThreshold=false&itemSkus={sku}")
-        d = _api(tab, "GET", STATE)
+        _api(tab, "DELETE", f"/front/api/cart/v3/items?locale=ru&includeDeliveryThreshold=false&cartId={urllib.parse.quote(cid, safe='')}&itemSkus={sku}")
+        d = _state(tab, cid)
     finally:
         tab.close()
     if d is None:

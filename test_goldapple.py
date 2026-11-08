@@ -227,21 +227,23 @@ GA_CART_TEXT = (GA_CART_HEAD + "19000163536\t2\t4300\t6140\t✓\tBrand A\tКуш
                 "\t\t\t\t\t\t\t")
 SHAMPOO_CART = {"data": {"rawCart": {"items": [SHAMPOO]}}}
 SHAMPOO_TEXT = GA_CART_HEAD + "19000000001\t1\t500\t\t\tBrand B\tШампунь\t"
-GA_STATE = ("GET", "/front/api/cart/v3/state?locale=ru&includeDeliveryThreshold=false", None)
+GA_STATE = ("GET", "/front/api/cart/v3/state?locale=ru&includeDeliveryThreshold=false&cartId=c%2B1", None)
+CART_ID = "c+1"   # the site's own id of this browser's cart, kept in localStorage; every cart request names it (2026-11)
 
 
 class GoldAppleCartTests(unittest.TestCase):
     """The cart tools with the site mocked: the answer, and every request that would go to Золотое яблоко (bodies as sent)."""
 
-    def call(self, fn, *args, answers=()):
+    def call(self, fn, *args, answers=(), cart_id=CART_ID):
         tab = MagicMock()
+        tab.js.return_value = cart_id
         with patch.object(goldapple, "_ga_tab", return_value=tab) as ga_tab, patch.object(goldapple, "_api", side_effect=list(answers)) as api:
             got = fn(*args)
         for c in api.call_args_list:
             self.assertIs(c.args[0], tab)
         sent = [(c.args[1], c.args[2], None if len(c.args) < 4 else json.dumps(c.args[3])) for c in api.call_args_list]
         self.assertEqual(tab.close.call_count, ga_tab.call_count)
-        tab.js.assert_not_called()
+        self.assertEqual({c.args for c in tab.js.call_args_list} - {(goldapple.CART_ID_JS,)}, set())
         tab.goto.assert_not_called()
         return got, sent, tab, ga_tab
 
@@ -261,6 +263,19 @@ class GoldAppleCartTests(unittest.TestCase):
         for d in ({"data": {"rawCart": {"items": []}}}, {"data": {"rawCart": None}}, {}):
             self.assertEqual(self.call(goldapple.cart, answers=[d])[0], "корзина Золотого яблока пуста")
 
+    def test_an_error_answer_is_not_an_empty_cart(self):
+        # live 2026-11-08: without the cart's id the site answers this, and the cart read as empty
+        got = self.call(goldapple.cart, answers=[{"data": {"message": "Quote is not active or not found", "errorCode": "quote_not_active"}}])[0]
+        self.assertEqual(got, "⚠️ Золотое яблоко не отдало корзину: Quote is not active or not found")
+
+    def test_no_cart_in_this_browser_yet(self):
+        got, sent, _, _ = self.call(goldapple.cart, cart_id=None)
+        self.assertEqual((got, sent), ("корзина Золотого яблока пуста", []))
+        for fn in (goldapple.add_to_cart, goldapple.remove_from_cart):
+            with self.subTest(fn.__name__):
+                got, sent, _, _ = self.call(fn, "19000163536", cart_id=None)
+                self.assertEqual((got, sent), (goldapple.NO_CART, []))
+
     def test_cart_blocked(self):
         got, _, tab, _ = self.call(goldapple.cart, answers=[None])
         self.assertEqual(got, goldapple.BLOCKED)
@@ -270,14 +285,14 @@ class GoldAppleCartTests(unittest.TestCase):
         got, sent, tab, _ = self.call(goldapple.add_to_cart, "https://goldapple.ru/19000163536-cushion", "2", answers=[{}, GA_CART])
         self.assertEqual(got, "добавлено: артикул 19000163536\n" + GA_CART_TEXT)
         self.assertEqual(sent, [("POST", "/front/api/cart/v3/items-by-sku?locale=ru",
-                                 '{"products": [{"sku": "19000163536", "quantity": 2, "analyticsDetailParams": {"itemId": "19000163536"}}], '
+                                 '{"cartId": "c+1", "products": [{"sku": "19000163536", "quantity": 2, "analyticsDetailParams": {"itemId": "19000163536"}}], '
                                  '"meta": {"source": "pdp/product"}, "includeDeliveryThreshold": false}'), GA_STATE])
         tab.close.assert_called_once()
 
     def test_add_one_by_default_and_a_numeric_id(self):
         got, sent, _, _ = self.call(goldapple.add_to_cart, 19000000001, answers=[None, SHAMPOO_CART])
         self.assertEqual(got, "добавлено: артикул 19000000001\n" + SHAMPOO_TEXT)
-        self.assertEqual(sent[0][2], '{"products": [{"sku": "19000000001", "quantity": 1, "analyticsDetailParams": {"itemId": "19000000001"}}], '
+        self.assertEqual(sent[0][2], '{"cartId": "c+1", "products": [{"sku": "19000000001", "quantity": 1, "analyticsDetailParams": {"itemId": "19000000001"}}], '
                                      '"meta": {"source": "pdp/product"}, "includeDeliveryThreshold": false}')
 
     def test_add_not_confirmed(self):
@@ -298,14 +313,14 @@ class GoldAppleCartTests(unittest.TestCase):
     def test_remove(self):
         got, sent, tab, _ = self.call(goldapple.remove_from_cart, " /19000163536-cushion ", answers=[GA_CART, {}, SHAMPOO_CART])
         self.assertEqual(got, "удалено: артикул 19000163536\n" + SHAMPOO_TEXT)
-        self.assertEqual(sent, [GA_STATE, ("DELETE", "/front/api/cart/v3/items?locale=ru&includeDeliveryThreshold=false&itemSkus=19000163536", None),
+        self.assertEqual(sent, [GA_STATE, ("DELETE", "/front/api/cart/v3/items?locale=ru&includeDeliveryThreshold=false&cartId=c%2B1&itemSkus=19000163536", None),
                                 GA_STATE])
         tab.close.assert_called_once()
 
     def test_remove_a_line_whose_id_the_site_gives_as_a_number(self):
         got, sent, _, _ = self.call(goldapple.remove_from_cart, "19000000001", answers=[SHAMPOO_CART, None, {"data": {"rawCart": {"items": []}}}])
         self.assertEqual(got, "удалено: артикул 19000000001\nкорзина Золотого яблока пуста")
-        self.assertEqual(sent[1][1], "/front/api/cart/v3/items?locale=ru&includeDeliveryThreshold=false&itemSkus=19000000001")
+        self.assertEqual(sent[1][1], "/front/api/cart/v3/items?locale=ru&includeDeliveryThreshold=false&cartId=c%2B1&itemSkus=19000000001")
 
     def test_remove_not_confirmed(self):
         got, _, _, _ = self.call(goldapple.remove_from_cart, "19000163536", answers=[GA_CART, {}, GA_CART])
