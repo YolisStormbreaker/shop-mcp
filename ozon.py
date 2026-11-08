@@ -307,7 +307,8 @@ def add_to_cart(sku_or_url, quantity=1):
     sku = _sku(sku_or_url)
     tab = _tab()
     try:
-        r = _fetch(tab, "/api/composer-api.bx/_action/addToCart", "POST", [{"id": sku, "quantity": int(quantity)}])
+        had = (_quantity_control(_page(tab, "/cart"), sku) or {}).get("current") or 0  # addToCart sets the count, not adds to it
+        r = _fetch(tab, "/api/composer-api.bx/_action/addToCart", "POST", [{"id": sku, "quantity": had + int(quantity)}])
     finally:
         tab.close()
     if not r.get("success"):

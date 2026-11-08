@@ -246,7 +246,8 @@ def ozon_reviews(sku_or_url: str, sort: str = "useful", with_media: bool = False
 @mcp.tool()
 @logged
 def ozon_add_to_cart(sku_or_url: str, quantity: int = 1) -> str:
-    """Положить товар Ozon в корзину по sku или ссылке. Заказ не оформляет."""
+    """Положить товар Ozon в корзину по sku или ссылке. quantity — сколько штук добавить; если товар уже
+    в корзине, добавляет к тем, что там есть. Заказ не оформляет."""
     return ozon.add_to_cart(sku_or_url, quantity)
 
 

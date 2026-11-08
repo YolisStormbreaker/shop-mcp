@@ -400,7 +400,16 @@ class CartTests(unittest.TestCase):
         out, tab, get, fetch = self.call(ozon.add_to_cart, f"https://www.ozon.ru/product/kabel-{SKU}/?at=x",
                                          answer={"success": True, "cart": {"cartItems": [{"id": 111, "qty": 1}, {"id": SKU, "qty": 3}]}})
         fetch.assert_called_once_with(tab, "/api/composer-api.bx/_action/addToCart", "POST", [{"id": SKU, "quantity": 1}])
-        get.assert_not_called()
+        get.assert_called_once_with(tab, "/cart")
+        self.assertEqual(out, f"добавлено: sku {SKU}, в корзине этого товара 3 шт.")
+
+    def test_add_to_a_line_already_in_the_cart(self):
+        # live 2026-11-08: addToCart sets the line's count (2, then 3, then 1), it does not add to it
+        tab = MagicMock()
+        with patch.object(ozon, "_tab", return_value=tab), patch.object(ozon, "_page", return_value=one_line(2)), \
+                patch.object(ozon, "_fetch", return_value={"success": True, "cart": {"cartItems": [{"id": SKU, "qty": 3}]}}) as fetch:
+            out = ozon.add_to_cart(SKU)
+        fetch.assert_called_once_with(tab, "/api/composer-api.bx/_action/addToCart", "POST", [{"id": SKU, "quantity": 3}])
         self.assertEqual(out, f"добавлено: sku {SKU}, в корзине этого товара 3 шт.")
 
     def test_add_without_the_line_in_the_answer(self):
