@@ -45,7 +45,7 @@ class LamodaSearchTests(unittest.TestCase):
     def test_whole_answer(self):
         got, tab, _, _ = self.search_with_mocks(STATE)
         url = "https://www.lamoda.ru/catalogsearch/result/?q=%D0%BD%D0%BE%D1%81%D0%BA%D0%B8"
-        self.assertEqual(got, f"Lamoda · 13523 найдено · страница 1 из 226 · {url}\n"
+        self.assertEqual(got, f"Lamoda · 13523 найдено · страница 1 из 226 · реклама: 1 из 3 на странице · {url}\n"
                               "ссылки относительно https://www.lamoda.ru; цена — со всеми скидками, включая вашу скидку лояльности; "
                               "«до» — когда кончается акционная цена; размеры в наличии — в системе бренда\n"
                               "#\tsku\tцена ₽\tбез скидок\tакция до\tбренд\tназвание\tрейтинг\tотзывов\tразмеры в наличии\tпометки\tссылка\n"
@@ -68,7 +68,7 @@ class LamodaSearchTests(unittest.TestCase):
 
     def test_no_products_and_no_pagination(self):
         self.assertEqual(self.search({"pagination": {}, "products": []})[0::3],
-                         ["Lamoda · 0 найдено · страница 1 из 1 · https://www.lamoda.ru/catalogsearch/result/?q=%D0%BD%D0%BE%D1%81%D0%BA%D0%B8",
+                         ["Lamoda · 0 найдено · страница 1 из 1 · реклама: 0 из 0 на странице · https://www.lamoda.ru/catalogsearch/result/?q=%D0%BD%D0%BE%D1%81%D0%BA%D0%B8",
                           "(пусто)"])
 
     def test_bare_product(self):
@@ -83,7 +83,10 @@ class LamodaSearchTests(unittest.TestCase):
         tab.close.assert_called_once()
 
     def test_header_counts_the_site_results(self):
-        self.assertTrue(self.search(STATE)[0].startswith("Lamoda · 13523 найдено · страница 1 из 226 · https://www.lamoda.ru/"))
+        self.assertTrue(self.search(STATE)[0].startswith("Lamoda · 13523 найдено · страница 1 из 226 · реклама: 1 из 3 на странице · https://www.lamoda.ru/"))
+
+    def test_the_ads_are_counted_over_the_whole_page_not_the_limit(self):
+        self.assertIn("· реклама: 1 из 3 на странице ·", self.search(STATE, limit=1)[0])
 
     def test_discounted_product_row(self):
         self.assertEqual(self.search(STATE)[3], "1\tMP002XM01L0O\t728\t1040\t2026-10-29\tOmsa\tНоски 5 пар\t4.9\t563\t"

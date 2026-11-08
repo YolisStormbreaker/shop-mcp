@@ -53,7 +53,9 @@ def _search_table(r, url, limit):
     products = [x for x in r["products"] if x.get("sku")]   # the rest are ad banners
     rows = [_search_row(i + 1, p) for i, p in enumerate(products[:limit])]
     pg = r["pagination"]
-    head = (f"Lamoda · {pg.get('found', len(products))} найдено · страница {pg.get('page') or 1} из {pg.get('pages') or 1} · {url}\n"
+    ads = sum(1 for p in products if p.get("ad_params"))
+    head = (f"Lamoda · {pg.get('found', len(products))} найдено · страница {pg.get('page') or 1} из {pg.get('pages') or 1} · "
+            f"реклама: {ads} из {len(products)} на странице · {url}\n"
             "ссылки относительно https://www.lamoda.ru; цена — со всеми скидками, включая вашу скидку лояльности; "
             "«до» — когда кончается акционная цена; размеры в наличии — в системе бренда\n"
             "#\tsku\tцена ₽\tбез скидок\tакция до\tбренд\tназвание\tрейтинг\tотзывов\tразмеры в наличии\tпометки\tссылка")
