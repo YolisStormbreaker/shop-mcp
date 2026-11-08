@@ -45,7 +45,7 @@ def search(texts, regex, context=160):
 
 
 def main(argv):
-    if len(argv) not in (3, 4):
+    if len(argv) not in (3, 4) or argv[0] not in pace.POLICY:     # a typo in the site would walk past the real site's stop
         print(__doc__.strip().splitlines()[-1])
         return 2
     site, url, regex, *ctx = argv

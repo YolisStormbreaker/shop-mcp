@@ -34,6 +34,7 @@ class BundleTests(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.pace = patch.object(bundles, "pace").start()
+        self.pace.Refused, self.pace.POLICY = pace.Refused, pace.POLICY      # the budget's slots are faked, not its words
         self.addCleanup(patch.stopall)
 
     def fetched(self):
@@ -64,11 +65,27 @@ class BundleTests(unittest.TestCase):
         hits = bundles.search(SCRIPTS, r"/amount", context=12)
         self.assertEqual(hits, [("https://www.perekrestok.ru/a.js", '".concat(t,"/amount"),{amount:r')])   # 12 on each side
 
-    def test_the_command(self):
+    def run_cli(self, *argv):
         with patch("builtins.print") as out:
-            code = bundles.main(["perekrestok", PAGE, "amount", "8"])
+            code = bundles.main(list(argv))
+        return code, [str(c.args[0]) for c in out.call_args_list]
+
+    def test_the_command(self):
+        code, said = self.run_cli("perekrestok", PAGE, "amount", "8")
         self.assertEqual(code, 0)
-        self.assertEqual(out.call_args_list[0].args[0], "скриптов: 2, совпадений: 2")
+        self.assertEqual(said[0], "скриптов: 2, совпадений: 2")
+
+    def test_the_command_says_why_the_budget_refused(self):
+        self.pace.acquire.side_effect = pace.Refused("⏸ Перекрёсток: блокировка по IP")
+        self.assertEqual(self.run_cli("perekrestok", PAGE, "amount"), (1, ["⏸ Перекрёсток: блокировка по IP"]))
+
+    def test_a_site_outside_the_budget_is_wrong_use(self):
+        """A typo in the site would count the page's requests to no site's budget and walk past its stop."""
+        for argv in (["perekrestk", PAGE, "amount"], ["perekrestok", PAGE], ["perekrestok", PAGE, "amount", "8", "x"]):
+            with self.subTest(argv):
+                code, said = self.run_cli(*argv)
+                self.assertEqual((code, said), (2, ["Run: .venv/bin/python bundles.py <site> <page url> <regex> [context]"]))
+        self.assertEqual(self.tab.js.call_args_list, [])
 
 
 if __name__ == "__main__":
