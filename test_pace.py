@@ -210,6 +210,15 @@ class PageSignTests(PaceTest):
         self.assertIsNone(pace._block("perekrestok"))
 
 
+class SuiteTests(unittest.TestCase):
+    def test_the_suite_runs_with_pace_off_and_away_from_the_real_ledger(self):
+        """pace knows the suite by unittest's own argv[0]; another runner (pytest) or a change in unittest turns it on and
+        every module test then sleeps and writes the real cache/pace.sqlite — this says so instead of passing quietly."""
+        self.assertTrue(pace.OFF, "pace is on under this runner: run the tests with `python -m unittest`, then check "
+                                  "cache/pace.sqlite for the rows the tests wrote")
+        self.assertNotEqual(pace.DB, Path(pace.__file__).parent / "cache" / "pace.sqlite")
+
+
 class SpanTests(unittest.TestCase):
     def test_seconds_minutes_and_hours(self):
         self.assertEqual([pace._span(s) for s in (0, 59.4, 60, 3599, 3600, 7260)], ["0 с", "59 с", "1 мин", "59 мин", "1 ч 0 мин", "2 ч 1 мин"])
