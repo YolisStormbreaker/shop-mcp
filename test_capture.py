@@ -49,15 +49,16 @@ def body(text=None, **reply):
     return answer
 
 
-def run(script, patterns, last_nav=None, **kw):
-    """(result, [(method, params) sent, Fetch.enable included], clock)"""
+def run(script, patterns, **kw):
+    """(result, [(method, params) sent, Fetch.enable included], clock); clock.pace is the shared budget, clock.tab the tab"""
     ws, clock = FakeWs(script), MagicMock()
     clock.time.side_effect = itertools.count(1000.0, 1.0)   # every reading one second later
     tab = MagicMock(ws=ws)
     tab.call.side_effect = lambda method, **params: ws.sent.append({"method": method, "params": params})
-    with patch.object(C, "time", clock), patch.dict(cdp._last_nav, last_nav or {}, clear=True):
+    tab._probe.side_effect = lambda: ws.sent[-1]["method"]       # what the tab was last told when the page is looked at
+    with patch.object(C, "time", clock), patch.object(C, "pace") as pace:
         got = C.capture(tab, "shop", URL, patterns, **kw)
-        clock.last_nav = dict(cdp._last_nav)
+    clock.pace, clock.tab = pace, tab
     return got, [(s["method"], s["params"]) for s in ws.sent], clock
 
 
@@ -70,16 +71,16 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(sent, [("Network.enable", {}), ("Page.navigate", {"url": URL}),
                                 ("Network.getResponseBody", {"requestId": "r1"}), ("Network.disable", {})])
         clock.sleep.assert_not_called()
-        self.assertEqual(clock.last_nav, {"shop": 1001.0})
+        clock.pace.acquire.assert_called_once_with("shop", "page")
+        clock.pace.check_page.assert_not_called()          # everything came: no reason to look at the page
 
     def test_js_runs_in_the_page_instead_of_navigating(self):
         _, sent, _ = run([], {"x": ["/x"]}, js="router.go('/x')")
         self.assertEqual(sent[1], ("Runtime.evaluate", {"expression": "router.go('/x')"}))
 
-    def test_waits_out_the_gap_since_the_last_page_load_on_the_site(self):
-        _, _, clock = run([], {"x": ["/x"]}, last_nav={"shop": 999.0, "other": 1.0})
-        clock.sleep.assert_called_once_with(cdp.MIN_GAP - 1)
-        self.assertEqual(clock.last_nav, {"shop": 1001.0, "other": 1.0})
+    def test_a_missing_answer_has_the_page_checked_for_a_block(self):
+        _, sent, clock = run([], {"x": ["/x"]})
+        clock.pace.check_page.assert_called_once_with("shop", "Network.disable")    # looked at once the listening stopped
 
     def test_re_part_is_a_regular_expression(self):
         got, _, _ = run([response("r1", "https://api.test/favorites?all"), finished("r1"),

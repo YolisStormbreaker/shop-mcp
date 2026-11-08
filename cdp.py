@@ -12,12 +12,14 @@ from pathlib import Path
 
 from websockets.sync.client import connect
 
+import pace
 from shoplog import log
 
 CDP = "http://127.0.0.1:9222"
 _ids = itertools.count(1)
-_last_nav: dict[str, float] = {}
-MIN_GAP = 4.0  # seconds between page loads on one site, keeps us under anti-bot radar
+# what a loaded page shows, for pace.check_page: a block page is recognised by its address, title or short text
+PROBE_JS = ("({url: location.href, title: document.title, text: (document.body ? document.body.innerText : '').slice(0, 400), "
+            "size: (document.body ? document.body.innerText.length : 0), slider: !!document.querySelector('.baxia-dialog-content')})")
 LOCKS = Path(__file__).parent / "cache"
 LOCK_WAIT = 300  # s; a first full ozon_orders pass holds the tab ~3 min
 
@@ -132,11 +134,19 @@ class Tab:
         return True
 
     def goto(self, url: str, site: str, wait_js: str | None = None, timeout: float = 30):
-        gap = MIN_GAP - (time.time() - _last_nav.get(site, 0))
-        if gap > 0:
-            time.sleep(gap)
-        _last_nav[site] = time.time()
+        """Load url once the site's budget gives a slot (pace); a block page there stops the site and raises pace.Refused."""
+        pace.acquire(site, "page")
         self.call("Page.navigate", url=url)
+        self._settle(wait_js, timeout)
+        pace.check_page(site, self._probe())
+
+    def _probe(self):
+        try:
+            return self.js(PROBE_JS, timeout=5)
+        except Exception:
+            return None
+
+    def _settle(self, wait_js, timeout):
         deadline = time.time() + timeout
         time.sleep(1.5)
         while time.time() < deadline:
@@ -180,6 +190,7 @@ def page_json(tab: Tab, method: str, path: str, body, home: str, site: str):
         opts["headers"] = {"Content-Type": "application/json"}
         opts["body"] = json.dumps(body)
     for retried in (False, True):
+        pace.acquire(site, "api")
         r = tab.js(f"fetch({json.dumps(path)}, {json.dumps(opts)}).then(async r => ({{s: r.status, b: await r.text()}}))")
         try:
             return json.loads(r["b"])
@@ -187,6 +198,7 @@ def page_json(tab: Tab, method: str, path: str, body, home: str, site: str):
             log.warning("%s %s %s: %s non-JSON%s", site, method, path, r["s"], " again after reload" if retried else "")
         if not retried:
             tab.goto(home, site, wait_js="document.readyState === 'complete'")
+    pace.blocked(site, "check", f"ответ {r['s']} не JSON и после перезагрузки (вероятно, проверка на бота)")
     return None
 
 

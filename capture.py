@@ -10,6 +10,7 @@ import re
 import time
 
 import cdp
+import pace
 
 
 def capture(tab, site, url, patterns, timeout=20, rewrite=None, js=None, optional=()):
@@ -27,7 +28,7 @@ def capture(tab, site, url, patterns, timeout=20, rewrite=None, js=None, optiona
     optional: names the page may never ask for (Wildberries' seller card for its own goods); once every other
     name is in, they get OPTIONAL_WAIT seconds more, not the rest of timeout.
     """
-    _wait_turn(site)
+    pace.acquire(site, "page")
     ws = tab.ws
     _send(ws, "Network.enable")
     if rewrite:
@@ -42,21 +43,16 @@ def capture(tab, site, url, patterns, timeout=20, rewrite=None, js=None, optiona
             _on(ws, _recv(ws), patterns, rewrite, pending, out)
             if optional and set(patterns) - set(optional) <= set(out):
                 deadline = min(deadline, time.time() + OPTIONAL_WAIT)
-        return out
     finally:
         if rewrite:
             _send(ws, "Fetch.disable")
         _send(ws, "Network.disable")
+    if len(out) < len(patterns):
+        pace.check_page(site, tab._probe())        # a missing answer may be a block page: then it stops the site for all
+    return out
 
 
 OPTIONAL_WAIT = 3
-
-
-def _wait_turn(site):
-    gap = cdp.MIN_GAP - (time.time() - cdp._last_nav.get(site, 0))
-    if gap > 0:
-        time.sleep(gap)
-    cdp._last_nav[site] = time.time()
 
 
 def _send(ws, method, **params):

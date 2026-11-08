@@ -94,9 +94,15 @@ class PageJsonTests(unittest.TestCase):
     def page_json(self, *answers, method="GET", body=None):
         tab = MagicMock()
         tab.js.side_effect = [{"s": s, "b": b} for s, b in answers]
-        with patch.object(cdp, "log") as log:
+        with patch.object(cdp, "log") as log, patch.object(cdp, "pace") as pace:
             got = cdp.page_json(tab, method, "/api/x", body, "https://shop.test/", "shop")
+        self.pace = pace
         return got, tab, log
+
+    def test_every_fetch_takes_a_slot_of_the_shared_budget(self):
+        self.page_json((403, "<html>"), (200, "[1]"))
+        self.assertEqual(self.pace.acquire.call_args_list, [call("shop", "api")] * 2)
+        self.pace.blocked.assert_not_called()
 
     def test_json_answer(self):
         got, tab, _ = self.page_json((200, '{"ok": 1}'))
@@ -114,19 +120,22 @@ class PageJsonTests(unittest.TestCase):
         tab.goto.assert_called_once_with("https://shop.test/", "shop", wait_js="document.readyState === 'complete'")
         self.assertEqual(log.warning.call_args.args, ("%s %s %s: %s non-JSON%s", "shop", "GET", "/api/x", 403, ""))
 
-    def test_second_non_json_answer_gives_none(self):
+    def test_second_non_json_answer_gives_none_and_stops_the_site(self):
         got, tab, log = self.page_json((403, "<html>"), (403, "<html>"))
         self.assertIsNone(got)
         tab.goto.assert_called_once()
         self.assertEqual(log.warning.call_args.args[-1], " again after reload")
+        self.pace.blocked.assert_called_once_with("shop", "check", "ответ 403 не JSON и после перезагрузки (вероятно, проверка на бота)")
 
 
 class TabTests(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
-        for p in (patch.object(cdp, "time", self.clock), patch.object(cdp, "log"), patch.dict(cdp._last_nav, clear=True)):
+        for p in (patch.object(cdp, "time", self.clock), patch.object(cdp, "log")):
             self.addCleanup(p.stop)
             p.start()
+        self.pace = patch.object(cdp, "pace").start()
+        self.addCleanup(patch.stopall)
 
     def tab(self, *replies, lock=None):
         ws = FakeWS(*replies)
@@ -230,46 +239,43 @@ class TabTests(unittest.TestCase):
 
     # goto
     def test_goto_navigates_and_returns_once_the_page_is_interactive(self):
-        tab, ws = self.tab(OK, value("loading"), value("interactive"))
+        page = {"url": "https://shop.test/p/1", "title": "Товар", "text": "Купить", "size": 9000, "slider": False}
+        tab, ws = self.tab(OK, value("loading"), value("interactive"), value(page))
         self.assertIsNone(tab.goto("https://shop.test/p/1", "shop"))
         self.assertEqual(ws.sent[0]["method"], "Page.navigate")
         self.assertEqual(ws.sent[0]["params"], {"url": "https://shop.test/p/1"})
-        self.assertEqual(ws.expressions(), ["document.readyState"] * 2)
+        self.assertEqual(ws.expressions(), ["document.readyState"] * 2 + [cdp.PROBE_JS])
         self.assertEqual(self.clock.slept, [1.5, 0.7])
-        self.assertEqual(cdp._last_nav["shop"], 1000.0)
+        self.pace.check_page.assert_called_once_with("shop", page)    # a block page stops the site for every process
+
+    def test_goto_takes_the_site_s_page_slot_before_navigating(self):
+        tab, ws = self.tab(OK, value("complete"))
+        self.pace.acquire.side_effect = lambda *a: self.assertEqual(ws.sent, [])
+        tab.goto("https://shop.test/", "shop")
+        self.pace.acquire.assert_called_once_with("shop", "page")
+
+    def test_goto_onto_a_block_page_raises_the_explanation(self):
+        self.pace.check_page.side_effect = RuntimeError("⏸ стоп")
+        tab, _ = self.tab(OK, value("complete"))
+        with self.assertRaisesRegex(RuntimeError, "⏸ стоп"):
+            tab.goto("https://shop.test/", "shop")
 
     def test_goto_waits_for_the_condition_as_a_boolean(self):
         tab, ws = self.tab(OK, value("complete"), value(False), value("complete"), value(True))
         tab.goto("https://shop.test/", "shop", wait_js="document.querySelector('.card')")
-        self.assertEqual(ws.expressions(), ["document.readyState", "!!(document.querySelector('.card'))"] * 2)
-
-    def test_goto_keeps_loads_on_one_site_min_gap_apart(self):
-        for ago in (1.0, 3.5):
-            with self.subTest(ago):
-                self.clock.slept.clear()
-                cdp._last_nav["shop"] = self.clock.now - ago
-                tab, _ = self.tab(OK, value("complete"))
-                start = self.clock.now
-                tab.goto("https://shop.test/", "shop")
-                self.assertEqual(self.clock.slept[0], cdp.MIN_GAP - ago)
-                self.assertEqual(cdp._last_nav["shop"], start + cdp.MIN_GAP - ago)
-
-    def test_goto_does_not_wait_after_another_site(self):
-        cdp._last_nav["other"] = 999.0
-        tab, _ = self.tab(OK, value("complete"))
-        tab.goto("https://shop.test/", "shop")
-        self.assertEqual(self.clock.slept, [1.5])
+        self.assertEqual(ws.expressions(), ["document.readyState", "!!(document.querySelector('.card'))"] * 2 + [cdp.PROBE_JS])
 
     def test_goto_polls_through_a_document_swap(self):
         tab, ws = self.tab(OK, FAILED, value("complete"))
         tab.goto("https://shop.test/", "shop")
-        self.assertEqual(len(ws.expressions()), 2)
+        self.assertEqual(len(ws.expressions()), 3)
 
     def test_goto_gives_up_quietly_at_its_timeout(self):
         tab, ws = self.tab(OK)                          # Chrome never answers readyState
         self.assertIsNone(tab.goto("https://shop.test/", "shop", timeout=3))
-        self.assertEqual(len(ws.expressions()), 3)       # at 1.5, 2.2 and 2.9 s
+        self.assertEqual(len(ws.expressions()), 4)       # at 1.5, 2.2 and 2.9 s, then the page check
         self.assertGreaterEqual(self.clock.now, 1003)
+        self.pace.check_page.assert_called_once_with("shop", None)     # the page could not be read
 
     # heal
     def test_clean_page_is_left_alone(self):
