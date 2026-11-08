@@ -5,6 +5,9 @@ Every site module has the same functions:
   product(id_or_url) -> product with the card's details (or a str: the site's own message, e.g. a bot check)
   reviews(id_or_url, ...) -> str      (only where the site has reviews)
   cart() -> str      add_to_cart(id_or_url, quantity=1) -> str      remove_from_cart(id_or_url) -> str
+  set_cart_quantity(id_or_url, quantity) -> str   the line's new count: fewer by the site's «−», more as add_to_cart
+      adds them, 0 = remove_from_cart; the reply names the product and the count the cart then shows, with «⚠️ …
+      а не N — why» when it holds another count; quantity < 0 -> "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
   favorites() -> str      favorite(id_or_url, remove=False) -> str
 where product = {"id", "name", "brand", "size", "price", "old", "available", "url", "rating", "reviews", "ean",
 and from product() also "photos": [url], "description", "composition" (the «Состав» text),

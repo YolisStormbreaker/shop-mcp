@@ -105,8 +105,8 @@ perekrestok — Перекрёсток, 5ka — Пятёрочка, vkusvill —
   (%какао, %томат, %мясо). Перед советом сверь, что товар тот (сайты подмешивают соседние).
   «Сахара ≤ углеводов» — сайты почти никогда не пишут сахар отдельно.
 - Карточка — grocery_item; отзывы — grocery_reviews (Перекрёсток, Пятёрочка, Лента; у Самоката и Лавки нет).
-- Корзина и избранное (grocery_cart, grocery_add_to_cart, grocery_remove_from_cart, grocery_favorites,
-  grocery_favorite) меняют аккаунт — только по явной просьбе. Избранного нет у Самоката и Пятёрочки.
+- Корзина и избранное (grocery_cart, grocery_add_to_cart, grocery_remove_from_cart, grocery_set_cart_quantity,
+  grocery_favorites, grocery_favorite) меняют аккаунт — только по явной просьбе. Избранного нет у Самоката и Пятёрочки.
 - Перекрёсток и Пятёрочка (и Самокат при загрузке страниц) закрыты проверкой ServicePipe: после долгой серии запросов она
   включается, и инструмент так и пишет — попроси пользователя пройти её (shop-chrome show). Не делай
   десятки запросов подряд в один магазин без нужды.
@@ -850,6 +850,16 @@ def grocery_add_to_cart(store: str, id_or_url: str, quantity: int = 1) -> str:
 def grocery_remove_from_cart(store: str, id_or_url: str) -> str:
     """Продукты: убрать товар из корзины магазина (только по явной просьбе пользователя). store: lenta (Лента), samokat (Самокат), lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка), vkusvill (ВкусВилл)."""
     return grocery.call(store, "remove_from_cart", id_or_url)
+
+
+@mcp.tool()
+@logged
+def grocery_set_cart_quantity(store: str, id_or_url: str, quantity: int) -> str:
+    """Продукты: сколько штук товара оставить в корзине магазина (меняет аккаунт пользователя — только по его явной
+    просьбе): quantity — новое число штук, 0 убирает строку. Меньше — кнопкой «−» сайта, больше — как grocery_add_to_cart.
+    Отвечает, сколько стало, и почему не столько, если сайт не дал. store: lenta (Лента), samokat (Самокат),
+    lavka (Яндекс Лавка), perekrestok (Перекрёсток), 5ka (Пятёрочка), vkusvill (ВкусВилл)."""
+    return grocery.call(store, "set_cart_quantity", id_or_url, quantity)
 
 
 @mcp.tool()
