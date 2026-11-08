@@ -494,7 +494,7 @@ class SetCartQuantityTests(unittest.TestCase):
                 self.assertEqual((clicks, gotos), ([PLUS] * (24 - 2 * qty), [PAGE, RELOAD, RELOAD]))
 
     def test_thirty_presses_a_call(self):
-        for shop, want, why in ((Shop(qty=1), 99, "не больше 30 нажатий за вызов: повторите"),
+        for shop, want, why in ((Shop(qty=1), 99, "не больше 30 нажатий за вызов — вызови ещё раз"),
                                 (Shop(qty=1, kept=[30]), 31, "Пятёрочка не подтвердила изменение")):   # 30 were enough
             with self.subTest(want):
                 got = self.set(shop, want, {})

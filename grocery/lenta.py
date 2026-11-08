@@ -18,6 +18,7 @@ from shoplog import log
 
 from .composition import nutrition_from_text
 from .ids import NUMBER, first_group
+from .limits import CAPPED
 
 SITE = "https://lenta.com"
 BLOCKED = "⚠️ Лента не отдала данные (проверка на бота или сайт не загрузился): shop-chrome show, открыть lenta.com, повторить."
@@ -417,7 +418,7 @@ def _why(buttons, pressed, diff):
     """The page took the button away, 30 presses were not enough, or the site did not say."""
     if pressed < len(buttons):
         return GONE[buttons[0]]
-    return "не больше 30 нажатий за вызов, повтори" if diff > 30 else "Лента не подтвердила изменение"
+    return CAPPED if diff > 30 else "Лента не подтвердила изменение"
 
 
 def _favorite_ids(tab):

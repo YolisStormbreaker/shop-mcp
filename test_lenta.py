@@ -469,7 +469,7 @@ class LentaSetCartQuantityTests(unittest.TestCase):
                    [PAGE] + [("+", MODIFY)] * 30 + [PAGE])
 
     def test_at_most_thirty_presses(self):
-        self.check(Shop(qty=1), 40, "⚠️ в корзине 31 шт., а не 40: Кефир 2,5% — не больше 30 нажатий за вызов, повтори",
+        self.check(Shop(qty=1), 40, "⚠️ в корзине 31 шт., а не 40: Кефир 2,5% — не больше 30 нажатий за вызов — вызови ещё раз",
                    [PAGE] + [("+", MODIFY)] * 30 + [PAGE])
 
 

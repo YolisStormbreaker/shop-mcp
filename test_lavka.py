@@ -432,7 +432,7 @@ class LavkaSetCartQuantityTests(unittest.TestCase):
 
     def test_not_confirmed(self):
         # no buttons, so the count stays; the limit is named only when more were asked and the count stands at it
-        for qty, want, limit in ((1, 3, None), (3, 1, 3), (1, 3, 5)):
+        for qty, want, limit in ((1, 3, None), (3, 1, 3), (1, 3, 5), (1, 31, None)):     # 30 presses were enough for 1 -> 31
             with self.subTest(qty=qty, want=want, limit=limit):
                 shop = Shop(qty=qty, buttons=False, good=dict(GOOD, maxAmount=limit))
                 self.assertEqual(shop.run(lavka.set_cart_quantity, "a1b2", want),
@@ -443,7 +443,7 @@ class LavkaSetCartQuantityTests(unittest.TestCase):
             with self.subTest(want):
                 shop = Shop(qty=qty)
                 self.assertEqual(shop.run(lavka.set_cart_quantity, "a1b2", want),
-                                 f"⚠️ в корзине {left} шт., а не {want}: Кефир 2,5% — Лавка не подтвердила изменение")
+                                 f"⚠️ в корзине {left} шт., а не {want}: Кефир 2,5% — не больше 30 нажатий за вызов — вызови ещё раз")
                 self.assertEqual(shop.sent, [OPEN, PAGE, RETRIEVE] + [press] * 30 + [RETRIEVE])
 
     def test_answers_the_other_cart_functions_give(self):

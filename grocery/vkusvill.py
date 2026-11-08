@@ -18,6 +18,7 @@ from shoplog import log
 
 from .composition import nutrition_from_text
 from .ids import NUMBER, first_group
+from .limits import CAPPED
 
 MCP = "https://mcp.vkusvill.ru/mcp"
 SITE = "https://vkusvill.ru"
@@ -409,7 +410,7 @@ def _short(line, start, now, want):
     if mx and want > now >= mx:
         return f"на адрес пользователя есть только {mx:g} шт."
     if abs(want - start) > 30:
-        return "за один вызов не больше 30 нажатий, вызови ещё раз"
+        return CAPPED
     return "ВкусВилл не подтвердил изменение"
 
 

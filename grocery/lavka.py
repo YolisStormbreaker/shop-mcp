@@ -14,6 +14,8 @@ import urllib.parse
 from cdp import site_tab
 from shoplog import log
 
+from .limits import CAPPED
+
 SITE = "https://lavka.yandex.ru"
 BLOCKED = "⚠️ Лавка не ответила (капча Яндекса или сайт не загрузился): shop-chrome show, открыть lavka.yandex.ru, повторить."
 POST_JS = """(async (path, body, depot) => {
@@ -374,10 +376,10 @@ def set_cart_quantity(id_or_url, quantity):
         got = _cart_items(tab, depot)
     finally:
         tab.close()
-    return _set(c, depot, want, got)
+    return _set(c, depot, now, want, got)
 
 
-def _set(c, depot, want, got):
+def _set(c, depot, start, want, got):
     title = _clean(c.get("longTitle"))
     if got is None:
         return UNCHECKED.format(title)
@@ -386,7 +388,8 @@ def _set(c, depot, want, got):
     if n == want:
         return _shows(title, depot, n, r)
     cap = c.get("maxAmount")          # what the site lets order (stock or its limit), the same as its quantityLimit; «+» does nothing past it
-    why = f"Лавка даёт не больше {cap} шт." if cap and want > n >= cap else "Лавка не подтвердила изменение"
+    why = (f"Лавка даёт не больше {cap} шт." if cap and want > n >= cap
+           else CAPPED if abs(want - start) > 30 else "Лавка не подтвердила изменение")
     return f"⚠️ в корзине {n:g} шт., а не {want}: {title} — {why}"
 
 

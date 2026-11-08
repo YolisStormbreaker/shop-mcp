@@ -455,7 +455,7 @@ class VkusvillSetCartQuantityTests(unittest.TestCase):
         for start, want, now, button in ((1, 99, 31, "+"), (40, 1, 10, "−")):
             with self.subTest(want):
                 got, clicks, _, _ = change(vkusvill.set_cart_quantity, Site(qty=start), "158", want)
-                self.assertEqual((got, clicks), (shows(now, want, "за один вызов не больше 30 нажатий, вызови ещё раз"), [button] * 30))
+                self.assertEqual((got, clicks), (shows(now, want, "не больше 30 нажатий за вызов — вызови ещё раз"), [button] * 30))
 
     def test_a_line_gone_after_the_presses_shows_none(self):
         self.assertEqual(vkusvill._set_text("Кефир", 3, {}, 2), shows(0, 2, "ВкусВилл не подтвердил изменение"))

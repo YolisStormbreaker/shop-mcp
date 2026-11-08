@@ -14,6 +14,7 @@ from cdp import tab_for
 from shoplog import log
 
 from .ids import NUMBER, first_group
+from .limits import CAPPED
 
 API = "https://5d.5ka.ru/api/catalog"
 REVIEWS = "https://gw-fb5.x5.ru/api/product-review/v1"
@@ -438,7 +439,7 @@ def _why(tab, plu, start, n, want):
     cap = next((why.format(_num(c[k])) for k, why in CAPS if _num(c.get(k)) and n >= _num(c[k])), None)
     if cap:
         return cap
-    return "не больше 30 нажатий за вызов: повторите" if abs(want - start) > 30 else "Пятёрочка не подтвердила изменение"
+    return CAPPED if abs(want - start) > 30 else "Пятёрочка не подтвердила изменение"
 
 
 def cart():
