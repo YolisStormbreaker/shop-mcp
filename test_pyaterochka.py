@@ -1,5 +1,5 @@
 """Пятёрочка: search, product card and reviews from the site's API answers; the tab and the fetch; the cart, with
-the buttons add_to_cart and remove_from_cart would press on a fake product page.
+the buttons add_to_cart, remove_from_cart and set_cart_quantity would press on a fake product page.
 No requests to shops.  Run: .venv/bin/python -B -m unittest -v test_pyaterochka"""
 import re
 import time
@@ -325,6 +325,8 @@ class Shop:
             return "Кефир 2,5%"
         if expr == "!!document.querySelector('[data-qa=\"delivery-modal\"]')":
             return self.modal
+        if expr == pyaterochka.STATE_JS:
+            return STATE
         qa = re.search(r'data-qa="([\w-]+)"', expr).group(1)
         assert "b.click()" in expr and "product-card-" in expr, expr      # the product's own button, not a card's below
         if qa not in self.buttons():
@@ -444,6 +446,66 @@ class RemoveFromCartTests(unittest.TestCase):
     def test_not_a_plu(self):
         with patch.object(pyaterochka, "_tab") as tab, self.assertRaises(ValueError):
             pyaterochka.remove_from_cart("кефир")
+        tab.assert_not_called()
+
+
+CARD_URL = f"{API}/v2/stores/S1/products/97001?mode=delivery&include_restrict=true"
+ADDRESS = "Пятёрочка просит адрес доставки: выберите его на 5ka.ru (shop-chrome show), потом повторите"
+
+
+def kept(have, want, why):
+    return f"⚠️ в корзине {have} шт., а не {want}: Кефир 2,5% — {why}"
+
+
+class SetCartQuantityTests(unittest.TestCase):
+    def set(self, shop, quantity, card=None):
+        """set_cart_quantity on the shop's page with the product card the site would give: (answer, clicks, pages, card URLs)."""
+        with patch.object(pyaterochka, "_get", return_value=card) as get:
+            got = change(pyaterochka.set_cart_quantity, shop, "https://5ka.ru/product/kefir--97001/", quantity)
+        return got + ([c.args[1] for c in get.call_args_list],)
+
+    def test_from_the_cart_count_to_the_new_one(self):
+        for qty, want, clicks, gotos, answer in (
+                (3, 1, [MINUS, MINUS], [PAGE, RELOAD], ADDED.format(1)),          # fewer: «−»
+                (1, 3, [PLUS, PLUS], [PAGE, RELOAD], ADDED.format(3)),            # more: «+» for the difference
+                (2, "2", [], [PAGE], ADDED.format(2)),                            # the same: no press, no reload
+                (2, 0, [MINUS, BIN], [PAGE, RELOAD], "убрано из корзины Пятёрочки: Кефир 2,5%"),   # 0: remove_from_cart
+                (0, 2, [], [PAGE], "«Кефир 2,5%» в корзине Пятёрочки нет")):
+            with self.subTest(qty=qty, want=want):
+                self.assertEqual(self.set(Shop(qty=qty), want), (answer, clicks, gotos, []))
+
+    def test_a_second_round_when_the_server_kept_another_count(self):
+        self.assertEqual(self.set(Shop(qty=1, kept=[2]), 3), (ADDED.format(3), [PLUS] * 3, [PAGE, RELOAD, RELOAD], []))
+
+    def test_kept_after_both_rounds(self):
+        self.assertEqual(self.set(Shop(qty=30, kept=[29, 29]), 28),
+                         (kept(29, 28, "Пятёрочка не подтвердила изменение"), [MINUS] * 3, [PAGE, RELOAD, RELOAD], []))
+
+    def test_more_than_the_site_gives_names_its_limit(self):
+        limits = {"max_qty_per_order": "10.0", "stock_limit": "59.00"}
+        for qty, card, why in ((10, limits, "Пятёрочка продаёт не больше 10 шт. в один заказ"),
+                               (11, limits, "Пятёрочка продаёт не больше 10 шт. в один заказ"),
+                               (3, {**limits, "stock_limit": "3.00"}, "в магазине всего 3 шт."),
+                               (3, limits, "Пятёрочка не подтвердила изменение"),
+                               (3, None, "Пятёрочка не подтвердила изменение")):
+            with self.subTest(qty=qty, card=card):
+                got, clicks, gotos, urls = self.set(Shop(qty=qty, ignored=[PLUS]), 12, card)
+                self.assertEqual((got, urls), (kept(qty, 12, why), [CARD_URL]))
+                self.assertEqual((clicks, gotos), ([PLUS] * (24 - 2 * qty), [PAGE, RELOAD, RELOAD]))
+
+    def test_thirty_presses_a_call(self):
+        for shop, want, why in ((Shop(qty=1), 99, "не больше 30 нажатий за вызов: повторите"),
+                                (Shop(qty=1, kept=[30]), 31, "Пятёрочка не подтвердила изменение")):   # 30 were enough
+            with self.subTest(want):
+                got = self.set(shop, want, {})
+                self.assertEqual(got, (kept(shop.qty, want, why), [PLUS] * 30, [PAGE, RELOAD], [CARD_URL]))
+
+    def test_the_site_asks_for_an_address(self):
+        self.assertEqual(self.set(Shop(qty=1, modal=True), 3), (ADDRESS, [PLUS], [PAGE], []))
+
+    def test_below_zero(self):
+        with patch.object(pyaterochka, "_tab") as tab:
+            self.assertEqual(pyaterochka.set_cart_quantity("97001", -1), "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)")
         tab.assert_not_called()
 
 

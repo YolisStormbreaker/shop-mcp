@@ -338,6 +338,10 @@ def _asks_address(tab, plu, buttons):
     return False
 
 
+ADDRESS = "Пятёрочка просит адрес доставки: выберите его на 5ka.ru (shop-chrome show), потом повторите"
+IN_CART, NOT_IN = "в корзине Пятёрочки: {} — {:g} шт; корзина {} ₽", "«{}» в корзине Пятёрочки нет"
+
+
 def add_to_cart(id_or_url, quantity=1):
     plu = _plu(id_or_url)
     tab = _tab()
@@ -345,13 +349,13 @@ def add_to_cart(id_or_url, quantity=1):
         name = _open(tab, plu)
         start = _qty(tab, plu)
         if _asks_address(tab, plu, _add_buttons(start, quantity)):
-            return "Пятёрочка просит адрес доставки: выберите его на 5ka.ru (shop-chrome show), потом повторите"
+            return ADDRESS
         n, cart = _settled(tab, plu), tab.js(CART_JS)
     finally:
         tab.close()
     if n <= start:
         return f"Пятёрочка не положила «{name}» в корзину (нет в наличии?)"
-    return f"в корзине Пятёрочки: {name} — {n:g} шт; корзина {cart.get('total')} ₽"
+    return IN_CART.format(name, n, cart.get("total"))
 
 
 def _take_out(tab, plu):
@@ -378,7 +382,63 @@ def remove_from_cart(id_or_url):
         tab.close()
     if left:
         return f"не удалось убрать «{name}» из корзины Пятёрочки"
-    return f"убрано из корзины Пятёрочки: {name}" if pressed else f"«{name}» в корзине Пятёрочки нет"
+    return f"убрано из корзины Пятёрочки: {name}" if pressed else NOT_IN.format(name)
+
+
+def set_cart_quantity(id_or_url, quantity):
+    if int(quantity) < 0:
+        return "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
+    if not int(quantity):
+        return remove_from_cart(id_or_url)              # how a line leaves the cart is decided there
+    plu, want = _plu(id_or_url), int(quantity)
+    tab = _tab()
+    try:
+        name = _open(tab, plu)
+        start = _qty(tab, plu)
+        if not start:
+            return NOT_IN.format(name)
+        n = _set(tab, plu, start, want)
+        if n is None:
+            return ADDRESS
+        if n == want:
+            return IN_CART.format(name, n, tab.js(CART_JS).get("total"))
+        return f"⚠️ в корзине {n:g} шт., а не {want}: {name} — {_why(tab, plu, start, n, want)}"
+    finally:
+        tab.close()
+
+
+def _toward(n, want):
+    """The presses from n in the cart to want: «+» for the difference as add_to_cart adds it, «−» for fewer (want ≥ 1, so
+    never the bin), none for the same."""
+    return _add_buttons(n, want - n) if want > n else [MINUS] * int(n - want)
+
+
+def _set(tab, plu, n, want):
+    """Presses toward want, read back once the server settled, and a second round from what it kept; 30 presses in all.
+    The count the cart then holds, None when the site asks for a delivery address instead."""
+    left = 30
+    for _ in range(2):
+        buttons = _toward(n, want)[:left]
+        if not buttons:
+            return n
+        if _asks_address(tab, plu, buttons):
+            return None
+        left -= len(buttons)
+        n = _settled(tab, plu)
+    return n
+
+
+CAPS = (("max_qty_per_order", "Пятёрочка продаёт не больше {:g} шт. в один заказ"), ("stock_limit", "в магазине всего {:g} шт."))
+
+
+def _why(tab, plu, start, n, want):
+    """Why the cart holds n, not want: the card's limit per order or the store's stock when n reached it, the 30 presses
+    of one call, else the site did not take the change."""
+    c = (_get(tab, f"{API}/v2/stores/{_ctx(tab)[0]}/products/{plu}?mode=delivery&include_restrict=true") if want > n else None) or {}
+    cap = next((why.format(_num(c[k])) for k, why in CAPS if _num(c.get(k)) and n >= _num(c[k])), None)
+    if cap:
+        return cap
+    return "не больше 30 нажатий за вызов: повторите" if abs(want - start) > 30 else "Пятёрочка не подтвердила изменение"
 
 
 def cart():
