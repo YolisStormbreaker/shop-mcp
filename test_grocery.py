@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import grocery
+import pace
 
 
 def prod(id, name, price, size="", old=None, available=True, rating=None, reviews=None, brand="", ean=None, url=None, **card):
@@ -122,6 +123,13 @@ AIRAN = [prod(f"y{i}", f"Айран {n}", p) for i, (n, p) in
 
 
 class CompareTests(unittest.TestCase):
+    def test_a_store_stopped_by_the_shared_budget_gives_its_whole_explanation(self):
+        stop = pace.Refused("⏸ Перекрёсток: блокировка по IP — «Проблемы со связью» (ServicePipe), с 15:09. Запросы к сайту "
+                            "остановлены до 21:09 (ещё 6 ч 0 мин) для всех: MCP, агентов и скриптов. Не повторяй до этого времени.")
+        with stores(lenta=Store(found(L1)), perekrestok=Store(stop)):
+            got = grocery.compare("кефир")
+        self.assertIn("Перекрёсток: " + str(stop), got.splitlines())          # not «ошибка:», not cut at 150
+
     def test_all_stores_grouped(self):
         fakes = dict(lenta=Store(found(L1, L2, L3, L4, L5)), samokat=Store(SLOW), lavka=Store(found(*AIRAN)),
                      perekrestok=Store(BOT), ka5=Store(found(F1, F2)), vkusvill=Store(found(V1, V2, V3)))

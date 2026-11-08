@@ -17,6 +17,8 @@ and from product() also "photos": [url], "description", "composition" (the «С�
 import re
 from concurrent.futures import ThreadPoolExecutor
 
+import pace
+
 from . import composition, lavka, lenta, perekrestok, pyaterochka, samokat, vkusvill
 
 STORES = {"lenta": lenta, "samokat": samokat, "lavka": lavka, "perekrestok": perekrestok, "5ka": pyaterochka, "vkusvill": vkusvill}
@@ -167,6 +169,8 @@ def _safe(fn, *args):
     """fn(*args), or «ошибка: …» if it raises: one store failing is a note, not the whole tool failing."""
     try:
         return fn(*args)
+    except pace.Refused as e:
+        return str(e)          # the shared budget's stop: its whole explanation, it says until when and what to do
     except Exception as e:
         return f"ошибка: {str(e)[:150]}"
 
