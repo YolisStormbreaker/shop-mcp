@@ -403,7 +403,8 @@ def _plus(tab, plu, n):
 
 def set_cart_quantity(id_or_url, quantity):
     """The line at quantity pieces by the site's own setItem (PUT /basket/<product id>/amount); 0 removes it.
-    shortcut: a weighed line's amount goes in the cart's own units, not tried on one live; try one before trusting it."""
+    The amount is in thousandths of the line's unit, as the site's amount wheel lists them: 1 шт = 1000 (a plain
+    count answers 412). shortcut: a weighed line (кг) is sent the same way, not tried live; try one before trusting it."""
     if int(quantity) < 0:
         return "quantity — сколько штук оставить в строке, от 0 (0 убирает строку)"
     if not int(quantity):
@@ -427,7 +428,7 @@ def _set_amount(tab, b, plu, pid, want):
     """(the basket after setting plu's line to want, the site's refusal or None); b as it is when it holds want already."""
     if _line(b, plu)[0].get("quantity") == want:
         return b, None
-    r = _call(tab, "put", f"/basket/{pid}/amount", {"amount": want})
+    r = _call(tab, "put", f"/basket/{pid}/amount", {"amount": round(want * 1000)})
     return _call(tab, "get", "/basket") or {}, (r["__error"] if _failed(r) else None)
 
 

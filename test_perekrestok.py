@@ -374,7 +374,8 @@ class Basket:
     def amount(self, body):
         if self.amount_answer:
             return self.amount_answer
-        self.lines["7001"] = body["amount"] if self.stock is None else min(body["amount"], self.stock)
+        n = body["amount"] // 1000        # thousandths of the line's unit, as the site's amount wheel lists them (live 2026-11-08)
+        self.lines["7001"] = n if self.stock is None else min(n, self.stock)
         return self.view()
 
     def remove(self, _):
@@ -483,8 +484,8 @@ class RemoveFromCartTests(unittest.TestCase):
 
 
 def amount(n):
-    """The site's own setItem: PUT /basket/<product id>/amount."""
-    return ("put", "/basket/7001/amount", {"amount": n})
+    """The site's own setItem: PUT /basket/<product id>/amount, in thousandths of a piece (1 шт = 1000)."""
+    return ("put", "/basket/7001/amount", {"amount": n * 1000})
 
 
 class SetCartQuantityTests(unittest.TestCase):
