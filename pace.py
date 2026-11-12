@@ -54,11 +54,14 @@ POLICY = {
     "samokat": Policy(gap={"page": 20.0, "api": 2.0}, caps=((60, 15), (600, 60), (3600, 200)),               # its check after
                       cool=SERVICEPIPE.cool),                                                              # a handful of loads
     "eldorado": NEW, "mvideo": NEW, "dns": NEW, "citilink": NEW,                                   # added 2026-11-12
+    "holodilnik": NEW, "biggeek": NEW, "naknak": NEW, "doctorhead": NEW, "onlinetrade": NEW,       # added 2026-11-12
+    "technopark": NEW, "pitergsm": NEW,
 }
 NAMES = {"ozon": "Ozon", "wb": "Wildberries", "ym": "Яндекс Маркет", "ali": "AliExpress", "avito": "Авито", "lamoda": "Lamoda",
          "goldapple": "Золотое яблоко", "lenta": "Лента", "samokat": "Самокат", "lavka": "Яндекс Лавка", "perekrestok": "Перекрёсток",
          "5ka": "Пятёрочка", "vkusvill": "ВкусВилл", "eldorado": "Эльдорадо", "mvideo": "М.Видео", "dns": "DNS",
-         "citilink": "Ситилинк"}
+         "citilink": "Ситилинк", "holodilnik": "Холодильник.ру", "biggeek": "Biggeek", "naknak": "НакНак", "doctorhead": "Dr.Head",
+         "onlinetrade": "ОНЛАЙН ТРЕЙД.РУ", "technopark": "Технопарк", "pitergsm": "PiterGSM"}
 KINDS = {"check": "проверка на бота", "throttle": "сайт ограничил частоту", "ban": "блокировка по IP"}
 ADVICE = {"check": "Её может пройти человек: попроси пользователя пройти её во вкладке сайта (shop-chrome show), потом выполни "
                    "~/shop-mcp/shop-pace clear {site}.",
