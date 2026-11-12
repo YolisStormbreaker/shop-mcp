@@ -1,12 +1,11 @@
 """Search a shop site's own JavaScript — how its page calls its API (an endpoint, a request's body) — paced and cached.
 
 Reading a site's bundles is how this project learns a site's own requests. Fetching a hundred scripts in a burst, and
-again for every question, is part of what got the user's IP banned (Перекрёсток, 2026-11-08). Here each script is
-fetched once, each by a slot of the shared budget (pace), and kept in cache/bundles/<site>/; every later search reads
-the copies. A refusal keeps what was fetched: run it again after the time it names.
+again for every question, is part of what got the user's IP banned (Перекрёсток, 2026-11-08). Here one page load takes
+the site's slot of the shared budget (pace) and the scripts the page parsed are read from its debugger, with no request
+of their own (a fetch also failed on CDNs that refuse it by CORS: М.Видео, DNS). Copies go to cache/bundles/<site>/.
 Run: .venv/bin/python bundles.py <site> <page url> <regex> [context]"""
 import hashlib
-import json
 import re
 import sys
 import urllib.parse
@@ -14,28 +13,43 @@ from pathlib import Path
 
 import cdp
 import pace
+from capture import _recv, _send
 
 CACHE = Path(__file__).parent / "cache" / "bundles"
-SCRIPTS_JS = "[...new Set(performance.getEntriesByType('resource').map(e => e.name).filter(n => /\\.js(\\?|$)/.test(n)))]"
 
 
 def scripts(site, url):
-    """{script url: its text} for every script the page at url loaded: from the cache, the missing ones fetched."""
+    """{script url: its text} for every script the page at url parsed, read from the page's debugger: one page load
+    by the site's slot and no request of its own (a CDN refuses a page's fetch by CORS; a fetch would cost a slot)."""
     tab = cdp.tab_for(re.sub(r"^www\.", "", urllib.parse.urlsplit(url).hostname or ""))
     try:
         tab.goto(url, site, wait_js="document.readyState === 'complete'")
-        return {name: _text(tab, site, name) for name in tab.js(SCRIPTS_JS) or []}
+        texts = {name: tab.call("Debugger.getScriptSource", scriptId=sid)["scriptSource"] for name, sid in _parsed(tab).items()}
     finally:
         tab.close()
+    for name, text in texts.items():
+        _keep(site, name, text)
+    return texts
 
 
-def _text(tab, site, name):
+def _parsed(tab):
+    """{url: scriptId} of the page's scripts with an address: Debugger.enable reports every script parsed so far."""
+    ids, quiet = {}, 0
+    _send(tab.ws, "Debugger.enable")
+    while quiet < 2:                                   # two silent half-seconds: the report is over
+        m = _recv(tab.ws)
+        quiet = 0 if m else quiet + 1
+        p = m.get("params", {})
+        if m.get("method") == "Debugger.scriptParsed" and p.get("url", "").startswith("http"):
+            ids[p["url"]] = p["scriptId"]
+    return ids
+
+
+def _keep(site, name, text):
+    """A copy on disk, cache/bundles/<site>/, for reading again with other tools."""
     f = CACHE / site / (hashlib.sha1(name.encode()).hexdigest()[:16] + ".js")
-    if not f.exists():
-        pace.acquire(site, "api")
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(tab.js(f"fetch({json.dumps(name)}, {{credentials: 'include'}}).then(r => r.text())", timeout=60) or "")
-    return f.read_text()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(text)
 
 
 def search(texts, regex, context=160):
