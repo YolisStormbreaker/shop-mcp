@@ -37,6 +37,7 @@ import orders
 import ozon
 import pace
 import reviews
+import stores
 import wb
 import ym
 from shoplog import log
@@ -63,9 +64,10 @@ INSTRUCTIONS = """\
   питание), — сначала один короткий вопрос: «Где искать: в продуктовых магазинах (Лента, Перекрёсток, Пятёрочка,
   Самокат, Яндекс Лавка, ВкусВилл) или на маркетплейсах (Ozon, Wildberries, Яндекс Маркет)?» Если спросить не у
   кого (работаешь без собеседника) — ищи и там, и там.
-- Остальное — маркетплейсы: техника, дом, хобби — Ozon, Wildberries, Яндекс Маркет, AliExpress; электроника
-  и бытовая техника — ещё М.Видео, Эльдорадо, DNS и Ситилинк (магазины техники: официальные гарантия и возврат); одежда
-  и обувь — ещё Lamoda; косметика — ещё Золотое яблоко; с рук и б/у — Авито.
+- Остальное — по категории товара. Какие магазины её продают и чем они сильны — shop_stores(category), вся карта
+  с категориями — shop_stores(). Ищи сначала в специализированных магазинах категории, потом на маркетплейсах;
+  магазин, которого нет в строке категории, для неё не открывай. Кратко, категория: специализированные магазины —
+<ROUTING>
 
 Правила:
 - Прежде чем советовать товар, открой его *_item: в поиске данные неполные.
@@ -131,6 +133,7 @@ perekrestok — Перекрёсток, 5ka — Пятёрочка, vkusvill —
 товар есть в нескольких магазинах — по ссылке на каждый магазин.
 """
 
+INSTRUCTIONS = INSTRUCTIONS.replace("<ROUTING>", "\n".join("  " + line for line in stores.routing()))
 mcp = FastMCP("shop", instructions=INSTRUCTIONS)
 
 # A stdio server lives as long as the Claude session that started it, often for days, and kept
@@ -140,7 +143,7 @@ mcp = FastMCP("shop", instructions=INSTRUCTIONS)
 # old function until ozon itself is reloaded.
 # shoplog is left alone: reloading it would add a second log handler.
 # A new tool still needs a restart: tools are registered from server.py once, at start.
-_RELOADABLE = ("pace", "cdp", "capture", "images", "textsearch", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple",
+_RELOADABLE = ("pace", "stores", "cdp", "capture", "images", "textsearch", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple",
                "citilink", "mvideo", "eldorado", "dns",
                "grocery.composition", "grocery.ids", "grocery.limits", "grocery.lenta", "grocery.samokat", "grocery.lavka", "grocery.perekrestok", "grocery.pyaterochka", "grocery.vkusvill",
                "grocery")
@@ -1035,6 +1038,16 @@ def shop_limits() -> str:
     остановлены после проверки на бота или блокировки и до какого времени. Общий для всех сессий,
     агентов и скриптов. Посмотри перед длинной серией запросов и после ответа с «⏸»."""
     return pace.status()
+
+
+@mcp.tool()
+@logged
+def shop_stores(category: str = "") -> str:
+    """Какой магазин для чего: category — одна из категорий (phones, computers, tv_photo, audio, gaming, gadgets,
+    appliances_big, appliances_small, tools, auto, home, clothes, beauty, kids, sport, hobby, pets, health, food, used)
+    -> магазины, которые её продают: специализированные первыми, с тем, чем каждый силён. Без category — вся карта:
+    что есть в каждом магазине (или «всё, кроме …») и что входит в каждую категорию."""
+    return stores.answer(category)
 
 
 @mcp.tool()
