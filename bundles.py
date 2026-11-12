@@ -8,6 +8,7 @@ Run: .venv/bin/python bundles.py <site> <page url> <regex> [context]"""
 import hashlib
 import re
 import sys
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -33,12 +34,14 @@ def scripts(site, url):
 
 
 def _parsed(tab):
-    """{url: scriptId} of the page's scripts with an address: Debugger.enable reports every script parsed so far."""
-    ids, quiet = {}, 0
-    _send(tab.ws, "Debugger.enable")
-    while quiet < 2:                                   # two silent half-seconds: the report is over
+    """{url: scriptId} of the page's scripts with an address. Debugger.enable reports every script parsed so far, then
+    answers: read up to its answer — a busy page never falls silent (holodilnik.ru hung a quiet-time loop)."""
+    ids, deadline = {}, time.time() + 20
+    mid = _send(tab.ws, "Debugger.enable")
+    while time.time() < deadline:
         m = _recv(tab.ws)
-        quiet = 0 if m else quiet + 1
+        if m.get("id") == mid:
+            break
         p = m.get("params", {})
         if m.get("method") == "Debugger.scriptParsed" and p.get("url", "").startswith("http"):
             ids[p["url"]] = p["scriptId"]

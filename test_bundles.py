@@ -22,8 +22,10 @@ def parsed(sid, url):
 def fake_tab():
     """A tab whose debugger reports the page's scripts on Debugger.enable — two files, an inline one, an eval'd one
     without an address — and gives each one's source by its id."""
-    ws = FakeWs([{"id": 1, "result": {}}, parsed("1", "https://www.perekrestok.ru/a.js"), parsed("2", "https://cdn.test/b.js"),
-                 parsed("3", ""), parsed("4", "debugger://VM12")])
+    enabled = lambda sent: {"id": sent[-1]["id"], "result": {}}            # the answer to Debugger.enable comes after the report
+    noise = {"method": "Network.dataReceived", "params": {}}               # a busy page never falls silent
+    ws = FakeWs([parsed("1", "https://www.perekrestok.ru/a.js"), noise, parsed("2", "https://cdn.test/b.js"), parsed("3", ""),
+                 parsed("4", "debugger://VM12"), enabled, parsed("5", "https://late.test/c.js")] + [noise] * 50)
     sources = dict(zip(("1", "2"), SCRIPTS.values()))
     tab = MagicMock(ws=ws)
     tab.call.side_effect = lambda method, **p: {"scriptSource": sources[p["scriptId"]]} if method == "Debugger.getScriptSource" else {}
