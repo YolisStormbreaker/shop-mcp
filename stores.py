@@ -70,6 +70,21 @@ STORES = {
                                                                      "инструменты; есть продавцы маркетплейса"),
     "citilink": Store("Ситилинк", sells=TECH | {"tools", "auto", "home"}, note="электроника и техника, стройка и ремонт, "
                                                                                "товары для геймеров"),
+    "holodilnik": Store("Холодильник.ру", sells=TECH | {"tools", "home"}, note="бытовая техника — основное (крупная, встройка, "
+                        "кухня, климат); ещё ТВ, компьютеры, смартфоны, умный дом, дом и сад; есть уценка"),
+    "technopark": Store("Технопарк", sells=TECH | {"home"}, note="премиальная электроника и техника (Apple, Samsung, BORK, Dyson, "
+                        "Hi-Fi, встройка, винные шкафы); ещё посуда, мебель, спорт, детское, сад"),
+    "onlinetrade": Store("ОНЛАЙН ТРЕЙД.РУ", lacks={"used"}, note="универсальный магазин с упором на технику; есть продукты, "
+                         "аптека, зоотовары, одежда; свои пункты выдачи; уценка"),
+    "biggeek": Store("Biggeek", sells={"phones", "computers", "tv_photo", "audio", "gaming", "gadgets", "appliances_small"}, note="гаджеты: Apple, Samsung, Xiaomi, Dyson, аксессуары; "
+                     "магазин в Москве; параллельный импорт; поиск — только при показанном браузере"),
+    "pitergsm": Store("PiterGSM", sells={"phones", "computers", "tv_photo", "audio", "gaming", "gadgets", "appliances_small"}, note="Apple и Android-смартфоны, приставки, Dyson; "
+                      "магазин в Санкт-Петербурге (доставка по СПб); параллельный импорт; поиск — только при показанном браузере"),
+    "naknak": Store("НакНак", sells={"phones", "computers", "audio", "gaming", "gadgets", "appliances_small"},
+                    note="один магазин в Москве: iPhone, Samsung, Pixel, Mac, iPad, AirPods, Dyson, PlayStation; цены «от» "
+                         "по моделям; поиска по сайту и отзывов нет"),
+    "doctorhead": Store("Dr.Head", sells={"audio"}, note="специалист по наушникам и Hi-Fi: акустика, микрофоны, игровые "
+                        "гарнитуры, винил; магазины в Москве и Петербурге"),
 }
 
 

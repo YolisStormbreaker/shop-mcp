@@ -24,20 +24,27 @@ from mcp.server.fastmcp import FastMCP
 
 import ali
 import avito
+import biggeek
 import citilink
 import dns
+import doctorhead
 import eldorado
 import goldapple
+import holodilnik
 import grocery
 import images
 import lamoda
 import mvideo
+import naknak
+import onlinetrade
 import messenger
 import orders
 import ozon
 import pace
+import pitergsm
 import reviews
 import stores
+import technopark
 import wb
 import ym
 from shoplog import log
@@ -47,7 +54,8 @@ INSTRUCTIONS = """\
 где он вошёл на все сайты. Цены, доставка и наличие — для адреса или города из его профиля на сайте.
 
 Что есть: поиск и карточки товара на Авито, Ozon, AliExpress, Wildberries, Яндекс Маркете, Lamoda,
-в Золотом яблоке, М.Видео, Эльдорадо, DNS и Ситилинке; корзины Ozon, AliExpress, Wildberries, Яндекс Маркета, Lamoda и Золотого яблока; история
+в Золотом яблоке; в магазинах техники М.Видео, Эльдорадо, DNS, Ситилинк, Холодильник.ру, Технопарк, ОНЛАЙН ТРЕЙД.РУ;
+у гаджетов Biggeek, PiterGSM, НакНак; у Dr.Head (наушники и Hi-Fi); корзины Ozon, AliExpress, Wildberries, Яндекс Маркета, Lamoda и Золотого яблока; история
 заказов Ozon и AliExpress; мессенджер Авито; отзывы на купленное на Ozon и AliExpress; чтение отзывов
 покупателей (*_reviews) везде, кроме Авито; просмотр картинок по ссылке (shop_images). Действуют от имени
 пользователя *_add_to_cart, *_remove_from_cart, *_set_cart_quantity, avito_send и *_leave_review —
@@ -89,8 +97,8 @@ INSTRUCTIONS = """\
 - Ответ с «⚠️» или таймаут — проверка на бота или капча. Не повторяй сразу: выполни `shop-chrome show`
   (или попроси пользователя), пусть он пройдёт проверку во вкладке сайта, потом `shop-chrome hide`.
   Chrome не отвечает — `shop-chrome restart`.
-- Браузер обычно скрыт, а клики мышью работают только в видимой активной вкладке. Поэтому адрес в avito_item
-  и изменение корзины Яндекс Маркета требуют shop-chrome show (нужную вкладку инструмент выведет вперёд сам); без
+- Браузер обычно скрыт, а клики мышью работают только в видимой активной вкладке. Поэтому адрес в avito_item,
+  изменение корзины Яндекс Маркета и поиск Biggeek и PiterGSM требуют shop-chrome show (нужную вкладку инструмент выведет вперёд сам); без
   этого он скажет, что не получилось. Остальные корзины (Ozon, Wildberries, Lamoda, Золотое яблоко, AliExpress,
   продуктовые) меняются через API сайта или нажатием кнопки страницы и работают со скрытым браузером.
 - Авито включает проверку при частых запросах, а на общих IP провайдеров (CGNAT) — почти сразу: в avito_search
@@ -104,7 +112,8 @@ INSTRUCTIONS = """\
   История цены по неделям есть только на WB; Ozon пишет «стало дешевле» против средней цены прошлого месяца.
 - Посмотреть фото товара или отзыва: shop_images(urls) — до 6 картинок за вызов, модель видит их сами.
 - Отзывы: wb_reviews, ozon_reviews, ali_reviews, ym_reviews, lamoda_reviews, goldapple_reviews, mvideo_reviews,
-  eldorado_reviews, dns_reviews, citilink_reviews — дата, звёзды,
+  eldorado_reviews, dns_reviews, citilink_reviews, holodilnik_reviews, technopark_reviews, onlinetrade_reviews,
+  doctorhead_reviews — дата, звёзды,
   «полезно», вариант (размер/цвет), текст, ссылки на фото; на WB и Ozon ещё видео (ссылка на файл и картинка-
   превью для shop_images). sort: useful, new, high, low (на Ozon без new); with_media=True — только с фото.
   Ограничения: WB отдаёт до ~1000 отзывов с текстом; Маркет — первые 10 на сортировку, без страниц;
@@ -145,6 +154,7 @@ mcp = FastMCP("shop", instructions=INSTRUCTIONS)
 # A new tool still needs a restart: tools are registered from server.py once, at start.
 _RELOADABLE = ("pace", "stores", "cdp", "capture", "images", "textsearch", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple",
                "citilink", "mvideo", "eldorado", "dns",
+               "digi", "biggeek", "pitergsm", "holodilnik", "naknak", "doctorhead", "onlinetrade", "technopark",
                "grocery.composition", "grocery.ids", "grocery.limits", "grocery.lenta", "grocery.samokat", "grocery.lavka", "grocery.perekrestok", "grocery.pyaterochka", "grocery.vkusvill",
                "grocery")
 _mtimes = {m: Path(sys.modules[m].__file__).stat().st_mtime for m in _RELOADABLE}
@@ -683,6 +693,216 @@ def dns_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False,
     срок использования, достоинства, недостатки, комментарий, фото и видео. sort: useful, new, rating, edited
     (по дате изменения); with_media=True — только с фото. Страницы по 10 отзывов (page=2, 3…). Вопросы не читаются."""
     return dns.reviews(id_or_url, sort, with_media, page, limit)
+
+
+@mcp.tool()
+@logged
+def holodilnik_search(query: str, price_min: int | None = None, price_max: int | None = None,
+                      sort: str = "popular", page: int = 1, limit: int = 24) -> str:
+    """Поиск в Холодильник.ру (holodilnik.ru), цены и наличие — для города из профиля на сайте.
+    sort — popular | price_asc | price_desc | discount | rating | stock (по наличию). page — страница по 24 товара.
+    Фильтра цены через адрес у сайта нет: price_min/price_max вернут отказ.
+    TSV: код, цена, без скидки, название, рейтинг, отзывов, наличие (дата получения), акции, ссылка."""
+    return holodilnik.search(query, price_min, price_max, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def holodilnik_item(url_or_id: str, full: bool = False) -> str:
+    """Карточка товара Холодильник.ру по ссылке из holodilnik_search или по коду (код ищется поиском сайта: на одну
+    загрузку больше): цена, старая цена и скидка, наличие, способы получения с датами, рейтинг, акции, характеристики,
+    ссылки на фото (смотреть — shop_images), описание (до 2500 символов; full=True — целиком). Отзывы — holodilnik_reviews."""
+    return holodilnik.item(url_or_id, full)
+
+
+@mcp.tool()
+@logged
+def holodilnik_reviews(id_or_url: str, sort: str = "new", with_media: bool = False,
+                      page: int = 1, limit: int = 20) -> str:
+    """Отзывы Холодильник.ру о товаре (ссылка или код): рейтинг, число отзывов; по каждому дата, звёзды, «полезно»,
+    достоинства, недостатки, комментарий. sort: new (по умолчанию), old, high, low — по полезности сайт не сортирует.
+    Страницы по 7 отзывов (page=2, 3…). Фото в отзывах сайт не показывает: with_media=True не поддерживается."""
+    return holodilnik.reviews(id_or_url, sort, with_media, page, limit)
+
+
+@mcp.tool()
+@logged
+def onlinetrade_search(query: str, price_min: int | None = None, price_max: int | None = None,
+                       sort: str = "popular", page: int = 1, limit: int = 30) -> str:
+    """Поиск в ОНЛАЙН ТРЕЙД.РУ (onlinetrade.ru, универсальный магазин с упором на технику), цены — для города из профиля.
+    sort — popular | price_asc | price_desc | new | reviews. page — страница по 30 товаров. Фильтра цены у сайта нет:
+    price_min/price_max вернут подсказку. Если совпадений нет, сайт молча показывает похожие — сверяй названия.
+    TSV: код, цена, скидка, название, рейтинг, оценок, пометки, ссылка; наличие и доставка — в onlinetrade_item."""
+    return onlinetrade.search(query, price_min, price_max, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def onlinetrade_item(url_or_id: str, full: bool = False) -> str:
+    """Карточка товара ОНЛАЙН ТРЕЙД.РУ по ссылке или коду из onlinetrade_search: цена, старая цена и скидка, наличие,
+    доставка и ближайшие пункты самовывоза, рейтинг, ключевые характеристики, ссылки на фото (смотреть — shop_images),
+    описание (до 2500 символов; full=True — все характеристики и описание целиком). Отзывы — onlinetrade_reviews."""
+    return onlinetrade.item(url_or_id, full)
+
+
+@mcp.tool()
+@logged
+def onlinetrade_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False,
+                       page: int = 1, limit: int = 20) -> str:
+    """Отзывы ОНЛАЙН ТРЕЙД.РУ о товаре (ссылка или код): дата, звёзды, «полезно», достоинства, недостатки, текст;
+    отзывы других цветов того же товара помечены. sort: useful, new, old, high, low; страницы по 20 (page=2, 3…).
+    Фото к отзывам сайт не прикрепляет: with_media=True не поддерживается."""
+    return onlinetrade.reviews(id_or_url, sort, with_media, page, limit)
+
+
+@mcp.tool()
+@logged
+def technopark_search(query: str, price_min: int | None = None, price_max: int | None = None,
+                      sort: str = "relevance", page: int = 1, limit: int = 24) -> str:
+    """Поиск в Технопарке (technopark.ru, премиальная электроника и техника), цены и наличие — для города из профиля.
+    sort — relevance | price_asc | price_desc | rating; price_min/price_max — фильтр цены сайта. page — страница по 24.
+    TSV: код, цена, без скидки, название, рейтинг, наличие, ссылка; отзывов и пометок рекламы в выдаче нет.
+    В technopark_item и technopark_reviews передавай ссылку: по одному коду товар не открывается."""
+    return technopark.search(query, price_min, price_max, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def technopark_item(url_or_id: str, full: bool = False) -> str:
+    """Карточка товара Технопарка по ссылке из technopark_search: цена, старая цена и скидка, наличие, доставка
+    и самовывоз для города пользователя (способ, дата, цена), главные характеристики, ссылки на фото (смотреть —
+    shop_images), описание (до 2500 символов; full=True — целиком). Отзывы — technopark_reviews."""
+    return technopark.item(url_or_id, full)
+
+
+@mcp.tool()
+@logged
+def technopark_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False,
+                      page: int = 1, limit: int = 20) -> str:
+    """Отзывы Технопарка о товаре (ссылка): рейтинг, число отзывов и рекомендаций; по каждому дата, звёзды, «полезно»,
+    автор, достоинства, недостатки, комментарий, пометки (куплен в Технопарке, срок использования), другой вариант.
+    sort: useful или new. Страницы по 10 отзывов, в них все варианты товара. Фото сайт не отдаёт: with_media не работает."""
+    return technopark.reviews(id_or_url, sort, with_media, page, limit)
+
+
+@mcp.tool()
+@logged
+def doctorhead_search(query: str, price_min: int | None = None, price_max: int | None = None,
+                      sort: str = "relevance", page: int = 1, limit: int = 30) -> str:
+    """Поиск в Dr.Head (doctorhead.ru): наушники, Hi-Fi, микрофоны, винил; цены и наличие — для города на сайте.
+    sort — relevance | price_asc | price_desc | rating | new | discount (по %) | discount_rub (по рублям).
+    page — страница по 30. Фильтра цены через адрес у сайта нет: price_min/price_max вернут ⚠️ — сортируй по цене.
+    TSV: id, код, цена, без скидки, название, рейтинг, отзывов, наличие («В наличии», «На заказ»), ссылка."""
+    return doctorhead.search(query, price_min, price_max, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def doctorhead_item(url_or_id: str, full: bool = False) -> str:
+    """Карточка Dr.Head по ссылке или id из doctorhead_search: цена, старая цена и скидка, наличие по магазинам
+    и складу, получение (экспресс, самовывоз, курьер — сроки для города на сайте), рейтинг, другие цвета, характеристики,
+    ссылки на фото (смотреть — shop_images), описание (до 2500 символов; full=True — целиком). Отзывы — doctorhead_reviews."""
+    return doctorhead.item(url_or_id, full)
+
+
+@mcp.tool()
+@logged
+def doctorhead_reviews(id_or_url: str, sort: str = "new", with_media: bool = False,
+                      page: int = 1, limit: int = 20) -> str:
+    """Отзывы Dr.Head о товаре (id или ссылка): рейтинг и число отзывов; по каждому дата, звёзды, автор, текст.
+    Страницы по 4 отзыва (page=2, 3…). Порядок только от новых (sort=new); достоинств и недостатков отдельно нет.
+    Фото покупателей — одним списком к товару в шапке; with_media=True не поддерживается."""
+    return doctorhead.reviews(id_or_url, sort, with_media, page, limit)
+
+
+@mcp.tool()
+@logged
+def biggeek_search(query: str, price_min: int | None = None, price_max: int | None = None,
+                   sort: str = "relevance", page: int = 1, limit: int = 20) -> str:
+    """Поиск на Biggeek (biggeek.ru, гаджеты: Apple, Samsung, Xiaomi, Dyson; магазин в Москве); цены — как на сайте.
+    Поиск сайта работает только в видимой вкладке: нужен shop-chrome show (вкладку инструмент выведет вперёд сам), иначе ⚠️.
+    sort — relevance | price_asc | price_desc; price_min/price_max — фильтр цены. Только первые 20 товаров
+    (дальше сайт грузит прокруткой) — сужай запрос. TSV: id, цена, без скидки, название, наличие, ссылка."""
+    return biggeek.search(query, price_min, price_max, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def biggeek_item(url_or_id: str, full: bool = False) -> str:
+    """Карточка Biggeek по ссылке biggeek.ru/products/… из biggeek_search: цена, старая цена и скидка, наличие,
+    примечание магазина (например «без предустановки RuStore»), варианты с ценами (цвет и память — отдельные товары),
+    характеристики (первые 20; full=True — все), комплектация, ссылки на фото (shop_images), описание (до 2500).
+    Доставку карточка не показывает; отзывов на сайте нет. Работает и в скрытом браузере."""
+    return biggeek.item(url_or_id, full)
+
+
+@mcp.tool()
+@logged
+def biggeek_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False,
+                   page: int = 1, limit: int = 20) -> str:
+    """Отзывов покупателей на Biggeek нет (на карточке только «Вопросы и ответы»): инструмент так и отвечает, на сайт не
+    ходит. Отзывы о модели — ozon_reviews, wb_reviews, ym_reviews."""
+    return biggeek.reviews(id_or_url, sort, with_media, page, limit)
+
+
+@mcp.tool()
+@logged
+def pitergsm_search(query: str, price_min: int | None = None, price_max: int | None = None,
+                    sort: str = "relevance", page: int = 1, limit: int = 20) -> str:
+    """Поиск на PiterGSM (pitergsm.ru, Apple и смартфоны; магазин в Санкт-Петербурге); цены — как на сайте.
+    Поиск сайта работает только в видимой вкладке: нужен shop-chrome show (вкладку инструмент выведет вперёд сам), иначе ⚠️.
+    sort — relevance | price_asc | price_desc; price_min/price_max — фильтр цены. Только первые 20 товаров
+    (дальше сайт грузит прокруткой) — сужай запрос. TSV: id, цена, без скидки, название, наличие, ссылка."""
+    return pitergsm.search(query, price_min, price_max, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def pitergsm_item(url_or_id: str, full: bool = False) -> str:
+    """Карточка PiterGSM по ссылке pitergsm.ru/catalog/… из pitergsm_search: цена (и старая, если есть), наличие,
+    доставка и самовывоз по СПб и пригородам, варианты (память, цвет, SIM — каждый своя карточка), характеристики
+    (первые 20; full=True — все), ссылки на фото (shop_images), описание (до 2500). Отзывов на сайте нет.
+    Работает и в скрытом браузере."""
+    return pitergsm.item(url_or_id, full)
+
+
+@mcp.tool()
+@logged
+def pitergsm_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False,
+                    page: int = 1, limit: int = 20) -> str:
+    """Отзывов покупателей о товарах на PiterGSM нет (только ссылка на отзывы о магазине на Яндекс Картах): инструмент
+    так и отвечает, на сайт не ходит. Отзывы о модели — ozon_reviews, wb_reviews, ym_reviews."""
+    return pitergsm.reviews(id_or_url, sort, with_media, page, limit)
+
+
+@mcp.tool()
+@logged
+def naknak_search(query: str, price_min: int | None = None, price_max: int | None = None,
+                  sort: str = "default", page: int = 1, limit: int = 50) -> str:
+    """НакНак (naknak.ru): магазин Apple, Samsung, Google, Dyson, PlayStation в Москве. Поиска по сайту у него нет:
+    в запросе назови раздел меню (iPhone, MacBook, AirPods, Dyson, PlayStation, Аксессуары…; можно «айфон», «ps5»,
+    «чехол»), остальные слова отбирают модели раздела. TSV: id, цена «от» (самая дешёвая конфигурация), название,
+    ссылка. Сортировок, фильтра цены и страниц нет (вернут ⚠️). Точная цена и варианты — naknak_item."""
+    return naknak.search(query, price_min, price_max, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def naknak_item(url_or_id: str, full: bool = False) -> str:
+    """Модель НакНак по ссылке (можно с ?oid=) или id из naknak_search: цена выбранной конфигурации и сама конфигурация,
+    диапазон цен всех конфигураций, варианты (цвет, память, формат SIM; * — выбрано), наличие, ссылки на фото
+    (shop_images), характеристики (до 2500 символов; full=True — целиком). Цену другой конфигурации сайт показывает
+    только после выбора в браузере. Доставки на странице нет — дана ссылка на условия."""
+    return naknak.item(url_or_id, full)
+
+
+@mcp.tool()
+@logged
+def naknak_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False,
+                  page: int = 1, limit: int = 20) -> str:
+    """Отзывов о товарах на naknak.ru нет: инструмент так и отвечает и на сайт не ходит. Отзывы о модели —
+    ozon_reviews, wb_reviews, ym_reviews."""
+    return naknak.reviews(id_or_url, sort, with_media, page, limit)
 
 
 @mcp.tool()
