@@ -41,6 +41,8 @@ DEFAULT = Policy(gap={"page": 4.0, "api": 1.5}, caps=((60, 30), (600, 150), (360
 # cycles and five retries into the block (2026-11-08)
 SERVICEPIPE = Policy(gap={"page": 8.0, "api": 2.0}, caps=((60, 15), (600, 60), (3600, 200)),
                      cool={"check": 1800, "throttle": 1800, "ban": 6 * 3600})
+# a site not yet learned: its bot check unknown, so half of DEFAULT until a block or a quiet month says otherwise
+NEW = Policy(gap={"page": 6.0, "api": 2.0}, caps=((60, 12), (600, 50), (3600, 200)), cool=SERVICEPIPE.cool)
 POLICY = {
     "ozon": DEFAULT, "wb": DEFAULT, "lamoda": DEFAULT, "goldapple": DEFAULT, "lenta": DEFAULT, "lavka": DEFAULT,
     "ali": DEFAULT,                  # its slider after a burst of review requests (2026-10-22)
@@ -51,10 +53,12 @@ POLICY = {
     "perekrestok": SERVICEPIPE, "5ka": SERVICEPIPE,
     "samokat": Policy(gap={"page": 20.0, "api": 2.0}, caps=((60, 15), (600, 60), (3600, 200)),               # its check after
                       cool=SERVICEPIPE.cool),                                                              # a handful of loads
+    "eldorado": NEW, "mvideo": NEW, "dns": NEW, "citilink": NEW, "samsung": NEW,                   # added 2026-11-12
 }
 NAMES = {"ozon": "Ozon", "wb": "Wildberries", "ym": "Яндекс Маркет", "ali": "AliExpress", "avito": "Авито", "lamoda": "Lamoda",
          "goldapple": "Золотое яблоко", "lenta": "Лента", "samokat": "Самокат", "lavka": "Яндекс Лавка", "perekrestok": "Перекрёсток",
-         "5ka": "Пятёрочка", "vkusvill": "ВкусВилл"}
+         "5ka": "Пятёрочка", "vkusvill": "ВкусВилл", "eldorado": "Эльдорадо", "mvideo": "М.Видео", "dns": "DNS",
+         "citilink": "Ситилинк", "samsung": "Samsung"}
 KINDS = {"check": "проверка на бота", "throttle": "сайт ограничил частоту", "ban": "блокировка по IP"}
 ADVICE = {"check": "Её может пройти человек: попроси пользователя пройти её во вкладке сайта (shop-chrome show), потом выполни "
                    "~/shop-mcp/shop-pace clear {site}.",
