@@ -211,7 +211,8 @@ class ToolTests(unittest.TestCase):
             self.assertIs(server.shop_images(["https://a.lmcdn.ru/x.jpg"], max_side=512), answer)
         images.assert_called_once_with(["https://a.lmcdn.ru/x.jpg"], 512)
 
-    SITES = ("ali", "avito", "goldapple", "grocery", "images", "lamoda", "messenger", "orders", "ozon", "pace", "reviews", "wb", "ym")
+    SITES = ("ali", "avito", "citilink", "dns", "eldorado", "goldapple", "grocery", "images", "lamoda", "messenger", "mvideo", "orders", "ozon", "pace",
+             "reviews", "wb", "ym")
     SAMPLE = {str: lambda n, i: f"<{n}>", int: lambda n, i: 7000 + i, list[str]: lambda n, i: [f"<{n}>"]}
 
     def test_every_tool_hands_its_arguments_to_a_site_function_that_takes_them(self):

@@ -53,12 +53,12 @@ POLICY = {
     "perekrestok": SERVICEPIPE, "5ka": SERVICEPIPE,
     "samokat": Policy(gap={"page": 20.0, "api": 2.0}, caps=((60, 15), (600, 60), (3600, 200)),               # its check after
                       cool=SERVICEPIPE.cool),                                                              # a handful of loads
-    "eldorado": NEW, "mvideo": NEW, "dns": NEW, "citilink": NEW, "samsung": NEW,                   # added 2026-11-12
+    "eldorado": NEW, "mvideo": NEW, "dns": NEW, "citilink": NEW,                                   # added 2026-11-12
 }
 NAMES = {"ozon": "Ozon", "wb": "Wildberries", "ym": "Яндекс Маркет", "ali": "AliExpress", "avito": "Авито", "lamoda": "Lamoda",
          "goldapple": "Золотое яблоко", "lenta": "Лента", "samokat": "Самокат", "lavka": "Яндекс Лавка", "perekrestok": "Перекрёсток",
          "5ka": "Пятёрочка", "vkusvill": "ВкусВилл", "eldorado": "Эльдорадо", "mvideo": "М.Видео", "dns": "DNS",
-         "citilink": "Ситилинк", "samsung": "Samsung"}
+         "citilink": "Ситилинк"}
 KINDS = {"check": "проверка на бота", "throttle": "сайт ограничил частоту", "ban": "блокировка по IP"}
 ADVICE = {"check": "Её может пройти человек: попроси пользователя пройти её во вкладке сайта (shop-chrome show), потом выполни "
                    "~/shop-mcp/shop-pace clear {site}.",

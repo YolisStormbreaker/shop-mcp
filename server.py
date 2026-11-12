@@ -24,10 +24,14 @@ from mcp.server.fastmcp import FastMCP
 
 import ali
 import avito
+import citilink
+import dns
+import eldorado
 import goldapple
 import grocery
 import images
 import lamoda
+import mvideo
 import messenger
 import orders
 import ozon
@@ -42,7 +46,7 @@ INSTRUCTIONS = """\
 где он вошёл на все сайты. Цены, доставка и наличие — для адреса или города из его профиля на сайте.
 
 Что есть: поиск и карточки товара на Авито, Ozon, AliExpress, Wildberries, Яндекс Маркете, Lamoda,
-в Золотом яблоке; корзины Ozon, AliExpress, Wildberries, Яндекс Маркета, Lamoda и Золотого яблока; история
+в Золотом яблоке, М.Видео, Эльдорадо, DNS и Ситилинке; корзины Ozon, AliExpress, Wildberries, Яндекс Маркета, Lamoda и Золотого яблока; история
 заказов Ozon и AliExpress; мессенджер Авито; отзывы на купленное на Ozon и AliExpress; чтение отзывов
 покупателей (*_reviews) везде, кроме Авито; просмотр картинок по ссылке (shop_images). Действуют от имени
 пользователя *_add_to_cart, *_remove_from_cart, *_set_cart_quantity, avito_send и *_leave_review —
@@ -59,7 +63,8 @@ INSTRUCTIONS = """\
   питание), — сначала один короткий вопрос: «Где искать: в продуктовых магазинах (Лента, Перекрёсток, Пятёрочка,
   Самокат, Яндекс Лавка, ВкусВилл) или на маркетплейсах (Ozon, Wildberries, Яндекс Маркет)?» Если спросить не у
   кого (работаешь без собеседника) — ищи и там, и там.
-- Остальное — маркетплейсы: техника, дом, хобби — Ozon, Wildberries, Яндекс Маркет, AliExpress; одежда
+- Остальное — маркетплейсы: техника, дом, хобби — Ozon, Wildberries, Яндекс Маркет, AliExpress; электроника
+  и бытовая техника — ещё М.Видео, Эльдорадо, DNS и Ситилинк (магазины техники: официальные гарантия и возврат); одежда
   и обувь — ещё Lamoda; косметика — ещё Золотое яблоко; с рук и б/у — Авито.
 
 Правила:
@@ -96,7 +101,8 @@ INSTRUCTIONS = """\
   «фото (shop_images): …» со ссылками, описание до 2500 символов — full=True отдаёт его целиком.
   История цены по неделям есть только на WB; Ozon пишет «стало дешевле» против средней цены прошлого месяца.
 - Посмотреть фото товара или отзыва: shop_images(urls) — до 6 картинок за вызов, модель видит их сами.
-- Отзывы: wb_reviews, ozon_reviews, ali_reviews, ym_reviews, lamoda_reviews, goldapple_reviews — дата, звёзды,
+- Отзывы: wb_reviews, ozon_reviews, ali_reviews, ym_reviews, lamoda_reviews, goldapple_reviews, mvideo_reviews,
+  eldorado_reviews, dns_reviews, citilink_reviews — дата, звёзды,
   «полезно», вариант (размер/цвет), текст, ссылки на фото; на WB и Ozon ещё видео (ссылка на файл и картинка-
   превью для shop_images). sort: useful, new, high, low (на Ozon без new); with_media=True — только с фото.
   Ограничения: WB отдаёт до ~1000 отзывов с текстом; Маркет — первые 10 на сортировку, без страниц;
@@ -135,6 +141,7 @@ mcp = FastMCP("shop", instructions=INSTRUCTIONS)
 # shoplog is left alone: reloading it would add a second log handler.
 # A new tool still needs a restart: tools are registered from server.py once, at start.
 _RELOADABLE = ("pace", "cdp", "capture", "images", "textsearch", "ali", "ozon", "avito", "messenger", "orders", "reviews", "wb", "ym", "lamoda", "goldapple",
+               "citilink", "mvideo", "eldorado", "dns",
                "grocery.composition", "grocery.ids", "grocery.limits", "grocery.lenta", "grocery.samokat", "grocery.lavka", "grocery.perekrestok", "grocery.pyaterochka", "grocery.vkusvill",
                "grocery")
 _mtimes = {m: Path(sys.modules[m].__file__).stat().st_mtime for m in _RELOADABLE}
@@ -548,6 +555,131 @@ def goldapple_reviews(id_or_url: str, sort: str = "useful", with_media: bool = F
     sort: useful (по умолчанию), new, high, low. with_media=True — только отзывы с фото.
     Страницы по 20 отзывов (page=2, 3…)."""
     return goldapple.reviews(id_or_url, sort, with_media, page, limit)
+
+
+@mcp.tool()
+@logged
+def citilink_search(query: str, price_min: int | None = None, price_max: int | None = None,
+                    sort: str = "relevance", page: int = 1, limit: int = 36) -> str:
+    """Поиск в Ситилинке (citilink.ru), цены и наличие — для города из профиля на сайте.
+
+    sort — relevance | price_asc | price_desc | discount | rating | reviews (больше отзывов).
+    page — страница по 36 товаров. Возвращает TSV: код, цена, без скидки, название, рейтинг, отзывы,
+    наличие (в магазинах сегодня, самовывоз с даты), пометки (уценка, промокод, клубная цена, из-за рубежа), ссылка.
+    """
+    return citilink.search(query, price_min, price_max, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def citilink_item(url_or_id: str, full: bool = False) -> str:
+    """Карточка товара Ситилинка по ссылке или коду из citilink_search: цена, старая цена и скидка в %,
+    клубная цена, наличие на складе, самовывоз и курьер для города пользователя (срок, цена), главные
+    характеристики, варианты (цвет и т. п.) с кодами, ссылки на фото (смотреть — shop_images),
+    описание (до 2500 символов; full=True — целиком). Отзывы — citilink_reviews."""
+    return citilink.item(url_or_id, full)
+
+
+@mcp.tool()
+@logged
+def citilink_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False,
+                     page: int = 1, limit: int = 20) -> str:
+    """Отзывы Ситилинка о товаре (код или ссылка): рейтинг, распределение звёзд; по каждому дата, звёзды,
+    «полезно», автор, текст (+ достоинства | − недостатки | комментарий), источник (часть отзывов сайт взял
+    с других площадок), другой вариант товара. sort: useful (по умолчанию), new, old, high, low.
+    Страницы по 5 отзывов (page=2, 3…), в них отзывы всех вариантов товара. Фото в отзывах сайт не отдаёт:
+    with_media=True не поддерживается."""
+    return citilink.reviews(id_or_url, sort, with_media, page, limit)
+
+
+@mcp.tool()
+@logged
+def mvideo_search(query: str, price_min: int | None = None, price_max: int | None = None,
+                  sort: str = "popular", page: int = 1, limit: int = 60) -> str:
+    """Поиск на М.Видео (mvideo.ru), цены и наличие — для города из профиля на сайте.
+    sort — popular | price_asc | price_desc. page — страница по 60 товаров.
+    Платные места помечены «реклама» (в шапке «реклама: N из M»)."""
+    return mvideo.search(query, price_min, price_max, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def mvideo_item(url_or_id: str, full: bool = False) -> str:
+    """Карточка товара М.Видео по ссылке или артикулу: цена и скидка, рейтинг, когда можно получить,
+    самовывоз из магазинов, ключевые характеристики, ссылки на фото (смотреть — shop_images),
+    описание (до 2500 символов; full=True — целиком). Отзывы — mvideo_reviews."""
+    return mvideo.item(url_or_id, full)
+
+
+@mcp.tool()
+@logged
+def mvideo_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False,
+                   page: int = 1, limit: int = 10) -> str:
+    """Отзывы покупателей М.Видео (артикул или ссылка): рейтинг, звёзды по оценкам, плюсы, минусы, текст, фото.
+    sort: useful, new, old, high, low; with_media=True — только с фото. Страницы по 10 отзывов (page=2, 3…).
+    Отзывы общие с Эльдорадо."""
+    return mvideo.reviews(id_or_url, sort, with_media, page, limit)
+
+
+@mcp.tool()
+@logged
+def eldorado_search(query: str, price_min: int | None = None, price_max: int | None = None,
+                    sort: str = "popular", page: int = 1, limit: int = 60) -> str:
+    """Поиск в Эльдорадо (eldorado.ru), цены и сроки доставки — для города из профиля на сайте.
+    sort — popular | price_asc | price_desc. Только первая страница (до 60 товаров): остальные сайт
+    отдаёт лишь при прокрутке — сужай запрос или задавай цену. Каталог и артикулы те же, что у М.Видео,
+    а цены и наличие свои."""
+    return eldorado.search(query, price_min, price_max, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def eldorado_item(url_or_id: str, full: bool = False) -> str:
+    """Карточка товара Эльдорадо по ссылке или артикулу (артикулы те же, что у М.Видео): цена и скидка,
+    остаток, рейтинг, доставка, продавец, характеристики, ссылки на фото (смотреть — shop_images),
+    описание (до 2500 символов; full=True — целиком). Отзывы — eldorado_reviews."""
+    return eldorado.item(url_or_id, full)
+
+
+@mcp.tool()
+@logged
+def eldorado_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False,
+                     page: int = 1, limit: int = 18) -> str:
+    """Отзывы покупателей Эльдорадо: рейтинг, звёзды, плюсы, минусы, текст, фото. sort: useful, new, old, high,
+    low; with_media=True — только с фото. Только первые 18 (дальше сайт грузит прокруткой); отзывы общие
+    с М.Видео — следующие страницы даёт mvideo_reviews."""
+    return eldorado.reviews(id_or_url, sort, with_media, page, limit)
+
+
+@mcp.tool()
+@logged
+def dns_search(query: str, price_min: int | None = None, price_max: int | None = None,
+               sort: str = "popular", page: int = 1, limit: int = 24) -> str:
+    """Поиск в DNS (dns-shop.ru), цены и наличие — для города из профиля на сайте. Страницы по 24 товара.
+    sort — popular | price_asc | price_desc | new | discount | reviews (больше отзывов) | rating.
+    Колонки: id (для dns_item и dns_reviews), код товара, цена, без скидки, рейтинг, отзывы, наличие, продавец (если не DNS).
+    «(stale-stock)» — другое предложение того же товара по своей цене; «N (бренда)» — рейтинг бренда, а не товара.
+    Если сайт перенёс поиск в категорию и потерял sort, цену или страницу, их догружает вторая загрузка."""
+    return dns.search(query, price_min, price_max, sort, page, limit)
+
+
+@mcp.tool()
+@logged
+def dns_item(url_or_id: str, full: bool = False) -> str:
+    """Карточка товара DNS по ссылке /product/… или id из dns_search: цена, старая цена и скидка, наличие в магазинах
+    и доставка для города из профиля, продавец (если не DNS), рейтинг, основные характеристики, ссылки на фото
+    (смотреть — shop_images), описание (до 2500 символов; full=True — целиком). Отзывы — dns_reviews."""
+    return dns.item(url_or_id, full)
+
+
+@mcp.tool()
+@logged
+def dns_reviews(id_or_url: str, sort: str = "useful", with_media: bool = False,
+                page: int = 1, limit: int = 20) -> str:
+    """Отзывы покупателей DNS на все варианты товара (id из dns_search или ссылка): дата, оценка, «полезно», вариант,
+    срок использования, достоинства, недостатки, комментарий, фото и видео. sort: useful, new, rating, edited
+    (по дате изменения); with_media=True — только с фото. Страницы по 10 отзывов (page=2, 3…). Вопросы не читаются."""
+    return dns.reviews(id_or_url, sort, with_media, page, limit)
 
 
 @mcp.tool()
