@@ -218,6 +218,10 @@ def _sent(tab, cid, flat):
     return cid, any(_mine(m) and _text(m) == flat for m in h.get("items") or [])
 
 
+LOGGED_OUT = ("⚠️ не выполнен вход в Авито в браузере магазинов — ничего не отправлено: попроси пользователя выполнить "
+              "shop-chrome show, войти на avito.ru, затем shop-chrome hide и повторить.")
+
+
 def send(text, chat_id=None, item_url=None):
     """Send text to an existing chat, or to the seller of a listing (opens the chat from its page)."""
     text = text.strip()
@@ -240,6 +244,9 @@ def send(text, chat_id=None, item_url=None):
             tab.goto(item_url, "avito", wait_js="document.querySelector('[data-marker=\"messenger-button/button\"]')")
             # The page has two such buttons; the first sits in a sticky header off screen. Click the biggest.
             if not _click_biggest(tab, '[data-marker="messenger-button/button"]'):
+                # Logged out, the button turns into a link to #login (2026-10-28).
+                if tab.js("!!document.querySelector('[data-marker=\"messenger-button/link\"][href*=\"login\"]')"):
+                    return LOGGED_OUT
                 h1 = " ".join((tab.js("document.querySelector('h1')?.textContent") or "").split())
                 return f"на странице объявления нет кнопки «Написать сообщение» (заголовок: «{h1}») — ничего не отправлено"
         if not _type_and_send(tab, text):

@@ -203,7 +203,7 @@ MINE = {"type": "text", "fromUid": ME, "uid": ME, "body": {"text": "Здравс
 THEIRS = {"type": "text", "fromUid": SELLER, "uid": ME, "body": {"text": "Здравствуйте! Ещё продаётся?"}}
 
 
-def send_tab(rpc, box=(True,), value=None, button=(640.5, 360.0), hrefs=(), h1=""):
+def send_tab(rpc, box=(True,), value=None, button=(640.5, 360.0), hrefs=(), h1="", logged_out=False):
     """The tab send() drives. The reply box shows up on the polls given by box; it then holds what Input.insertText
     typed (or value); the listing's biggest write button is at button; location.href walks through hrefs."""
     box, hrefs, typed = list(box), list(hrefs), []
@@ -219,6 +219,8 @@ def send_tab(rpc, box=(True,), value=None, button=(640.5, 360.0), hrefs=(), h1="
             return button
         if expr == "document.querySelector('h1')?.textContent":
             return h1
+        if "messenger-button/link" in expr:                  # logged out, the button is a link to the login
+            return logged_out
         assert expr == f"document.querySelector({INPUT}).focus()", expr
     tab = avito_tab(rpc, js=js)
     tab.call.side_effect = lambda method, **params: typed.append(params["text"]) if method == "Input.insertText" else None
@@ -270,6 +272,13 @@ class SendTests(unittest.TestCase):
         out, _, _ = run(messenger.send, tab, TEXT, item_url="https://www.avito.ru" + ITEM)
         self.assertEqual(out, "на странице объявления нет кнопки «Написать сообщение» (заголовок: «Велосипед детский») — ничего не отправлено")
         self.assertEqual(tab.call.call_args_list, FOCUS + [UNFOCUS])
+        tab.click.assert_not_called()
+
+    def test_logged_out_of_avito(self):
+        tab = send_tab({}, button=None, logged_out=True)
+        out, _, _ = run(messenger.send, tab, TEXT, item_url="https://www.avito.ru" + ITEM)
+        self.assertEqual(out, messenger.LOGGED_OUT)
+        self.assertTrue(out.startswith("⚠️ не выполнен вход в Авито в браузере магазинов"), out)
         tab.click.assert_not_called()
 
     def test_no_reply_box(self):
