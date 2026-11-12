@@ -31,9 +31,10 @@ CATEGORIES = {
 
 
 class Store:
-    """A store's assortment: a specialist sells some categories, a broad store everything but lacks (one or the other)."""
+    """A store's assortment: a specialist sells some categories, a broad store everything but lacks (one or the other);
+    core — the categories it is strong in, among those it has: it comes first for them."""
 
-    def __init__(self, name, sells=None, lacks=None, note=""):
+    def __init__(self, name, sells=None, lacks=None, note="", core=()):
         if (sells is None) == (lacks is None) or sells == set():
             raise ValueError(f"{name}: sells (непустой) или lacks — одно из двух")
         unknown = set(sells or lacks) - set(CATEGORIES)
@@ -41,6 +42,9 @@ class Store:
             raise ValueError(f"{name}: нет таких категорий {sorted(unknown)}")
         self.name, self.note = name, note
         self.sells, self.lacks = frozenset(sells or ()), (None if lacks is None else frozenset(lacks))
+        if not all(self.has(c) for c in core):
+            raise ValueError(f"{name}: core — только из того, что магазин продаёт")
+        self.core = frozenset(core)
 
     def has(self, category):
         return category in self.sells if self.lacks is None else category not in self.lacks
@@ -59,44 +63,45 @@ STORES = {
     "ym": Store("Яндекс Маркет", lacks={"used"}, note="маркетплейс; много техники; еду — только по просьбе"),
     "ali": Store("AliExpress", lacks={"food", "health", "used"}, note="маркетплейс, много из-за рубежа (дольше везут): гаджеты, "
                                                                       "запчасти, хобби, мелочи"),
-    "avito": Store("Авито", sells={"used"}, note="объявления: б/у и с рук, есть и новое от частных продавцов; доставка Авито"),
-    "lamoda": Store("Lamoda", sells={"clothes", "beauty", "kids", "sport"}, note="одежда и обувь — основное; детская и спортивная одежда"),
-    "goldapple": Store("Золотое яблоко", sells={"beauty"}, note="косметика и парфюмерия; есть фены и приборы для красоты"),
+    "avito": Store("Авито", sells={"used"}, core={"used"}, note="объявления: б/у и с рук, есть и новое от частных продавцов; доставка Авито"),
+    "lamoda": Store("Lamoda", sells={"clothes", "beauty", "kids", "sport"}, core={"clothes"}, note="одежда и обувь — основное; детская и спортивная одежда"),
+    "goldapple": Store("Золотое яблоко", sells={"beauty"}, core={"beauty"}, note="косметика и парфюмерия; есть фены и приборы для красоты"),
     "grocery": Store("Продуктовые (Лента, Перекрёсток, Пятёрочка, Самокат, Яндекс Лавка, ВкусВилл)", sells={"food"},
-                     note="еда и напитки — сюда первым делом; там же бытовая химия, корм для животных, детское питание"),
-    "mvideo": Store("М.Видео", sells=TECH, note="электроника и бытовая техника, официальная гарантия; есть товары других продавцов"),
-    "eldorado": Store("Эльдорадо", sells=TECH, note="то же, что М.Видео (общий каталог), свои цены и наличие"),
-    "dns": Store("DNS", sells=TECH | {"tools", "auto", "home"}, note="электроника, комплектующие ПК — сильнее всех; техника, "
+                     core={"food"}, note="еда и напитки — сюда первым делом; там же бытовая химия, корм для животных, детское питание"),
+    "mvideo": Store("М.Видео", sells=TECH, core={"phones", "tv_photo", "appliances_big", "appliances_small"}, note="электроника и бытовая техника, официальная гарантия; есть товары других продавцов"),
+    "eldorado": Store("Эльдорадо", sells=TECH, core={"phones", "tv_photo", "appliances_big", "appliances_small"}, note="то же, что М.Видео (общий каталог), свои цены и наличие"),
+    "dns": Store("DNS", sells=TECH | {"tools", "auto", "home"}, core={"computers", "gaming", "phones"}, note="электроника, комплектующие ПК — сильнее всех; техника, "
                                                                      "инструменты; есть продавцы маркетплейса"),
-    "citilink": Store("Ситилинк", sells=TECH | {"tools", "auto", "home"}, note="электроника и техника, стройка и ремонт, "
+    "citilink": Store("Ситилинк", sells=TECH | {"tools", "auto", "home"}, core={"computers", "gaming"}, note="электроника и техника, стройка и ремонт, "
                                                                                "товары для геймеров"),
-    "holodilnik": Store("Холодильник.ру", sells=TECH | {"tools", "home"}, note="бытовая техника — основное (крупная, встройка, "
+    "holodilnik": Store("Холодильник.ру", sells=TECH | {"tools", "home"}, core={"appliances_big", "appliances_small"}, note="бытовая техника — основное (крупная, встройка, "
                         "кухня, климат); ещё ТВ, компьютеры, смартфоны, умный дом, дом и сад; есть уценка"),
-    "technopark": Store("Технопарк", sells=TECH | {"home"}, note="премиальная электроника и техника (Apple, Samsung, BORK, Dyson, "
+    "technopark": Store("Технопарк", sells=TECH | {"home"}, core={"appliances_big", "appliances_small"}, note="премиальная электроника и техника (Apple, Samsung, BORK, Dyson, "
                         "Hi-Fi, встройка, винные шкафы); ещё посуда, мебель, спорт, детское, сад"),
     "onlinetrade": Store("ОНЛАЙН ТРЕЙД.РУ", lacks={"used"}, note="универсальный магазин с упором на технику; есть продукты, "
                          "аптека, зоотовары, одежда; свои пункты выдачи; уценка"),
-    "biggeek": Store("Biggeek", sells={"phones", "computers", "tv_photo", "audio", "gaming", "gadgets", "appliances_small"}, note="гаджеты: Apple, Samsung, Xiaomi, Dyson, аксессуары; "
+    "biggeek": Store("Biggeek", sells={"phones", "computers", "tv_photo", "audio", "gaming", "gadgets", "appliances_small"}, core={"phones", "gadgets"}, note="гаджеты: Apple, Samsung, Xiaomi, Dyson, аксессуары; "
                      "магазин в Москве; параллельный импорт; поиск — только при показанном браузере"),
-    "pitergsm": Store("PiterGSM", sells={"phones", "computers", "tv_photo", "audio", "gaming", "gadgets", "appliances_small"}, note="Apple и Android-смартфоны, приставки, Dyson; "
+    "pitergsm": Store("PiterGSM", sells={"phones", "computers", "tv_photo", "audio", "gaming", "gadgets", "appliances_small"}, core={"phones", "gadgets"}, note="Apple и Android-смартфоны, приставки, Dyson; "
                       "магазин в Санкт-Петербурге (доставка по СПб); параллельный импорт; поиск — только при показанном браузере"),
     "naknak": Store("НакНак", sells={"phones", "computers", "audio", "gaming", "gadgets", "appliances_small"},
-                    note="один магазин в Москве: iPhone, Samsung, Pixel, Mac, iPad, AirPods, Dyson, PlayStation; цены «от» "
+                    core={"phones", "gadgets"}, note="один магазин в Москве: iPhone, Samsung, Pixel, Mac, iPad, AirPods, Dyson, PlayStation; цены «от» "
                          "по моделям; поиска по сайту и отзывов нет"),
-    "doctorhead": Store("Dr.Head", sells={"audio"}, note="специалист по наушникам и Hi-Fi: акустика, микрофоны, игровые "
+    "doctorhead": Store("Dr.Head", sells={"audio"}, core={"audio"}, note="специалист по наушникам и Hi-Fi: акустика, микрофоны, игровые "
                         "гарнитуры, винил; магазины в Москве и Петербурге"),
 }
 
 
 def where(category):
-    """The stores that sell category, specialists before the broad ones, in the table's order."""
+    """The stores that sell category: specialists strong in it, the other specialists, then the broad ones (table order within)."""
     has = [k for k, s in STORES.items() if s.has(category)]
-    return [k for k in has if STORES[k].lacks is None] + [k for k in has if STORES[k].lacks is not None]
+    special = sorted((k for k in has if STORES[k].lacks is None), key=lambda k: category not in STORES[k].core)   # stable sort
+    return special + [k for k in has if STORES[k].lacks is not None]
 
 
 def _line(key):
     s = STORES[key]
-    return f"{s.name} ({key}_*) — {s.note}"
+    return f"- {s.name} ({key}_*) — {s.note}"
 
 
 def answer(category=""):
@@ -110,8 +115,8 @@ def answer(category=""):
     keys = where(category)
     special = [_line(k) for k in keys if STORES[k].lacks is None]
     broad = [_line(k) for k in keys if STORES[k].lacks is not None]
-    return "\n".join([f"{category} — {CATEGORIES[category]}"] + (["специализированные: " + "; ".join(special)] if special else [])
-                     + (["широкий ассортимент: " + "; ".join(broad)] if broad else []))
+    return "\n".join([f"{category} — {CATEGORIES[category]}"] + (["специализированные (сначала сильные в этой категории):"] + special if special else [])
+                     + (["широкий ассортимент:"] + broad if broad else []))
 
 
 def routing():

@@ -216,6 +216,11 @@ class ToolTests(unittest.TestCase):
              "technopark", "wb", "ym")
     SAMPLE = {str: lambda n, i: f"<{n}>", int: lambda n, i: 7000 + i, list[str]: lambda n, i: [f"<{n}>"]}
 
+    def test_every_store_of_the_map_has_its_tools_and_every_searching_store_is_on_the_map(self):
+        names = {t.name for t in asyncio.run(server.mcp.list_tools())}
+        self.assertEqual({k for k in server.stores.STORES if f"{k}_search" not in names}, set())
+        self.assertEqual({n[:-len("_search")] for n in names if n.endswith("_search")} - set(server.stores.STORES), set())
+
     def test_every_tool_hands_its_arguments_to_a_site_function_that_takes_them(self):
         # autospec: a site function whose parameters no longer match the tool's call raises TypeError here;
         # the tools' defaults are their site functions' defaults (113 of them on 2026-10-29), so the two cannot drift apart

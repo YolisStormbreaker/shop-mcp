@@ -7,20 +7,21 @@ import stores
 from stores import Store
 
 TABLE = {"ozon": Store("Ozon", lacks={"used"}, note="маркетплейс"),
-         "dns": Store("DNS", sells={"phones", "computers"}, note="техника"),
-         "drhead": Store("Dr.Head", sells={"audio"}, note="наушники и Hi-Fi"),
+         "dns": Store("DNS", sells={"phones", "computers", "audio"}, note="техника"),
+         "drhead": Store("Dr.Head", sells={"audio"}, core={"audio"}, note="наушники и Hi-Fi"),
          "avito": Store("Авито", sells={"used"})}
 
 
 class StoreTests(unittest.TestCase):
     def test_a_store_is_either_a_specialist_or_broad_with_known_categories(self):
-        for kw in ({}, {"sells": {"audio"}, "lacks": {"used"}}, {"sells": {"sound"}}, {"lacks": {"sound"}}, {"sells": set()}):
+        for kw in ({}, {"sells": {"audio"}, "lacks": {"used"}}, {"sells": {"sound"}}, {"lacks": {"sound"}}, {"sells": set()},
+                   {"sells": {"audio"}, "core": {"phones"}}, {"lacks": {"used"}, "core": {"used"}}):     # strong only in what it sells
             with self.subTest(kw), self.assertRaises(ValueError):
                 Store("X", **kw)
         self.assertTrue(Store("X", lacks=set()).has("food"))          # a broad store that sells everything
 
     def test_has(self):
-        self.assertEqual([TABLE["ozon"].has("audio"), TABLE["ozon"].has("used"), TABLE["dns"].has("phones"), TABLE["dns"].has("audio")],
+        self.assertEqual([TABLE["ozon"].has("audio"), TABLE["ozon"].has("used"), TABLE["dns"].has("phones"), TABLE["dns"].has("used")],
                          [True, False, True, False])
 
     def test_the_real_table_is_well_formed(self):
@@ -37,22 +38,25 @@ class AnswerTests(unittest.TestCase):
         self.addCleanup(setattr, stores, "STORES", stores.STORES)
         stores.STORES = TABLE
 
-    def test_where_puts_the_specialists_first(self):
-        self.assertEqual(stores.where("audio"), ["drhead", "ozon"])
+    def test_where_puts_the_stores_strong_in_it_first(self):
+        self.assertEqual(stores.where("audio"), ["drhead", "dns", "ozon"])           # strong in audio, other specialists, the broad
         self.assertEqual(stores.where("phones"), ["dns", "ozon"])
         self.assertEqual(stores.where("used"), ["avito"])
 
     def test_one_category(self):
         self.assertEqual(stores.answer("audio").splitlines(),
                          ["audio — наушники, колонки, Hi-Fi и плееры, усилители и ЦАП, микрофоны",
-                          "специализированные: Dr.Head (drhead_*) — наушники и Hi-Fi",
-                          "широкий ассортимент: Ozon (ozon_*) — маркетплейс"])
+                          "специализированные (сначала сильные в этой категории):",
+                          "- Dr.Head (drhead_*) — наушники и Hi-Fi",
+                          "- DNS (dns_*) — техника",
+                          "широкий ассортимент:",
+                          "- Ozon (ozon_*) — маркетплейс"])
 
     def test_the_whole_map(self):
         lines = stores.answer().splitlines()
         self.assertEqual(lines[0], "магазины и что в них искать (category — для shop_stores(category)):")
         self.assertIn("Ozon (ozon_*): всё, кроме used — маркетплейс", lines)
-        self.assertIn("DNS (dns_*): phones, computers — техника", lines)
+        self.assertIn("DNS (dns_*): phones, computers, audio — техника", lines)
         self.assertIn("категории:", lines)
         self.assertIn("audio — наушники, колонки, Hi-Fi и плееры, усилители и ЦАП, микрофоны", lines)
 
@@ -60,7 +64,7 @@ class AnswerTests(unittest.TestCase):
         self.assertTrue(stores.answer("sound").startswith("нет такой категории «sound»: phones, computers, "), stores.answer("sound"))
 
     def test_routing_lines_name_the_specialists_of_each_category(self):
-        self.assertEqual(stores.routing(), ["phones, computers: DNS", "audio: Dr.Head", "used: Авито",   # one line for one set
+        self.assertEqual(stores.routing(), ["phones, computers: DNS", "audio: Dr.Head, DNS", "used: Авито",   # one line for one set
                                             "везде, кроме названного у них: Ozon"])
 
 
